@@ -36,12 +36,13 @@ React Native와 TypeScript를 기반으로
 ## 📁 Project Structure
 
 ```text
-src/
-├── app/            # 화면 및 라우팅
-├── components/     # 공통 컴포넌트
-├── constants/      # 상수
-├── hooks/          # Custom Hooks
-└── assets/         # 이미지 및 리소스
+FE/
+├── assets/         # 이미지 및 리소스
+└── src/
+    ├── app/        # 화면 및 라우팅
+    ├── components/ # 공통 컴포넌트
+    ├── constants/  # 상수
+    └── hooks/      # Custom Hooks
 ```
 
 > 프로젝트 진행에 따라 폴더 구조는 변경될 수 있습니다.
@@ -190,4 +191,4 @@ chore: Expo 초기 개발 환경 설정 (#1)
 
 **지하철 이동의 여러 순간을 하나의 흐름으로 연결합니다.**
 
-</div>chat.expo.dev): Chat with Expo users and ask questions.
+</div>
