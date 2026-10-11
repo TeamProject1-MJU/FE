@@ -13,7 +13,7 @@ const KAKAO_YELLOW = '#fee500';
 const KAKAO_BLACK = '#191919';
 
 // TODO: 홈 화면 구현 후 실제 홈 라우트로 교체
-const HOME_ROUTE = '/explore';
+const HOME_ROUTE = '/home';
 
 export default function LoginScreen() {
     const insets = useSafeAreaInsets();
