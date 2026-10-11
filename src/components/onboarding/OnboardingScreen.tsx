@@ -26,7 +26,7 @@ export default function OnboardingScreen({
     const data = onboardingPages[page];
     const last = page === 3;
 
-    const finish = () => router.replace('/login');
+    const finish = () => router.replace('/permission');
 
     const responder = useMemo(
         () =>
