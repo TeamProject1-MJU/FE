@@ -7,9 +7,12 @@
     "icon": "./assets/images/icon.png",
     "scheme": "linkrofrontend",
     "userInterfaceStyle": "automatic",
+
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.mju.linkro"
     },
+
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
@@ -19,12 +22,15 @@
       },
       "predictiveBackGestureEnabled": false
     },
+
     "web": {
       "output": "single",
       "favicon": "./assets/images/favicon.png"
     },
+
     "plugins": [
       "expo-router",
+
       [
         "expo-splash-screen",
         {
@@ -32,8 +38,19 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 76
         }
-      ]
+      ],
+
+      [
+        "@react-native-seoul/kakao-login",
+        {
+          "kakaoAppKey": "87d47a8291d253dab6c79309c7e7e2ef"
+        }
+      ],
+
+      "expo-build-properties",
+      "expo-secure-store"
     ],
+
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
