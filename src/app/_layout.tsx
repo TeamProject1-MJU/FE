@@ -13,6 +13,9 @@ export default function RootLayout() {
     const { width, height } = useWindowDimensions();
 
     const isWeb = Platform.OS === 'web';
+    const isDesktopWeb = isWeb && width >= 600;
+
+    const webScale = isDesktopWeb ? 0.9 : 1;
 
     let frameWidth = width;
     let frameHeight = height;
@@ -31,6 +34,7 @@ export default function RootLayout() {
                         ? {
                             width: frameWidth,
                             height: frameHeight,
+                            transform: [{ scale: webScale }],
                         }
                         : {
                             flex: 1,
