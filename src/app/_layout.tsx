@@ -18,15 +18,8 @@ export default function RootLayout() {
     let frameHeight = height;
 
     if (isWeb) {
-        const ratio = DESIGN_WIDTH / DESIGN_HEIGHT;
-
         frameWidth = Math.min(width, DESIGN_WIDTH);
-        frameHeight = frameWidth / ratio;
-
-        if (frameHeight > height) {
-            frameHeight = height;
-            frameWidth = frameHeight * ratio;
-        }
+        frameHeight = Math.min(height, DESIGN_HEIGHT);
     }
 
     return (
