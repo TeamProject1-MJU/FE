@@ -13,49 +13,67 @@ export default function RootLayout() {
     const { width, height } = useWindowDimensions();
 
     const isWeb = Platform.OS === 'web';
-    const isDesktopWeb = isWeb && width >= 600;
 
-    const webScale = isDesktopWeb ? 0.9 : 1;
-
-    let frameWidth = width;
-    let frameHeight = height;
-
-    if (isWeb) {
-        frameWidth = Math.min(width, DESIGN_WIDTH);
-        frameHeight = Math.min(height, DESIGN_HEIGHT);
+    if (!isWeb) {
+        return (
+            <View style={styles.nativePage}>
+                <Stack screenOptions={{ headerShown: false }} />
+            </View>
+        );
     }
 
+    const maxScale = 0.9;
+
+    const webScale = Math.min(
+        maxScale,
+        width / DESIGN_WIDTH,
+        height / DESIGN_HEIGHT,
+    );
+
+    const scaledWidth = DESIGN_WIDTH * webScale;
+    const scaledHeight = DESIGN_HEIGHT * webScale;
+
     return (
-        <View style={styles.page}>
+        <View style={styles.webPage}>
             <View
-                style={[
-                    styles.app,
-                    isWeb
-                        ? {
-                            width: frameWidth,
-                            height: frameHeight,
-                            transform: [{ scale: webScale }],
-                        }
-                        : {
-                            flex: 1,
-                        },
-                ]}
+                style={{
+                    width: scaledWidth,
+                    height: scaledHeight,
+                    overflow: 'hidden',
+                }}
             >
-                <Stack screenOptions={{ headerShown: false }} />
+                <View
+                    style={[
+                        styles.webApp,
+                        {
+                            transform: [{ scale: webScale }],
+                        },
+                    ]}
+                >
+                    <Stack screenOptions={{ headerShown: false }} />
+                </View>
             </View>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
-    page: {
+    nativePage: {
         flex: 1,
-        alignItems: Platform.OS === 'web' ? 'center' : 'stretch',
-        justifyContent: Platform.OS === 'web' ? 'center' : 'flex-start',
+        backgroundColor: '#fff',
+    },
+
+    webPage: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
         backgroundColor: '#222',
     },
 
-    app: {
+    webApp: {
+        width: DESIGN_WIDTH,
+        height: DESIGN_HEIGHT,
+        transformOrigin: 'top left',
         overflow: 'hidden',
         backgroundColor: '#fff',
     },
