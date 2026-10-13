@@ -11,6 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import LinkRoLogo from '@/components/linkro-logo';
+import { router } from 'expo-router';
 
 const NAVY = '#0f1c3f';
 const MINT = '#2bcf9a';
@@ -162,7 +163,7 @@ export default function HomeScreen() {
                         icon="navigate-outline"
                         title="경로 탐색"
                         description="최적 경로 찾기"
-                        onPress={() => showPreparing('경로 탐색')}
+                        onPress={() => router.push('/route-search')}
                     />
 
                     <FeatureCard
@@ -323,7 +324,7 @@ export default function HomeScreen() {
                 <BottomTab
                     icon="navigate-outline"
                     label="경로"
-                    onPress={() => showPreparing('경로')}
+                    onPress={() => router.push('/route-search')}
                 />
 
                 <BottomTab
