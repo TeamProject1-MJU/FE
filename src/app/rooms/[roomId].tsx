@@ -357,8 +357,22 @@ export default function RoomDetailScreen() {
                             <Text style={styles.secondaryButtonText}>내 출발역 설정·변경</Text>
                         </Pressable>
                         <View style={styles.divider} />
-                        <Pressable style={styles.secondaryButton} onPress={() => showPending('중간역 추천')}>
-                            <Text style={styles.secondaryButtonText}>참여자 출발역으로 중간역 추천받기</Text>
+                        <Pressable
+                            style={styles.secondaryButton}
+                            onPress={() =>
+                                router.push({
+                                    pathname: '/rooms/[roomId]/recommendations',
+                                    params: {
+                                        roomId: String(roomId),
+                                        roomName: String(roomName || ''),
+                                        maxMembers: String(max),
+                                    },
+                                })
+                            }
+                        >
+                            <Text style={styles.secondaryButtonText}>
+                                참여자 출발역으로 중간역 추천받기
+                            </Text>
                         </Pressable>
                     </View>
                 )}
