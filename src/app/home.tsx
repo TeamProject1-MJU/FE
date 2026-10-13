@@ -45,17 +45,7 @@ export default function HomeScreen() {
     };
 
     const handleMidpoint = () => {
-        /*
-         * 최신 명세:
-         * 중간역 추천은 방 밖에서 바로 실행하지 않음.
-         *
-         * 추후:
-         * 약속방 목록/선택 화면 → 방 상세 → 중간역 추천
-         */
-        Alert.alert(
-            '약속방이 필요해요',
-            '중간역 추천은 약속방을 선택하거나 만든 뒤 이용할 수 있어요.',
-        );
+        router.push('/rooms');
     };
 
     return (
@@ -185,7 +175,7 @@ export default function HomeScreen() {
                         icon="chatbubbles-outline"
                         title="약속방"
                         description="함께 이동하기"
-                        onPress={() => showPreparing('약속방')}
+                        onPress={() => router.push('/rooms')}
                     />
                 </View>
 
@@ -196,7 +186,7 @@ export default function HomeScreen() {
                             styles.meetingPreview,
                             pressed && styles.pressed,
                         ]}
-                        onPress={() => showPreparing('약속방 상세')}
+                        onPress={() => router.push('/rooms')}
                     >
                         <View style={styles.meetingDate}>
                             <Text style={styles.meetingDday}>D-7</Text>
@@ -232,9 +222,7 @@ export default function HomeScreen() {
                             </Text>
 
                             <Pressable
-                                onPress={() =>
-                                    showPreparing('전체 약속방')
-                                }
+                                onPress={() => router.push('/rooms')}
                             >
                                 <Text style={styles.moreText}>
                                     전체 보기
@@ -247,9 +235,7 @@ export default function HomeScreen() {
                                 styles.fullMeetingCard,
                                 pressed && styles.pressed,
                             ]}
-                            onPress={() =>
-                                showPreparing('약속방 상세')
-                            }
+                            onPress={() => router.push('/rooms')}
                         >
                             <View style={styles.meetingDate}>
                                 <Text style={styles.meetingDday}>
@@ -330,7 +316,7 @@ export default function HomeScreen() {
                 <BottomTab
                     icon="chatbubbles-outline"
                     label="약속방"
-                    onPress={() => showPreparing('약속방')}
+                    onPress={() => router.push('/rooms')}
                 />
 
                 <BottomTab
