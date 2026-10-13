@@ -178,7 +178,7 @@ export default function HomeScreen() {
                         title="AI 방향 안내"
                         description="표지판만 촬영하기"
                         ai
-                        onPress={() => showPreparing('AI 방향 안내')}
+                        onPress={() => router.push('/ai-direction')}
                     />
 
                     <FeatureCard
