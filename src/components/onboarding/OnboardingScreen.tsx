@@ -14,26 +14,40 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { onboardingPages } from '@/constants/onboarding';
 import OnboardingIllustration from './OnboardingIllustration';
 
+const NAVY = '#0f1c3f';
+const MINT = '#2bcf9a';
+const LAST_PAGE = onboardingPages.length - 1;
+
 export default function OnboardingScreen({
                                              initialPage = 0,
                                          }: {
     initialPage?: number;
 }) {
     const [page, setPage] = useState(() =>
-        Math.max(0, Math.min(initialPage, 3)),
+        Math.max(0, Math.min(initialPage, LAST_PAGE)),
     );
 
     const data = onboardingPages[page];
-    const last = page === 3;
+    const last = page === LAST_PAGE;
 
     const finish = () => router.replace('/permission');
+
+    const next = () => {
+        if (last) {
+            finish();
+            return;
+        }
+
+        setPage(current => Math.min(current + 1, LAST_PAGE));
+    };
 
     const responder = useMemo(
         () =>
             PanResponder.create({
                 onMoveShouldSetPanResponder: (_, gesture) =>
                     Math.abs(gesture.dx) > 15 &&
-                    Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5,
+                    Math.abs(gesture.dx) >
+                    Math.abs(gesture.dy) * 1.5,
 
                 onPanResponderRelease: (_, gesture) => {
                     if (Math.abs(gesture.dx) < 45) return;
@@ -43,7 +57,7 @@ export default function OnboardingScreen({
                             0,
                             Math.min(
                                 current + (gesture.dx < 0 ? 1 : -1),
-                                3,
+                                LAST_PAGE,
                             ),
                         ),
                     );
@@ -53,22 +67,24 @@ export default function OnboardingScreen({
     );
 
     return (
-        <SafeAreaView
+        <View
             style={[
-                styles.container,
+                styles.root,
                 { backgroundColor: data.background },
             ]}
         >
             <StatusBar style={last ? 'light' : 'dark'} />
 
-            <View
-                style={styles.container}
-                {...responder.panHandlers}
+            <SafeAreaView
+                edges={['top', 'left', 'right']}
+                style={styles.root}
             >
                 <View style={styles.header}>
                     <View
                         style={styles.progress}
-                        accessibilityLabel={`온보딩 ${page + 1} / 4페이지`}
+                        accessibilityLabel={
+                            `온보딩 ${page + 1} / ${onboardingPages.length}페이지`
+                        }
                     >
                         {onboardingPages.map((item, index) => (
                             <Pressable
@@ -88,8 +104,8 @@ export default function OnboardingScreen({
                                             backgroundColor:
                                                 index <= page
                                                     ? last
-                                                        ? '#2bcf9a'
-                                                        : '#0f1c3f'
+                                                        ? MINT
+                                                        : NAVY
                                                     : '#d5dae3',
                                         },
                                     ]}
@@ -98,71 +114,79 @@ export default function OnboardingScreen({
                         ))}
                     </View>
 
-                    {!last && (
-                        <Pressable
-                            accessibilityRole="button"
-                            onPress={finish}
-                            hitSlop={8}
-                        >
-                            <Text style={styles.skip}>
-                                건너뛰기
-                            </Text>
-                        </Pressable>
-                    )}
+                    {/* 마지막 장도 이 공간은 그대로 유지 */}
+                    <View style={styles.skipSlot}>
+                        {!last && (
+                            <Pressable
+                                accessibilityRole="button"
+                                onPress={finish}
+                                style={styles.skipButton}
+                            >
+                                <Text style={styles.skipText}>
+                                    건너뛰기
+                                </Text>
+                            </Pressable>
+                        )}
+                    </View>
                 </View>
 
-                <ScrollView
-                    key={page}
-                    style={styles.scroll}
-                    contentContainerStyle={styles.scrollContent}
+                <View
+                    style={styles.body}
+                    {...responder.panHandlers}
                 >
-                    <View
-                        style={[
-                            styles.visual,
-                            { backgroundColor: data.background },
-                        ]}
+                    <ScrollView
+                        key={page}
+                        style={styles.scroll}
+                        contentContainerStyle={styles.scrollContent}
+                        showsVerticalScrollIndicator={false}
+                        contentInsetAdjustmentBehavior="never"
                     >
-                        <OnboardingIllustration page={page} />
-                    </View>
-
-                    <View style={styles.copy}>
-                        <Text
+                        <View
                             style={[
-                                styles.label,
-                                { color: data.accent },
+                                styles.visual,
+                                {
+                                    backgroundColor: data.background,
+                                },
                             ]}
                         >
-                            {page === 1 ? '✦ ' : ''}
-                            {data.label}
-                        </Text>
+                            <OnboardingIllustration page={page} />
+                        </View>
 
-                        <Text
-                            accessibilityRole="header"
-                            style={styles.title}
-                        >
-                            {data.title}
-                        </Text>
+                        <View style={styles.copy}>
+                            <Text
+                                style={[
+                                    styles.label,
+                                    { color: data.accent },
+                                ]}
+                            >
+                                {page === 1 ? '✦ ' : ''}
+                                {data.label}
+                            </Text>
 
-                        <Text style={styles.description}>
-                            {data.description}
-                        </Text>
-                    </View>
-                </ScrollView>
+                            <Text
+                                accessibilityRole="header"
+                                style={styles.title}
+                            >
+                                {data.title}
+                            </Text>
 
-                <View style={styles.footer}>
+                            <Text style={styles.description}>
+                                {data.description}
+                            </Text>
+                        </View>
+                    </ScrollView>
+                </View>
+
+                <SafeAreaView
+                    edges={['bottom']}
+                    style={styles.footer}
+                >
                     <Pressable
                         accessibilityRole="button"
-                        onPress={
-                            last
-                                ? finish
-                                : () =>
-                                    setPage(current =>
-                                        Math.min(current + 1, 3),
-                                    )
-                        }
+                        onPress={next}
                         style={({ pressed }) => [
                             styles.button,
-                            last && styles.start,
+                            last && styles.startButton,
                             pressed && styles.pressed,
                         ]}
                     >
@@ -175,22 +199,22 @@ export default function OnboardingScreen({
                             {last ? '시작하기' : '다음'}  →
                         </Text>
                     </Pressable>
-                </View>
-            </View>
-        </SafeAreaView>
+                </SafeAreaView>
+            </SafeAreaView>
+        </View>
     );
 }
 
 const styles = StyleSheet.create({
-    container: {
+    root: {
         flex: 1,
     },
     header: {
+        height: 52,
+        paddingHorizontal: 28,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 16,
-        paddingHorizontal: 28,
-        minHeight: 48,
+        gap: 12,
     },
     progress: {
         flex: 1,
@@ -199,43 +223,61 @@ const styles = StyleSheet.create({
     },
     stepTouch: {
         flex: 1,
-        paddingVertical: 14,
+        height: 44,
+        justifyContent: 'center',
     },
     step: {
         height: 4,
         borderRadius: 4,
     },
-    skip: {
+    skipSlot: {
+        width: 76,
+        height: 44,
+        justifyContent: 'center',
+    },
+    skipButton: {
+        flex: 1,
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+    },
+    skipText: {
         color: '#697386',
         fontSize: 13,
         fontWeight: '600',
     },
-    scroll: {
+    body: {
         flex: 1,
         backgroundColor: '#fff',
+    },
+    scroll: {
+        flex: 1,
     },
     scrollContent: {
         flexGrow: 1,
     },
     visual: {
+        height: 380,
         paddingHorizontal: 28,
-        paddingVertical: 32,
-        minHeight: 350,
+        alignItems: 'center',
         justifyContent: 'center',
         borderBottomLeftRadius: 26,
         borderBottomRightRadius: 26,
     },
     copy: {
-        padding: 28,
+        paddingHorizontal: 28,
+        paddingTop: 28,
+        paddingBottom: 24,
         backgroundColor: '#fff',
     },
     label: {
         fontSize: 13,
+        lineHeight: 20,
         fontWeight: '700',
     },
     title: {
         marginTop: 8,
-        color: '#0f1c3f',
+        minHeight: 74,
+        color: NAVY,
         fontSize: 28,
         lineHeight: 37,
         fontWeight: '800',
@@ -248,28 +290,29 @@ const styles = StyleSheet.create({
         lineHeight: 25,
     },
     footer: {
+        backgroundColor: '#fff',
         paddingHorizontal: 20,
         paddingTop: 12,
-        paddingBottom: 20,
-        backgroundColor: '#fff',
+        paddingBottom: 16,
     },
     button: {
         minHeight: 56,
         borderRadius: 18,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#0f1c3f',
+        backgroundColor: NAVY,
     },
-    start: {
-        backgroundColor: '#2bcf9a',
+    startButton: {
+        backgroundColor: MINT,
     },
     buttonText: {
         color: '#fff',
         fontSize: 15,
+        lineHeight: 22,
         fontWeight: '700',
     },
     startText: {
-        color: '#0f1c3f',
+        color: NAVY,
     },
     pressed: {
         opacity: 0.75,

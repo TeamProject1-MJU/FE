@@ -32,9 +32,7 @@ export default function OnboardingIllustration({
     if (page === 0) {
         return (
             <View style={styles.art}>
-                <Text style={styles.departure}>
-                    ◷  18:30 출발 기준
-                </Text>
+
 
                 <View style={styles.card}>
                     <View style={styles.row}>
@@ -105,7 +103,7 @@ export default function OnboardingIllustration({
                             ✦ AI 분석 완료
                         </Text>
                         <Text style={styles.signTitle}>
-                            오른쪽으로 이동하세요
+                            선택한 경로와 같은 방면이에요
                         </Text>
                     </View>
                 </View>
@@ -197,9 +195,9 @@ export default function OnboardingIllustration({
 
                 <Text style={styles.bubbleText}>
                     <Text style={styles.bold}>
-                        17:25 전에 출발
+                        @링크로
                     </Text>
-                    하면{'\n'}6시 전에 도착해요
+                    {'\n'}이동과 약속에 대해 물어보세요
                 </Text>
             </View>
         </View>
@@ -207,10 +205,12 @@ export default function OnboardingIllustration({
 }
 
 const styles = StyleSheet.create({
-    art: {
+    aart: {
         width: '100%',
         maxWidth: 360,
+        height: 324,
         alignSelf: 'center',
+        justifyContent: 'center',
     },
     card: {
         padding: 24,
