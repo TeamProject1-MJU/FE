@@ -1,18 +1,28 @@
-
-import { useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
-    Keyboard,
+    ActivityIndicator,
     Pressable,
     ScrollView,
     StyleSheet,
     Text,
-    TextInput,
     View,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
+
+import RouteCard from '@/components/route/RouteCard';
+import StationPickerSheet from '@/components/route/StationPickerSheet';
+import { fetchStations, searchRoute } from '@/services/route';
+import { setSelectedRoute } from '@/stores/route-store';
+import {
+    RouteSearchError,
+    type Route,
+    type RouteErrorCode,
+    type RouteSearchResponse,
+    type StationSummary,
+} from '@/types/route';
 
 const NAVY = '#0f1c3f';
 const MINT = '#2bcf9a';
@@ -20,6 +30,35 @@ const BACKGROUND = '#f3f5f8';
 const WHITE = '#ffffff';
 const SECONDARY = '#6b7488';
 const BORDER = '#e6e9ef';
+const AI = '#6a5ae0';
+
+type Field = 'departure' | 'destination';
+type SortKey = 'FASTEST' | 'FEWER_TRANSFERS' | 'CHEAPEST';
+
+const SORT_TABS: { key: SortKey; label: string }[] = [
+    { key: 'FASTEST', label: '최소시간' },
+    { key: 'FEWER_TRANSFERS', label: '최소환승' },
+    { key: 'CHEAPEST', label: '최저요금' },
+];
+
+type SearchState =
+    | { status: 'idle' }
+    | { status: 'loading' }
+    | { status: 'success'; data: RouteSearchResponse }
+    | { status: 'error'; code: RouteErrorCode };
+
+/** 탭 기준 정렬. 같으면 소요 시간 → 환승 순으로 비교합니다. */
+function sortRoutes(routes: Route[], key: SortKey) {
+    const time = (r: Route) => r.summary.totalTimeSec;
+    const transfer = (r: Route) => r.summary.transferCount;
+    const fare = (r: Route) => r.summary.fare;
+
+    return [...routes].sort((a, b) => {
+        if (key === 'FEWER_TRANSFERS') return transfer(a) - transfer(b) || time(a) - time(b);
+        if (key === 'CHEAPEST') return fare(a) - fare(b) || time(a) - time(b) || transfer(a) - transfer(b);
+        return time(a) - time(b) || transfer(a) - transfer(b);
+    });
+}
 
 export default function RouteSearchScreen() {
     const insets = useSafeAreaInsets();
@@ -28,13 +67,78 @@ export default function RouteSearchScreen() {
     const params = useLocalSearchParams<{
         departure?: string;
         destination?: string;
-        focus?: 'departure' | 'destination';
+        focus?: Field;
     }>();
 
-    const [departure, setDeparture] = useState(params.departure ?? '');
-    const [destination, setDestination] = useState(params.destination ?? '');
-    const [searched, setSearched] = useState(false);
-    const [error, setError] = useState('');
+    const [departure, setDeparture] = useState<StationSummary | null>(null);
+    const [destination, setDestination] = useState<StationSummary | null>(null);
+    const [pickerField, setPickerField] = useState<Field | null>(null);
+    const [search, setSearch] = useState<SearchState>({ status: 'idle' });
+    const [sortKey, setSortKey] = useState<SortKey>('FASTEST');
+    const [expandedId, setExpandedId] = useState<string | null>(null);
+    const [inputError, setInputError] = useState('');
+
+    const requestId = useRef(0);
+
+    // 넘겨받은 역 이름을 mock 역 목록에서 찾아 채우고, focus 가 있으면 선택 시트를 엽니다.
+    useEffect(() => {
+        let alive = true;
+        (async () => {
+            const list = await fetchStations();
+            const find = (name?: string) => list.find(s => s.name === name?.trim()) ?? null;
+            if (!alive) return;
+            if (params.departure) setDeparture(find(params.departure));
+            if (params.destination) setDestination(find(params.destination));
+            if (params.focus) setPickerField(params.focus);
+        })();
+        return () => {
+            alive = false;
+        };
+        // 화면에 처음 들어올 때 한 번만 반영합니다.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    const runSearch = useCallback(async (from: StationSummary | null, to: StationSummary | null) => {
+        if (!from || !to) {
+            setSearch({ status: 'idle' });
+            return;
+        }
+
+        if (from.id === to.id) {
+            setInputError('출발역과 도착역을 다르게 설정해 주세요.');
+            setSearch({ status: 'idle' });
+            return;
+        }
+
+        setInputError('');
+        const id = ++requestId.current;
+        setSearch({ status: 'loading' });
+
+        try {
+            const data = await searchRoute(from, to);
+            if (id !== requestId.current) return;
+            setSearch({ status: 'success', data });
+        } catch (error) {
+            if (id !== requestId.current) return;
+            const code = error instanceof RouteSearchError ? error.code : 'NETWORK_ERROR';
+            setSearch({ status: 'error', code });
+        }
+    }, []);
+
+    // 두 역이 정해지면 바로 검색합니다 (별도 검색 버튼 없음).
+    useEffect(() => {
+        runSearch(departure, destination);
+    }, [departure, destination, runSearch]);
+
+    const sortedRoutes = useMemo(
+        () => (search.status === 'success' ? sortRoutes(search.data.routes, sortKey) : []),
+        [search, sortKey],
+    );
+
+    // 탭이 바뀌거나 결과가 새로 오면 맨 위 경로를 펼칩니다.
+    useEffect(() => {
+        setExpandedId(sortedRoutes[0]?.routeId ?? null);
+    }, [sortedRoutes]);
 
     const goBack = () => {
         if (router.canGoBack()) {
@@ -47,232 +151,272 @@ export default function RouteSearchScreen() {
     const swapStations = () => {
         setDeparture(destination);
         setDestination(departure);
-        setSearched(false);
-        setError('');
     };
 
-    const handleSearch = () => {
-        Keyboard.dismiss();
-
-        const from = departure.trim();
-        const to = destination.trim();
-
-        if (!from || !to) {
-            setError('출발역과 도착역을 모두 입력해 주세요.');
-            setSearched(false);
-            return;
-        }
-
-        if (from === to) {
-            setError('출발역과 도착역을 다르게 설정해 주세요.');
-            setSearched(false);
-            return;
-        }
-
-        setError('');
-        setSearched(true);
+    const handleSelect = (station: StationSummary) => {
+        if (pickerField === 'departure') setDeparture(station);
+        if (pickerField === 'destination') setDestination(station);
+        setPickerField(null);
     };
+
+    const startGuide = (route: Route) => {
+        if (search.status !== 'success' || !departure || !destination) return;
+
+        setSelectedRoute({
+            route,
+            routeSource: search.data.routeSource,
+            origin: departure,
+            destination,
+        });
+
+        router.push({
+            pathname: '/route-guide',
+            params: { routeId: route.routeId },
+        });
+    };
+
+    const badgeLabel = SORT_TABS.find(tab => tab.key === sortKey)?.label ?? '';
 
     return (
         <View style={styles.container}>
             <StatusBar style="dark" />
 
             {/* 상단 헤더 */}
-            <View
-                style={[
-                    styles.header,
-                    { paddingTop: insets.top + 12 },
-                ]}
-            >
-                <Pressable
-                    style={styles.backButton}
-                    onPress={goBack}
-                >
-                    <Ionicons
-                        name="chevron-back"
-                        size={25}
-                        color={NAVY}
-                    />
+            <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+                <Pressable style={styles.backButton} onPress={goBack} accessibilityLabel="뒤로 가기">
+                    <Ionicons name="chevron-back" size={25} color={NAVY} />
                 </Pressable>
 
-                <Text style={styles.headerTitle}>
-                    경로 탐색
-                </Text>
+                <Text style={styles.headerTitle}>경로 탐색</Text>
 
                 <View style={styles.headerRight} />
             </View>
 
             <ScrollView
                 style={styles.scrollView}
-                contentContainerStyle={styles.content}
-                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}
                 showsVerticalScrollIndicator={false}
             >
-                {/* 안내 문구 */}
-                <View style={styles.intro}>
-                    <Text style={styles.title}>
-                        어디로 이동하시나요?
-                    </Text>
-
-                    <Text style={styles.description}>
-                        출발역과 도착역을 설정해 주세요.
-                    </Text>
-                </View>
-
-                {/* 출발 / 도착역 입력 카드 */}
+                {/* 출발 / 도착역 (누르면 역 선택) */}
                 <View style={styles.stationCard}>
-                    <View style={styles.stationRow}>
-                        <View style={styles.pointColumn}>
-                            <View style={styles.startPoint} />
-                        </View>
-
-                        <View style={styles.stationContent}>
-                            <Text style={styles.stationLabel}>
-                                출발역
-                            </Text>
-
-                            <TextInput
-                                style={styles.stationInput}
-                                placeholder="출발역을 입력하세요"
-                                placeholderTextColor="#a1a8b8"
-                                value={departure}
-                                autoFocus={params.focus === 'departure'}
-                                onChangeText={(value) => {
-                                    setDeparture(value);
-                                    setSearched(false);
-                                    setError('');
-                                }}
-                                returnKeyType="next"
-                            />
-                        </View>
+                    <View style={styles.pointColumn}>
+                        <View style={styles.startPoint} />
+                        <View style={styles.pointDash} />
+                        <View style={styles.endPoint} />
                     </View>
 
-                    <View style={styles.stationDivider} />
-
-                    <View style={styles.stationRow}>
-                        <View style={styles.pointColumn}>
-                            <View style={styles.endPoint} />
-                        </View>
-
-                        <View style={styles.stationContent}>
-                            <Text style={styles.stationLabel}>
-                                도착역
-                            </Text>
-
-                            <TextInput
-                                style={styles.stationInput}
-                                placeholder="도착역을 입력하세요"
-                                placeholderTextColor="#a1a8b8"
-                                value={destination}
-                                autoFocus={params.focus === 'destination'}
-                                onChangeText={(value) => {
-                                    setDestination(value);
-                                    setSearched(false);
-                                    setError('');
-                                }}
-                                returnKeyType="done"
-                                onSubmitEditing={handleSearch}
-                            />
-                        </View>
-                    </View>
-
-                    {/* 출발역 / 도착역 교환 */}
-                    <Pressable
-                        style={({ pressed }) => [
-                            styles.swapButton,
-                            pressed && styles.pressed,
-                        ]}
-                        onPress={swapStations}
-                    >
-                        <Ionicons
-                            name="swap-vertical"
-                            size={22}
-                            color={NAVY}
+                    <View style={styles.stationFields}>
+                        <StationField
+                            label="출발"
+                            station={departure}
+                            placeholder="출발역을 검색하세요"
+                            onPress={() => setPickerField('departure')}
                         />
+                        <View style={styles.stationDivider} />
+                        <StationField
+                            label="도착"
+                            station={destination}
+                            placeholder="도착역을 검색하세요"
+                            onPress={() => setPickerField('destination')}
+                        />
+                    </View>
+
+                    <Pressable
+                        style={({ pressed }) => [styles.swapButton, pressed && styles.pressed]}
+                        onPress={swapStations}
+                        accessibilityLabel="출발역과 도착역 바꾸기"
+                    >
+                        <Ionicons name="swap-vertical" size={22} color={NAVY} />
                     </Pressable>
                 </View>
 
-                {/* 입력 오류 */}
-                {!!error && (
-                    <View style={styles.errorRow}>
-                        <Ionicons
-                            name="alert-circle-outline"
-                            size={17}
-                            color="#dc5050"
-                        />
-                        <Text style={styles.errorText}>
-                            {error}
+                {!!inputError && (
+                    <View style={styles.inputError}>
+                        <Ionicons name="alert-circle-outline" size={17} color="#dc5050" />
+                        <Text style={styles.inputErrorText}>{inputError}</Text>
+                    </View>
+                )}
+
+                {/* 대체 경로 안내 (routeSource: INTERNAL) */}
+                {search.status === 'success' && search.data.routeSource === 'INTERNAL' && (
+                    <View style={styles.notice}>
+                        <Ionicons name="alert-circle-outline" size={17} color="#c58a00" />
+                        <Text style={styles.noticeText}>
+                            실시간 경로를 불러오지 못해 예상 경로를 보여드려요.{'\n'}
+                            소요 시간과 요금은 실제와 다를 수 있어요.
                         </Text>
                     </View>
                 )}
 
-                {/* 검색 버튼 */}
-                <Pressable
-                    style={({ pressed }) => [
-                        styles.searchButton,
-                        pressed && styles.pressed,
-                    ]}
-                    onPress={handleSearch}
-                >
-                    <Ionicons
-                        name="search"
-                        size={20}
-                        color={WHITE}
+                {/* 정렬 탭 */}
+                {(search.status === 'loading' || search.status === 'success') && (
+                    <View style={styles.tabs}>
+                        {SORT_TABS.map(tab => {
+                            const active = tab.key === sortKey;
+                            return (
+                                <Pressable
+                                    key={tab.key}
+                                    style={styles.tab}
+                                    onPress={() => setSortKey(tab.key)}
+                                    accessibilityRole="tab"
+                                    accessibilityState={{ selected: active }}
+                                >
+                                    <Text style={[styles.tabText, active && styles.tabTextActive]}>
+                                        {tab.label}
+                                    </Text>
+                                    {active && <View style={styles.tabUnderline} />}
+                                </Pressable>
+                            );
+                        })}
+
+                        <View style={styles.aiLabel}>
+                            <Ionicons name="sparkles-outline" size={17} color={AI} />
+                            <Text style={styles.aiLabelText}>혼잡도{'\n'}예측</Text>
+                        </View>
+                    </View>
+                )}
+
+                {search.status === 'idle' && (
+                    <Message
+                        icon={<Ionicons name="git-commit-outline" size={34} color={NAVY} />}
+                        iconBackground="#e8f8f1"
+                        title={'출발역과 도착역을 선택하면\n경로를 찾아드려요'}
+                        description="소요시간 · 요금 · 환승 · 예상 혼잡도"
                     />
-                    <Text style={styles.searchButtonText}>
-                        경로 검색
-                    </Text>
-                </Pressable>
+                )}
 
-                {/* 검색 결과 영역 - API 연동 전 */}
-                {searched ? (
-                    <View style={styles.resultCard}>
-                        <View style={styles.resultHeader}>
-                            <Ionicons
-                                name="train-outline"
-                                size={21}
-                                color={NAVY}
-                            />
-
-                            <Text style={styles.resultTitle}>
-                                경로 검색
-                            </Text>
-                        </View>
-
-                        <Text style={styles.resultRoute}>
-                            {departure.trim()} → {destination.trim()}
-                        </Text>
-
-                        <View style={styles.resultDivider} />
-
-                        <Text style={styles.resultInfo}>
-                            경로 탐색 API 연동 후 이동 시간,
-                            환승 횟수, 요금 및 경로별 비교
-                            결과가 이 영역에 표시됩니다.
-                        </Text>
-                    </View>
-                ) : (
-                    <View style={styles.emptyState}>
-                        <View style={styles.emptyIcon}>
-                            <Ionicons
-                                name="subway-outline"
-                                size={30}
-                                color={SECONDARY}
-                            />
-                        </View>
-
-                        <Text style={styles.emptyTitle}>
-                            경로를 검색해 보세요
-                        </Text>
-
-                        <Text style={styles.emptyDescription}>
-                            출발역과 도착역을 입력하면
-                            경로 탐색 결과를 확인할 수 있어요.
-                        </Text>
+                {search.status === 'loading' && (
+                    <View style={styles.loading}>
+                        <ActivityIndicator size="large" color={MINT} />
+                        <Text style={styles.loadingTitle}>경로를 찾고 있어요</Text>
+                        <Text style={styles.loadingText}>잠시만 기다려 주세요</Text>
                     </View>
                 )}
+
+                {search.status === 'error' && (
+                    <ErrorMessage
+                        code={search.code}
+                        onRetry={() => runSearch(departure, destination)}
+                    />
+                )}
+
+                {search.status === 'success' &&
+                    sortedRoutes.map((route, index) => (
+                        <RouteCard
+                            key={route.routeId}
+                            route={route}
+                            expanded={route.routeId === expandedId}
+                            badgeLabel={index === 0 ? badgeLabel : undefined}
+                            onPress={() => setExpandedId(route.routeId)}
+                            onStart={() => startGuide(route)}
+                        />
+                    ))}
             </ScrollView>
+
+            <StationPickerSheet
+                visible={pickerField !== null}
+                title={pickerField === 'destination' ? '도착역 선택' : '출발역 선택'}
+                onSelect={handleSelect}
+                onClose={() => setPickerField(null)}
+            />
         </View>
+    );
+}
+
+function StationField({
+    label,
+    station,
+    placeholder,
+    onPress,
+}: {
+    label: string;
+    station: StationSummary | null;
+    placeholder: string;
+    onPress: () => void;
+}) {
+    return (
+        <Pressable
+            style={({ pressed }) => [styles.stationField, pressed && styles.pressed]}
+            onPress={onPress}
+            accessibilityRole="button"
+            accessibilityLabel={`${label}역 ${station?.name ?? '선택'}`}
+        >
+            <Text style={styles.stationLabel}>{label}</Text>
+            {station ? (
+                <Text style={styles.stationName} numberOfLines={1}>{station.name}</Text>
+            ) : (
+                <Text style={styles.stationPlaceholder}>{placeholder}</Text>
+            )}
+        </Pressable>
+    );
+}
+
+function Message({
+    icon,
+    iconBackground,
+    title,
+    description,
+    actionLabel,
+    onAction,
+}: {
+    icon: ReactNode;
+    iconBackground: string;
+    title: string;
+    description: string;
+    actionLabel?: string;
+    onAction?: () => void;
+}) {
+    return (
+        <View style={styles.message}>
+            <View style={[styles.messageIcon, { backgroundColor: iconBackground }]}>{icon}</View>
+            <Text style={styles.messageTitle}>{title}</Text>
+            <Text style={styles.messageText}>{description}</Text>
+
+            {actionLabel && onAction && (
+                <Pressable
+                    style={({ pressed }) => [styles.retryButton, pressed && styles.pressed]}
+                    onPress={onAction}
+                    accessibilityRole="button"
+                >
+                    <Text style={styles.retryText}>{actionLabel}</Text>
+                </Pressable>
+            )}
+        </View>
+    );
+}
+
+function ErrorMessage({ code, onRetry }: { code: RouteErrorCode; onRetry: () => void }) {
+    if (code === 'ROUTE_NOT_FOUND') {
+        return (
+            <Message
+                icon={<Ionicons name="search-outline" size={30} color={SECONDARY} />}
+                iconBackground="#eef1f5"
+                title="지하철 경로를 찾지 못했어요"
+                description="다른 출발역이나 도착역을 선택해 보세요"
+            />
+        );
+    }
+
+    if (code === 'STATION_UNSUPPORTED' || code === 'STATION_NOT_FOUND') {
+        return (
+            <Message
+                icon={<Ionicons name="ban-outline" size={30} color={SECONDARY} />}
+                iconBackground="#eef1f5"
+                title="서비스에서 지원하지 않는 역이에요"
+                description="서울 내 1~8호선 역을 선택해 주세요"
+            />
+        );
+    }
+
+    return (
+        <Message
+            icon={<Ionicons name="alert-circle-outline" size={32} color="#e5484d" />}
+            iconBackground="#fdecec"
+            title="경로를 불러오지 못했어요"
+            description={'네트워크 상태를 확인하고\n다시 시도해 주세요'}
+            actionLabel="다시 시도"
+            onAction={onRetry}
+        />
     );
 }
 
@@ -316,207 +460,243 @@ const styles = StyleSheet.create({
 
     content: {
         paddingHorizontal: 20,
-        paddingTop: 28,
-        paddingBottom: 40,
-    },
-
-    intro: {
-        marginBottom: 24,
-    },
-
-    title: {
-        fontSize: 24,
-        fontWeight: '800',
-        color: NAVY,
-        marginBottom: 9,
-    },
-
-    description: {
-        fontSize: 14,
-        color: SECONDARY,
-        lineHeight: 21,
+        paddingTop: 16,
     },
 
     stationCard: {
-        backgroundColor: WHITE,
-        borderRadius: 18,
-        paddingHorizontal: 18,
+        minHeight: 92,
         paddingVertical: 10,
-        position: 'relative',
-        borderWidth: 1,
-        borderColor: BORDER,
-    },
-
-    stationRow: {
+        paddingLeft: 14,
+        paddingRight: 12,
         flexDirection: 'row',
         alignItems: 'center',
-        minHeight: 76,
+        borderWidth: 1,
+        borderColor: BORDER,
+        borderRadius: 16,
+        backgroundColor: WHITE,
     },
 
     pointColumn: {
-        width: 32,
+        width: 22,
         alignItems: 'center',
-        justifyContent: 'center',
+        alignSelf: 'stretch',
+        paddingVertical: 8,
     },
 
     startPoint: {
-        width: 13,
-        height: 13,
-        borderRadius: 7,
-        borderWidth: 3,
-        borderColor: MINT,
-        backgroundColor: WHITE,
+        width: 10,
+        height: 10,
+        borderWidth: 2,
+        borderColor: NAVY,
+        borderRadius: 5,
+    },
+
+    pointDash: {
+        flex: 1,
+        marginVertical: 4,
+        borderLeftWidth: 2,
+        borderStyle: 'dotted',
+        borderColor: '#c3c9d4',
     },
 
     endPoint: {
-        width: 13,
-        height: 13,
-        borderRadius: 7,
-        backgroundColor: NAVY,
+        width: 9,
+        height: 9,
+        borderRadius: 5,
+        backgroundColor: MINT,
     },
 
-    stationContent: {
+    stationFields: {
         flex: 1,
-        marginLeft: 9,
-        marginRight: 38,
+        marginLeft: 6,
+        marginRight: 10,
+    },
+
+    stationField: {
+        paddingVertical: 3,
     },
 
     stationLabel: {
-        fontSize: 12,
-        fontWeight: '600',
         color: SECONDARY,
-        marginBottom: 5,
+        fontSize: 11,
+        fontWeight: '600',
     },
 
-    stationInput: {
-        fontSize: 16,
-        fontWeight: '600',
+    stationName: {
+        marginTop: 1,
         color: NAVY,
-        paddingVertical: 5,
-        outlineStyle: 'none',
-    } as any,
+        fontSize: 18.5,
+        fontWeight: '800',
+    },
+
+    stationPlaceholder: {
+        marginTop: 2,
+        color: SECONDARY,
+        fontSize: 15.5,
+        fontWeight: '500',
+    },
 
     stationDivider: {
         height: 1,
+        marginVertical: 4,
         backgroundColor: BORDER,
-        marginLeft: 42,
     },
 
     swapButton: {
-        position: 'absolute',
-        right: 17,
-        top: '50%',
-        marginTop: -19,
-        width: 38,
-        height: 38,
-        borderRadius: 19,
-        backgroundColor: BACKGROUND,
-        borderWidth: 1,
-        borderColor: BORDER,
-        justifyContent: 'center',
+        width: 36,
+        height: 36,
+        borderRadius: 10,
         alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: BACKGROUND,
     },
 
-    errorRow: {
+    inputError: {
+        marginTop: 10,
         flexDirection: 'row',
         alignItems: 'center',
-        marginTop: 13,
         gap: 6,
     },
 
-    errorText: {
-        fontSize: 13,
+    inputErrorText: {
         color: '#dc5050',
+        fontSize: 13,
+        fontWeight: '600',
     },
 
-    searchButton: {
-        height: 54,
-        borderRadius: 14,
-        backgroundColor: NAVY,
+    notice: {
+        marginTop: 12,
+        padding: 12,
         flexDirection: 'row',
-        justifyContent: 'center',
-        alignItems: 'center',
-        gap: 9,
-        marginTop: 20,
-    },
-
-    searchButtonText: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: WHITE,
-    },
-
-    resultCard: {
-        marginTop: 26,
-        backgroundColor: WHITE,
-        borderRadius: 18,
-        padding: 20,
+        alignItems: 'flex-start',
+        gap: 8,
         borderWidth: 1,
-        borderColor: BORDER,
+        borderColor: '#f6e3b0',
+        borderRadius: 12,
+        backgroundColor: '#fff8e6',
     },
 
-    resultHeader: {
+    noticeText: {
+        flex: 1,
+        color: '#8a5a00',
+        fontSize: 12.5,
+        fontWeight: '600',
+        lineHeight: 18,
+    },
+
+    tabs: {
+        marginTop: 18,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 9,
-        marginBottom: 14,
     },
 
-    resultTitle: {
-        fontSize: 17,
-        fontWeight: '700',
-        color: NAVY,
+    tab: {
+        marginRight: 16,
+        paddingBottom: 6,
     },
 
-    resultRoute: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: NAVY,
-    },
-
-    resultDivider: {
-        height: 1,
-        backgroundColor: BORDER,
-        marginVertical: 17,
-    },
-
-    resultInfo: {
-        fontSize: 13,
-        lineHeight: 22,
+    tabText: {
         color: SECONDARY,
+        fontSize: 14.5,
+        fontWeight: '600',
     },
 
-    emptyState: {
+    tabTextActive: {
+        color: NAVY,
+        fontWeight: '800',
+    },
+
+    tabUnderline: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 0,
+        height: 2.5,
+        borderRadius: 2,
+        backgroundColor: MINT,
+    },
+
+    aiLabel: {
+        marginLeft: 'auto',
+        flexDirection: 'row',
         alignItems: 'center',
-        marginTop: 65,
+        gap: 3,
     },
 
-    emptyIcon: {
-        width: 70,
-        height: 70,
-        borderRadius: 35,
-        backgroundColor: WHITE,
+    aiLabelText: {
+        color: AI,
+        fontSize: 11,
+        fontWeight: '700',
+        lineHeight: 12,
+    },
+
+    loading: {
+        marginTop: 40,
+        alignItems: 'center',
+    },
+
+    loadingTitle: {
+        marginTop: 12,
+        color: NAVY,
+        fontSize: 15,
+        fontWeight: '800',
+    },
+
+    loadingText: {
+        marginTop: 4,
+        color: SECONDARY,
+        fontSize: 13,
+        fontWeight: '600',
+    },
+
+    message: {
+        marginTop: 90,
+        alignItems: 'center',
+    },
+
+    messageIcon: {
+        width: 64,
+        height: 64,
+        borderRadius: 18,
+        alignItems: 'center',
         justifyContent: 'center',
-        alignItems: 'center',
-        marginBottom: 17,
     },
 
-    emptyTitle: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: NAVY,
-        marginBottom: 9,
-    },
-
-    emptyDescription: {
-        fontSize: 13,
-        lineHeight: 21,
-        color: SECONDARY,
+    messageTitle: {
+        marginTop: 16,
         textAlign: 'center',
-        maxWidth: 260,
+        color: NAVY,
+        fontSize: 17,
+        fontWeight: '800',
+        lineHeight: 24,
+    },
+
+    messageText: {
+        marginTop: 8,
+        textAlign: 'center',
+        color: SECONDARY,
+        fontSize: 13.5,
+        fontWeight: '600',
+        lineHeight: 19,
+    },
+
+    retryButton: {
+        width: 150,
+        height: 48,
+        marginTop: 20,
+        borderRadius: 13,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: NAVY,
+    },
+
+    retryText: {
+        color: WHITE,
+        fontSize: 15.5,
+        fontWeight: '700',
     },
 
     pressed: {
-        opacity: 0.75,
+        opacity: 0.72,
     },
 });
