@@ -12,9 +12,9 @@ import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
+import { MOCK_STATIONS, openStationPicker, type Station } from '@/app/station-search';
 import RouteCard from '@/components/route/RouteCard';
-import StationPickerSheet from '@/components/route/StationPickerSheet';
-import { fetchStations, searchRoute } from '@/services/route';
+import { searchRoute } from '@/services/route';
 import { setSelectedRoute } from '@/stores/route-store';
 import {
     RouteSearchError,
@@ -47,6 +47,16 @@ type SearchState =
     | { status: 'success'; data: RouteSearchResponse }
     | { status: 'error'; code: RouteErrorCode };
 
+/** 역 검색 화면(#33)의 Station 을 경로 검색에서 쓰는 형태로 바꿉니다. */
+function toStationSummary(station: Station): StationSummary {
+    return {
+        id: station.id,
+        name: station.name,
+        lines: station.lines.map(line => line.lineId),
+        isSupported: station.isSupported,
+    };
+}
+
 /** 탭 기준 정렬. 같으면 소요 시간 → 환승 순으로 비교합니다. */
 function sortRoutes(routes: Route[], key: SortKey) {
     const time = (r: Route) => r.summary.totalTimeSec;
@@ -72,7 +82,6 @@ export default function RouteSearchScreen() {
 
     const [departure, setDeparture] = useState<StationSummary | null>(null);
     const [destination, setDestination] = useState<StationSummary | null>(null);
-    const [pickerField, setPickerField] = useState<Field | null>(null);
     const [search, setSearch] = useState<SearchState>({ status: 'idle' });
     const [sortKey, setSortKey] = useState<SortKey>('FASTEST');
     const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -80,20 +89,27 @@ export default function RouteSearchScreen() {
 
     const requestId = useRef(0);
 
-    // 넘겨받은 역 이름을 mock 역 목록에서 찾아 채우고, focus 가 있으면 선택 시트를 엽니다.
+    // 역 검색 화면(/station-search, #33)을 열고, 고른 역을 출발 또는 도착에 넣습니다.
+    const openPicker = useCallback((field: Field, current: StationSummary | null) => {
+        openStationPicker(
+            { purpose: field === 'departure' ? 'origin' : 'destination', selectedStationId: current?.id },
+            station => {
+                const picked = toStationSummary(station);
+                if (field === 'departure') setDeparture(picked);
+                else setDestination(picked);
+            },
+        );
+    }, []);
+
+    // 홈 화면 등에서 넘겨받은 역 이름을 채우고, focus 가 있으면 역 검색 화면을 엽니다 (#32).
     useEffect(() => {
-        let alive = true;
-        (async () => {
-            const list = await fetchStations();
-            const find = (name?: string) => list.find(s => s.name === name?.trim()) ?? null;
-            if (!alive) return;
-            if (params.departure) setDeparture(find(params.departure));
-            if (params.destination) setDestination(find(params.destination));
-            if (params.focus) setPickerField(params.focus);
-        })();
-        return () => {
-            alive = false;
+        const find = (name?: string) => {
+            const station = MOCK_STATIONS.find(s => s.name === name?.trim());
+            return station ? toStationSummary(station) : null;
         };
+        if (params.departure) setDeparture(find(params.departure));
+        if (params.destination) setDestination(find(params.destination));
+        if (params.focus) openPicker(params.focus, null);
         // 화면에 처음 들어올 때 한 번만 반영합니다.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -153,12 +169,6 @@ export default function RouteSearchScreen() {
         setDestination(departure);
     };
 
-    const handleSelect = (station: StationSummary) => {
-        if (pickerField === 'departure') setDeparture(station);
-        if (pickerField === 'destination') setDestination(station);
-        setPickerField(null);
-    };
-
     const startGuide = (route: Route) => {
         if (search.status !== 'success' || !departure || !destination) return;
 
@@ -197,7 +207,7 @@ export default function RouteSearchScreen() {
                 contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}
                 showsVerticalScrollIndicator={false}
             >
-                {/* 출발 / 도착역 (누르면 역 선택) */}
+                {/* 출발 / 도착역 (누르면 역 검색 화면) */}
                 <View style={styles.stationCard}>
                     <View style={styles.pointColumn}>
                         <View style={styles.startPoint} />
@@ -210,14 +220,14 @@ export default function RouteSearchScreen() {
                             label="출발"
                             station={departure}
                             placeholder="출발역을 검색하세요"
-                            onPress={() => setPickerField('departure')}
+                            onPress={() => openPicker('departure', departure)}
                         />
                         <View style={styles.stationDivider} />
                         <StationField
                             label="도착"
                             station={destination}
                             placeholder="도착역을 검색하세요"
-                            onPress={() => setPickerField('destination')}
+                            onPress={() => openPicker('destination', destination)}
                         />
                     </View>
 
@@ -312,23 +322,16 @@ export default function RouteSearchScreen() {
                         />
                     ))}
             </ScrollView>
-
-            <StationPickerSheet
-                visible={pickerField !== null}
-                title={pickerField === 'destination' ? '도착역 선택' : '출발역 선택'}
-                onSelect={handleSelect}
-                onClose={() => setPickerField(null)}
-            />
         </View>
     );
 }
 
 function StationField({
-    label,
-    station,
-    placeholder,
-    onPress,
-}: {
+                          label,
+                          station,
+                          placeholder,
+                          onPress,
+                      }: {
     label: string;
     station: StationSummary | null;
     placeholder: string;
@@ -352,13 +355,13 @@ function StationField({
 }
 
 function Message({
-    icon,
-    iconBackground,
-    title,
-    description,
-    actionLabel,
-    onAction,
-}: {
+                     icon,
+                     iconBackground,
+                     title,
+                     description,
+                     actionLabel,
+                     onAction,
+                 }: {
     icon: ReactNode;
     iconBackground: string;
     title: string;
