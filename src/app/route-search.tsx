@@ -1,6 +1,6 @@
 
 import { useState } from 'react';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import {
     Keyboard,
     Pressable,
@@ -24,8 +24,15 @@ const BORDER = '#e6e9ef';
 export default function RouteSearchScreen() {
     const insets = useSafeAreaInsets();
 
-    const [departure, setDeparture] = useState('');
-    const [destination, setDestination] = useState('');
+    // 홈 화면 등에서 넘겨받은 초기값 (#32)
+    const params = useLocalSearchParams<{
+        departure?: string;
+        destination?: string;
+        focus?: 'departure' | 'destination';
+    }>();
+
+    const [departure, setDeparture] = useState(params.departure ?? '');
+    const [destination, setDestination] = useState(params.destination ?? '');
     const [searched, setSearched] = useState(false);
     const [error, setError] = useState('');
 
@@ -129,6 +136,7 @@ export default function RouteSearchScreen() {
                                 placeholder="출발역을 입력하세요"
                                 placeholderTextColor="#a1a8b8"
                                 value={departure}
+                                autoFocus={params.focus === 'departure'}
                                 onChangeText={(value) => {
                                     setDeparture(value);
                                     setSearched(false);
@@ -156,6 +164,7 @@ export default function RouteSearchScreen() {
                                 placeholder="도착역을 입력하세요"
                                 placeholderTextColor="#a1a8b8"
                                 value={destination}
+                                autoFocus={params.focus === 'destination'}
                                 onChangeText={(value) => {
                                     setDestination(value);
                                     setSearched(false);
