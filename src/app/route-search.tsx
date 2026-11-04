@@ -1,18 +1,18 @@
 
 import { useState } from 'react';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router } from 'expo-router';
 import {
-    Keyboard,
     Pressable,
     ScrollView,
     StyleSheet,
     Text,
-    TextInput,
     View,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
+
+import { LineBadge, openStationPicker, type Station } from '@/app/station-search';
 
 const NAVY = '#0f1c3f';
 const MINT = '#2bcf9a';
@@ -24,15 +24,9 @@ const BORDER = '#e6e9ef';
 export default function RouteSearchScreen() {
     const insets = useSafeAreaInsets();
 
-    // 홈 화면 등에서 넘겨받은 초기값 (#32)
-    const params = useLocalSearchParams<{
-        departure?: string;
-        destination?: string;
-        focus?: 'departure' | 'destination';
-    }>();
-
-    const [departure, setDeparture] = useState(params.departure ?? '');
-    const [destination, setDestination] = useState(params.destination ?? '');
+    // 역 검색 화면(/station-search)에서 고른 역. API 호출 시 id만 보내면 된다.
+    const [departure, setDeparture] = useState<Station | null>(null);
+    const [destination, setDestination] = useState<Station | null>(null);
     const [searched, setSearched] = useState(false);
     const [error, setError] = useState('');
 
@@ -51,19 +45,36 @@ export default function RouteSearchScreen() {
         setError('');
     };
 
+    const pickDeparture = () => {
+        openStationPicker(
+            { purpose: 'origin', selectedStationId: departure?.id },
+            (station) => {
+                setDeparture(station);
+                setSearched(false);
+                setError('');
+            },
+        );
+    };
+
+    const pickDestination = () => {
+        openStationPicker(
+            { purpose: 'destination', selectedStationId: destination?.id },
+            (station) => {
+                setDestination(station);
+                setSearched(false);
+                setError('');
+            },
+        );
+    };
+
     const handleSearch = () => {
-        Keyboard.dismiss();
-
-        const from = departure.trim();
-        const to = destination.trim();
-
-        if (!from || !to) {
-            setError('출발역과 도착역을 모두 입력해 주세요.');
+        if (!departure || !destination) {
+            setError('출발역과 도착역을 모두 선택해 주세요.');
             setSearched(false);
             return;
         }
 
-        if (from === to) {
+        if (departure.id === destination.id) {
             setError('출발역과 도착역을 다르게 설정해 주세요.');
             setSearched(false);
             return;
@@ -131,19 +142,25 @@ export default function RouteSearchScreen() {
                                 출발역
                             </Text>
 
-                            <TextInput
-                                style={styles.stationInput}
-                                placeholder="출발역을 입력하세요"
-                                placeholderTextColor="#a1a8b8"
-                                value={departure}
-                                autoFocus={params.focus === 'departure'}
-                                onChangeText={(value) => {
-                                    setDeparture(value);
-                                    setSearched(false);
-                                    setError('');
-                                }}
-                                returnKeyType="next"
-                            />
+                            <Pressable
+                                style={styles.stationField}
+                                onPress={pickDeparture}
+                                accessibilityRole="button"
+                                accessibilityLabel="출발역 선택"
+                            >
+                                {departure ? (
+                                    <>
+                                        <Text style={styles.stationValue}>{departure.name}</Text>
+                                        <View style={styles.stationLines}>
+                                            {departure.lines.map((line) => (
+                                                <LineBadge key={line.lineId} line={line} size={20} />
+                                            ))}
+                                        </View>
+                                    </>
+                                ) : (
+                                    <Text style={styles.stationPlaceholder}>출발역을 선택하세요</Text>
+                                )}
+                            </Pressable>
                         </View>
                     </View>
 
@@ -159,20 +176,25 @@ export default function RouteSearchScreen() {
                                 도착역
                             </Text>
 
-                            <TextInput
-                                style={styles.stationInput}
-                                placeholder="도착역을 입력하세요"
-                                placeholderTextColor="#a1a8b8"
-                                value={destination}
-                                autoFocus={params.focus === 'destination'}
-                                onChangeText={(value) => {
-                                    setDestination(value);
-                                    setSearched(false);
-                                    setError('');
-                                }}
-                                returnKeyType="done"
-                                onSubmitEditing={handleSearch}
-                            />
+                            <Pressable
+                                style={styles.stationField}
+                                onPress={pickDestination}
+                                accessibilityRole="button"
+                                accessibilityLabel="도착역 선택"
+                            >
+                                {destination ? (
+                                    <>
+                                        <Text style={styles.stationValue}>{destination.name}</Text>
+                                        <View style={styles.stationLines}>
+                                            {destination.lines.map((line) => (
+                                                <LineBadge key={line.lineId} line={line} size={20} />
+                                            ))}
+                                        </View>
+                                    </>
+                                ) : (
+                                    <Text style={styles.stationPlaceholder}>도착역을 선택하세요</Text>
+                                )}
+                            </Pressable>
                         </View>
                     </View>
 
@@ -240,7 +262,7 @@ export default function RouteSearchScreen() {
                         </View>
 
                         <Text style={styles.resultRoute}>
-                            {departure.trim()} → {destination.trim()}
+                            {departure?.name} → {destination?.name}
                         </Text>
 
                         <View style={styles.resultDivider} />
@@ -388,13 +410,30 @@ const styles = StyleSheet.create({
         marginBottom: 5,
     },
 
-    stationInput: {
+    stationField: {
+        minHeight: 32,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingVertical: 5,
+    },
+
+    stationValue: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: NAVY,
+    },
+
+    stationPlaceholder: {
         fontSize: 16,
         fontWeight: '600',
-        color: NAVY,
-        paddingVertical: 5,
-        outlineStyle: 'none',
-    } as any,
+        color: '#a1a8b8',
+    },
+
+    stationLines: {
+        flexDirection: 'row',
+        gap: 4,
+    },
 
     stationDivider: {
         height: 1,
