@@ -1,17 +1,27 @@
 import { ComponentProps, useState } from 'react';
 import {
     Alert,
+    LayoutChangeEvent,
     Pressable,
+    ScrollView,
     StyleSheet,
     Text,
+    useWindowDimensions,
     View,
 } from 'react-native';
+import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import LinkRoLogo from '@/components/linkro-logo';
-import { router } from 'expo-router';
+import {
+    formatAppointmentParam,
+    formatDday,
+    formatMonthDay,
+    formatTime,
+    HOME_UPCOMING_MEETING,
+} from '@/constants/home-mock';
 
 const NAVY = '#0f1c3f';
 const MINT = '#2bcf9a';
@@ -26,26 +36,54 @@ const DIVIDER = '#e6e9ef';
 const AI = '#6a5ae0';
 const AI_BG = '#f0eefd';
 
-type IoniconName = ComponentProps<typeof Ionicons>['name'];
+/** 하단 탭바에서 safe area 를 뺀 높이 */
+const TAB_BAR_CONTENT_HEIGHT = 58;
+/** 작은 화면에서 지도가 가려지지 않도록 시트가 차지할 수 있는 최대 비율 */
+const SHEET_MAX_RATIO = 0.55;
 
-type FeatureCardProps = {
-    icon: IoniconName;
-    title: string;
-    description: string;
-    ai?: boolean;
-    onPress: () => void;
-};
+type IoniconName = ComponentProps<typeof Ionicons>['name'];
 
 export default function HomeScreen() {
     const insets = useSafeAreaInsets();
-    const [expanded, setExpanded] = useState(false);
+    const { height: windowHeight } = useWindowDimensions();
+    const [sheetHeight, setSheetHeight] = useState(0);
+
+    const tabBarHeight = TAB_BAR_CONTENT_HEIGHT + Math.max(insets.bottom, 8);
+    const meeting = HOME_UPCOMING_MEETING;
 
     const showPreparing = (name: string) => {
         Alert.alert('준비 중', `${name} 화면은 다음 작업에서 연결할 예정입니다.`);
     };
 
-    const handleMidpoint = () => {
-        router.push('/rooms');
+    // 출발·도착역 선택 진입점
+    // TODO: 역 검색 화면(StationSearchScreen) 구현 후 '/station-search' 로 교체
+    const openStationSearch = () => {
+        router.push({
+            pathname: '/route-search',
+            params: { focus: 'departure' },
+        });
+    };
+
+    const openMeeting = () => {
+        if (!meeting) {
+            router.push('/rooms');
+            return;
+        }
+
+        // API 연동 전에는 약속방 미리보기 화면으로 연결합니다.
+        router.push({
+            pathname: '/rooms/[roomId]',
+            params: {
+                roomId: meeting.roomId,
+                roomName: meeting.title,
+                appointmentAt: formatAppointmentParam(meeting.appointmentAt),
+                maxMembers: String(meeting.maxMembers),
+            },
+        });
+    };
+
+    const handleSheetLayout = (event: LayoutChangeEvent) => {
+        setSheetHeight(event.nativeEvent.layout.height);
     };
 
     return (
@@ -53,276 +91,188 @@ export default function HomeScreen() {
             <StatusBar style="dark" />
 
             {/* 지도 영역 - 실제 카카오 지도 연동 전 디자인용 */}
-            <MockMap />
+            <View style={[styles.mapArea, { bottom: tabBarHeight }]}>
+                <MockMap />
+            </View>
 
-            {/* 상단 로고 + 검색창 */}
-            <View
-                style={[
-                    styles.topPanel,
-                    {
-                        top: insets.top + 10,
-                    },
-                ]}
-            >
+            {/* ❶ 상단 로고 + 검색창 */}
+            <View style={[styles.topPanel, { top: insets.top + 10 }]}>
                 <View style={styles.brandRow}>
                     <LinkRoLogo size={22} />
-
-                    {/*
-                      최종 명세에서 알림은 MVP 제외.
-                      기존 Figma Make의 알림 버튼은 우선 제거.
-                    */}
                 </View>
 
                 <Pressable
-                    style={({ pressed }) => [
-                        styles.searchBar,
-                        pressed && styles.pressed,
-                    ]}
-                    onPress={() => showPreparing('역 검색')}
+                    style={({ pressed }) => [styles.searchBar, pressed && styles.pressed]}
+                    onPress={openStationSearch}
+                    accessibilityRole="search"
+                    accessibilityLabel="출발역과 도착역 검색"
                 >
-                    <Ionicons
-                        name="search-outline"
-                        size={21}
-                        color={NAVY}
-                    />
-
-                    <Text style={styles.searchText}>
-                        어디로 이동하시나요?
-                    </Text>
+                    <Ionicons name="search-outline" size={21} color={NAVY} />
+                    <Text style={styles.searchText}>어디로 이동하시나요?</Text>
                 </Pressable>
             </View>
 
-            {/* 지도 우측 버튼 */}
-            <View
-                style={[
-                    styles.mapControls,
-                    {
-                        bottom: expanded ? 608 : 373,
-                    },
-                ]}
-            >
-                <Pressable
-                    style={({ pressed }) => [
-                        styles.mapControlButton,
-                        pressed && styles.pressed,
+            {/* 지도 우측 버튼 (시트 높이에 맞춰 위치) */}
+            {sheetHeight > 0 && (
+                <View
+                    style={[
+                        styles.mapControls,
+                        { bottom: tabBarHeight + sheetHeight + 12 },
                     ]}
-                    onPress={() => showPreparing('현재 위치')}
                 >
-                    <Ionicons
-                        name="locate-outline"
-                        size={22}
-                        color={NAVY}
-                    />
-                </Pressable>
+                    <Pressable
+                        style={({ pressed }) => [styles.mapControlButton, pressed && styles.pressed]}
+                        onPress={() => showPreparing('현재 위치')}
+                        accessibilityLabel="현재 위치"
+                    >
+                        <Ionicons name="locate-outline" size={22} color={NAVY} />
+                    </Pressable>
 
-                <View style={styles.mapControlDivider} />
+                    <View style={styles.mapControlDivider} />
 
-                <Pressable
-                    style={({ pressed }) => [
-                        styles.mapControlButton,
-                        pressed && styles.pressed,
-                    ]}
-                    onPress={() => showPreparing('지도 설정')}
-                >
-                    <Ionicons
-                        name="layers-outline"
-                        size={22}
-                        color={NAVY}
-                    />
-                </Pressable>
-            </View>
+                    <Pressable
+                        style={({ pressed }) => [styles.mapControlButton, pressed && styles.pressed]}
+                        onPress={() => showPreparing('지도 설정')}
+                        accessibilityLabel="지도 설정"
+                    >
+                        <Ionicons name="layers-outline" size={22} color={NAVY} />
+                    </Pressable>
+                </View>
+            )}
 
             {/* 하단 기능 시트 */}
             <View
                 style={[
                     styles.sheet,
-                    expanded
-                        ? styles.sheetExpanded
-                        : styles.sheetCollapsed,
+                    {
+                        bottom: tabBarHeight,
+                        maxHeight: windowHeight * SHEET_MAX_RATIO,
+                    },
                 ]}
+                onLayout={handleSheetLayout}
             >
-                <Pressable
-                    style={styles.sheetHandleButton}
-                    onPress={() => setExpanded(current => !current)}
-                >
+                <View style={styles.sheetHandleArea}>
                     <View style={styles.sheetHandle} />
-                </Pressable>
-
-                <View style={styles.featureGrid}>
-                    <FeatureCard
-                        icon="navigate-outline"
-                        title="경로 탐색"
-                        description="최적 경로 찾기"
-                        onPress={() => router.push('/route-search')}
-                    />
-
-                    <FeatureCard
-                        icon="people-outline"
-                        title="중간역 추천"
-                        description="함께 만날 위치"
-                        onPress={handleMidpoint}
-                    />
-
-                    <FeatureCard
-                        icon="camera-outline"
-                        title="AI 방향 안내"
-                        description="표지판만 촬영하기"
-                        ai
-                        onPress={() => router.push('/ai-direction')}
-                    />
-
-                    <FeatureCard
-                        icon="chatbubbles-outline"
-                        title="약속방"
-                        description="함께 이동하기"
-                        onPress={() => router.push('/rooms')}
-                    />
                 </View>
 
-                {/* Figma Make의 진행 중인 약속 미리보기 */}
-                {!expanded && (
+                <ScrollView
+                    contentContainerStyle={styles.sheetContent}
+                    showsVerticalScrollIndicator={false}
+                    bounces={false}
+                >
+                    {/* ❷ 주요 기능 카드 */}
                     <Pressable
-                        style={({ pressed }) => [
-                            styles.meetingPreview,
-                            pressed && styles.pressed,
-                        ]}
-                        onPress={() => router.push('/rooms')}
+                        style={({ pressed }) => [styles.primaryCard, pressed && styles.pressed]}
+                        onPress={() => router.push('/route-search')}
+                        accessibilityRole="button"
+                        accessibilityLabel="경로 탐색"
                     >
-                        <View style={styles.meetingDate}>
-                            <Text style={styles.meetingDday}>D-7</Text>
-                            <Text style={styles.meetingDay}>10.18</Text>
+                        <View style={styles.iconTile}>
+                            <Ionicons name="train-outline" size={24} color={NAVY} />
                         </View>
 
-                        <View style={styles.meetingInfo}>
-                            <Text style={styles.meetingLabel}>
-                                진행 중인 약속
-                            </Text>
-
-                            <Text
-                                style={styles.meetingTitle}
-                                numberOfLines={1}
-                            >
-                                기말 끝 파티
+                        <View style={styles.primaryText}>
+                            <Text style={styles.cardTitle}>경로 탐색</Text>
+                            <Text style={styles.cardDescription} numberOfLines={1}>
+                                출발역과 도착역으로 최적 경로 찾기
                             </Text>
                         </View>
 
-                        <Ionicons
-                            name="chevron-forward"
-                            size={21}
-                            color={SECONDARY}
-                        />
+                        <Ionicons name="chevron-forward" size={20} color={NAVY} />
                     </Pressable>
-                )}
 
-                {expanded && (
-                    <View style={styles.meetingSection}>
-                        <View style={styles.sectionHeader}>
-                            <Text style={styles.sectionTitle}>
-                                진행 중인 약속
-                            </Text>
+                    <View style={styles.featureRow}>
+                        <FeatureCard
+                            icon="camera-outline"
+                            iconColor={AI}
+                            title="AI 표지판 방향 확인"
+                            description="표지판 사진으로 방향 확인"
+                            ai
+                            wide
+                            onPress={() => router.push('/ai-direction')}
+                        />
 
-                            <Pressable
-                                onPress={() => router.push('/rooms')}
-                            >
-                                <Text style={styles.moreText}>
-                                    전체 보기
-                                </Text>
-                            </Pressable>
-                        </View>
-
-                        <Pressable
-                            style={({ pressed }) => [
-                                styles.fullMeetingCard,
-                                pressed && styles.pressed,
-                            ]}
+                        <FeatureCard
+                            icon="chatbubbles-outline"
+                            iconColor={NAVY}
+                            title="약속방"
+                            description="함께 만날 약속 관리"
                             onPress={() => router.push('/rooms')}
+                        />
+                    </View>
+
+                    {/* ❸ 다가오는 약속 */}
+                    {meeting ? (
+                        <Pressable
+                            style={({ pressed }) => [styles.meetingCard, pressed && styles.pressed]}
+                            onPress={openMeeting}
+                            accessibilityRole="button"
+                            accessibilityLabel={`다가오는 약속 ${meeting.title}`}
                         >
                             <View style={styles.meetingDate}>
                                 <Text style={styles.meetingDday}>
-                                    D-7
+                                    {formatDday(meeting.appointmentAt)}
                                 </Text>
-
                                 <Text style={styles.meetingDay}>
-                                    10.18
+                                    {formatMonthDay(meeting.appointmentAt)}
                                 </Text>
                             </View>
 
                             <View style={styles.meetingInfo}>
-                                <Text style={styles.meetingTitle}>
-                                    기말 끝 파티
+                                <Text style={styles.meetingLabel}>다가오는 약속</Text>
+                                <Text style={styles.meetingTitle} numberOfLines={1}>
+                                    {meeting.title}
                                 </Text>
-
-                                <Text style={styles.meetingMeta}>
-                                    일 18:00 · 건대입구역
+                                <Text style={styles.meetingMeta} numberOfLines={1}>
+                                    {[
+                                        formatTime(meeting.appointmentAt),
+                                        meeting.stationName ? `${meeting.stationName}역` : '약속역 미정',
+                                        `${meeting.memberCount}/${meeting.maxMembers}명`,
+                                    ].join(' · ')}
                                 </Text>
                             </View>
 
-                            <View style={styles.avatarGroup}>
-                                {['민', '준', '서'].map(
-                                    (name, index) => (
-                                        <View
-                                            key={name}
-                                            style={[
-                                                styles.avatar,
-                                                {
-                                                    marginLeft:
-                                                        index === 0
-                                                            ? 0
-                                                            : -7,
-                                                },
-                                            ]}
-                                        >
-                                            <Text
-                                                style={
-                                                    styles.avatarText
-                                                }
-                                            >
-                                                {name}
-                                            </Text>
-                                        </View>
-                                    ),
-                                )}
-                            </View>
+                            <Ionicons name="chevron-forward" size={20} color={NAVY} />
                         </Pressable>
-                    </View>
-                )}
+                    ) : (
+                        <Pressable
+                            style={({ pressed }) => [styles.meetingCard, pressed && styles.pressed]}
+                            onPress={() => router.push('/rooms')}
+                        >
+                            <View style={styles.meetingInfo}>
+                                <Text style={styles.meetingLabel}>다가오는 약속</Text>
+                                <Text style={styles.meetingTitle}>예정된 약속이 없어요</Text>
+                                <Text style={styles.meetingMeta}>약속방을 만들어 친구를 초대해 보세요</Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={20} color={NAVY} />
+                        </Pressable>
+                    )}
+                </ScrollView>
             </View>
 
             {/* 하단 탭바 */}
             <View
                 style={[
                     styles.tabBar,
-                    {
-                        paddingBottom: Math.max(
-                            insets.bottom,
-                            8,
-                        ),
-                    },
+                    { height: tabBarHeight, paddingBottom: Math.max(insets.bottom, 8) },
                 ]}
             >
-                <BottomTab
-                    icon="home"
-                    label="홈"
-                    active
-                    onPress={() => {}}
-                />
-
+                <BottomTab icon="home" label="홈" active onPress={() => {}} />
                 <BottomTab
                     icon="navigate-outline"
                     label="경로"
                     onPress={() => router.push('/route-search')}
                 />
-
                 <BottomTab
                     icon="chatbubbles-outline"
                     label="약속방"
                     onPress={() => router.push('/rooms')}
                 />
-
+                {/* TODO: 마이페이지 화면 구현 후 '/my' 로 연결 */}
                 <BottomTab
                     icon="person-outline"
                     label="마이"
-                    onPress={() => showPreparing('마이')}
+                    onPress={() => showPreparing('마이페이지')}
                 />
             </View>
         </View>
@@ -331,50 +281,50 @@ export default function HomeScreen() {
 
 function FeatureCard({
                          icon,
+                         iconColor,
                          title,
                          description,
                          ai = false,
+                         wide = false,
                          onPress,
-                     }: FeatureCardProps) {
+                     }: {
+    icon: IoniconName;
+    iconColor: string;
+    title: string;
+    description: string;
+    ai?: boolean;
+    wide?: boolean;
+    onPress: () => void;
+}) {
     return (
         <Pressable
             style={({ pressed }) => [
                 styles.featureCard,
+                wide ? styles.featureCardWide : styles.featureCardNarrow,
                 pressed && styles.pressed,
             ]}
             onPress={onPress}
+            accessibilityRole="button"
+            accessibilityLabel={title}
         >
-            {ai && (
-                <View style={styles.aiChip}>
-                    <Ionicons
-                        name="sparkles"
-                        size={12}
-                        color={AI}
-                    />
-
-                    <Text style={styles.aiChipText}>AI</Text>
+            <View style={styles.featureTop}>
+                <View style={styles.iconTile}>
+                    <Ionicons name={icon} size={24} color={iconColor} />
                 </View>
-            )}
 
-            <View
-                style={[
-                    styles.featureIcon,
-                    ai && styles.featureIconAi,
-                ]}
-            >
-                <Ionicons
-                    name={icon}
-                    size={24}
-                    color={ai ? AI : NAVY}
-                />
+                {ai && (
+                    <View style={styles.aiChip}>
+                        <Ionicons name="sparkles" size={12} color={AI} />
+                        <Text style={styles.aiChipText}>AI</Text>
+                    </View>
+                )}
             </View>
 
             <View>
-                <Text style={styles.featureTitle}>
+                <Text style={styles.cardTitle} numberOfLines={1} adjustsFontSizeToFit>
                     {title}
                 </Text>
-
-                <Text style={styles.featureDescription}>
+                <Text style={styles.cardDescription} numberOfLines={1}>
                     {description}
                 </Text>
             </View>
@@ -397,28 +347,18 @@ function BottomTab({
         <Pressable
             style={styles.tabItem}
             onPress={onPress}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: active }}
         >
-            <Ionicons
-                name={icon}
-                size={23}
-                color={active ? NAVY : DISABLED}
-            />
-
-            <Text
-                style={[
-                    styles.tabLabel,
-                    active && styles.tabLabelActive,
-                ]}
-            >
-                {label}
-            </Text>
+            <Ionicons name={icon} size={23} color={active ? NAVY : DISABLED} />
+            <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{label}</Text>
         </Pressable>
     );
 }
 
 /**
  * 실제 카카오 지도 붙이기 전,
- * Figma Make 홈 화면 분위기만 유지하기 위한 지도 UI.
+ * Figma 홈 화면 분위기만 유지하기 위한 지도 UI.
  */
 function MockMap() {
     return (
@@ -518,9 +458,19 @@ const styles = StyleSheet.create({
         backgroundColor: BACKGROUND,
     },
 
+    mapArea: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+    },
+
     map: {
-        ...StyleSheet.absoluteFillObject,
-        bottom: 76,
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
         overflow: 'hidden',
         backgroundColor: '#eef1ed',
     },
@@ -651,7 +601,6 @@ const styles = StyleSheet.create({
         minHeight: 31,
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
     },
 
     searchBar: {
@@ -697,26 +646,15 @@ const styles = StyleSheet.create({
         position: 'absolute',
         left: 0,
         right: 0,
-        bottom: 76,
         zIndex: 6,
-        paddingHorizontal: 16,
-        paddingBottom: 16,
         borderTopLeftRadius: 26,
         borderTopRightRadius: 26,
         backgroundColor: CARD,
         overflow: 'hidden',
     },
 
-    sheetCollapsed: {
-        height: 355,
-    },
-
-    sheetExpanded: {
-        height: 600,
-    },
-
-    sheetHandleButton: {
-        height: 25,
+    sheetHandleArea: {
+        height: 22,
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -728,59 +666,85 @@ const styles = StyleSheet.create({
         backgroundColor: '#d5dae3',
     },
 
-    featureGrid: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        justifyContent: 'space-between',
+    sheetContent: {
+        paddingHorizontal: 16,
+        paddingBottom: 14,
         gap: 8,
     },
 
-    featureCard: {
-        position: 'relative',
-        width: '48.8%',
-        minHeight: 120,
-        padding: 14,
+    // 경로 탐색 (가로형 주 기능 카드)
+    primaryCard: {
+        minHeight: 80,
+        paddingHorizontal: 14,
+        paddingVertical: 14,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
         borderRadius: 18,
         backgroundColor: BACKGROUND,
     },
 
-    featureIcon: {
+    primaryText: {
+        flex: 1,
+    },
+
+    featureRow: {
+        flexDirection: 'row',
+        gap: 8,
+    },
+
+    featureCard: {
+        minHeight: 132,
+        padding: 14,
+        justifyContent: 'space-between',
+        borderRadius: 18,
+        backgroundColor: BACKGROUND,
+    },
+
+    // 'AI 표지판 방향 확인' 제목이 길어 왼쪽 카드를 넓게 둡니다.
+    featureCardWide: {
+        flex: 1.27,
+    },
+
+    featureCardNarrow: {
+        flex: 1,
+    },
+
+    featureTop: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+
+    iconTile: {
         width: 44,
         height: 44,
-        marginBottom: 8,
-        borderRadius: 12,
+        borderRadius: 13,
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: CARD,
     },
 
-    featureIconAi: {
-        backgroundColor: '#ffffff',
-    },
-
-    featureTitle: {
+    cardTitle: {
         color: NAVY,
-        fontSize: 16,
+        fontSize: 17,
         fontWeight: '800',
+        letterSpacing: -0.3,
     },
 
-    featureDescription: {
+    cardDescription: {
         marginTop: 4,
         color: SECONDARY,
-        fontSize: 13,
+        fontSize: 12.5,
         fontWeight: '500',
     },
 
     aiChip: {
-        position: 'absolute',
-        right: 12,
-        top: 12,
-        zIndex: 2,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 3,
         paddingHorizontal: 7,
-        paddingVertical: 3,
+        paddingVertical: 4,
         borderRadius: 8,
         backgroundColor: AI_BG,
     },
@@ -791,11 +755,12 @@ const styles = StyleSheet.create({
         fontWeight: '800',
     },
 
-    meetingPreview: {
-        height: 76,
-        marginTop: 12,
-        padding: 8,
-        paddingRight: 12,
+    // 다가오는 약속
+    meetingCard: {
+        minHeight: 80,
+        marginTop: 2,
+        padding: 10,
+        paddingRight: 14,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
@@ -806,7 +771,7 @@ const styles = StyleSheet.create({
     },
 
     meetingDate: {
-        width: 54,
+        width: 58,
         height: 58,
         borderRadius: 12,
         alignItems: 'center',
@@ -821,9 +786,9 @@ const styles = StyleSheet.create({
     },
 
     meetingDay: {
-        marginTop: 4,
+        marginTop: 3,
         color: '#ffffff',
-        fontSize: 15,
+        fontSize: 16,
         fontWeight: '800',
     },
 
@@ -838,76 +803,17 @@ const styles = StyleSheet.create({
     },
 
     meetingTitle: {
-        marginTop: 4,
-        color: NAVY,
-        fontSize: 15,
-        fontWeight: '800',
-    },
-
-    meetingSection: {
-        marginTop: 18,
-    },
-
-    sectionHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: 12,
-        paddingHorizontal: 2,
-    },
-
-    sectionTitle: {
+        marginTop: 2,
         color: NAVY,
         fontSize: 16,
         fontWeight: '800',
     },
 
-    moreText: {
-        color: MINT_DEEP,
-        fontSize: 12,
-        fontWeight: '700',
-    },
-
-    fullMeetingCard: {
-        minHeight: 82,
-        padding: 10,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 11,
-        borderWidth: 1,
-        borderColor: DIVIDER,
-        borderRadius: 18,
-        backgroundColor: CARD,
-    },
-
     meetingMeta: {
-        marginTop: 6,
+        marginTop: 3,
         color: SECONDARY,
         fontSize: 12,
         fontWeight: '600',
-    },
-
-    avatarGroup: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingRight: 3,
-    },
-
-    avatar: {
-        width: 27,
-        height: 27,
-        borderRadius: 14,
-        borderWidth: 2,
-        borderColor: '#ffffff',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: '#dfe5ee',
-    },
-
-    avatarText: {
-        color: NAVY,
-        fontSize: 10,
-        fontWeight: '800',
     },
 
     tabBar: {
@@ -916,7 +822,6 @@ const styles = StyleSheet.create({
         right: 0,
         bottom: 0,
         zIndex: 10,
-        minHeight: 76,
         paddingTop: 10,
         paddingHorizontal: 16,
         flexDirection: 'row',
@@ -929,7 +834,6 @@ const styles = StyleSheet.create({
     tabItem: {
         width: 68,
         alignItems: 'center',
-        justifyContent: 'center',
         gap: 3,
     },
 
