@@ -27,9 +27,19 @@ let mockUser: User = {
     createdAt: '2026-10-02T10:00:00+09:00',
 };
 
-/** 닉네임 검사 (서버도 같은 규칙으로 검사합니다) */
+/**
+ * 닉네임 글자 수 (백엔드와 같은 기준)
+ * 명세 부록 A: char_length(btrim(nickname)) → 앞뒤 공백을 빼고 '글자' 단위로 셉니다.
+ * JS 의 length 는 이모지 등을 2로 세므로 Array.from 으로 셉니다.
+ */
+export function nicknameLength(value: string): number {
+    return Array.from(value.trim()).length;
+}
+
+/** 닉네임 검사 (명세 4.5: 2~20자, 중복 허용 → 중복 검사는 하지 않음) */
 export function validateNickname(value: string): string | null {
-    const length = value.trim().length;
+    const length = nicknameLength(value);
+    if (length === 0) return '닉네임을 입력해주세요.';
     if (length < NICKNAME_MIN || length > NICKNAME_MAX) {
         return `닉네임은 ${NICKNAME_MIN}~${NICKNAME_MAX}자로 입력해주세요.`;
     }
@@ -43,9 +53,13 @@ export async function fetchMe(failForTest = false): Promise<User> {
     return mockUser;
 }
 
-/** 4.5 닉네임 수정 */
-export async function updateNickname(nickname: string): Promise<User> {
+/**
+ * 4.5 닉네임 수정 (앞뒤 공백을 뺀 값을 보냅니다)
+ * failForTest 가 true 면 저장 실패를 흉내 냅니다(실패 시 입력값 유지 확인용).
+ */
+export async function updateNickname(nickname: string, failForTest = false): Promise<User> {
     await wait(MOCK_DELAY_MS);
+    if (failForTest) throw new UserError('NETWORK_ERROR', '저장하지 못했어요. 잠시 후 다시 시도해 주세요.');
     const message = validateNickname(nickname);
     if (message) throw new UserError('VALIDATION_ERROR', message);
     mockUser = { ...mockUser, nickname: nickname.trim() };
