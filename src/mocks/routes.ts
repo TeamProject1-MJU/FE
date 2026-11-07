@@ -69,13 +69,19 @@ const stationId = (name: string) => {
     return stationIds.get(name)!;
 };
 
-const congestion = (level: CongestionLevel): Congestion => ({
-    supported: true,
-    kind: 'MOCK',
-    pct: LEVEL_PCT[level],
-    level,
-    levelLabel: LEVEL_LABELS[level],
-});
+const UNSUPPORTED: Congestion = { supported: false, kind: null, pct: null, level: null, levelLabel: null };
+
+/** level 이 null 이면 혼잡도 데이터 없음 (회색 '미제공') */
+const congestion = (level: CongestionLevel | null): Congestion =>
+    level === null
+        ? UNSUPPORTED
+        : {
+            supported: true,
+            kind: 'MOCK',
+            pct: LEVEL_PCT[level],
+            level,
+            levelLabel: LEVEL_LABELS[level],
+        };
 
 const LEVEL_ORDER: CongestionLevel[] = [
     'COMFORTABLE',
@@ -105,8 +111,8 @@ function subway(
     stopNames: string[],
     minutes: number,
     distanceM: number,
-    /** 정차역 혼잡도. 개수가 모자라면 마지막 값을 이어서 씁니다. */
-    levels: CongestionLevel[],
+    /** 정차역 혼잡도. 개수가 모자라면 마지막 값을 이어서 씁니다. null = 데이터 없음 */
+    levels: (CongestionLevel | null)[],
 ): RouteStep {
     const last = stopNames[stopNames.length - 1];
     return {
@@ -122,7 +128,8 @@ function subway(
         stations: stopNames.map((name, index) => ({
             id: stationId(name),
             name,
-            slotStart: '18:30',
+            // 조회 시간대는 검색할 때 services/route.ts 에서 현재 시각 기준으로 다시 계산합니다.
+            slotStart: '',
             slotDate: '',
             firstTrain: false,
             congestion: congestion(levels[Math.min(index, levels.length - 1)]),
@@ -138,9 +145,7 @@ function maxCongestion(steps: RouteStep[]): Congestion {
             if (level) max = Math.max(max, LEVEL_ORDER.indexOf(level));
         }
     }
-    return max < 0
-        ? { supported: false, kind: null, pct: null, level: null, levelLabel: null }
-        : congestion(LEVEL_ORDER[max]);
+    return max < 0 ? UNSUPPORTED : congestion(LEVEL_ORDER[max]);
 }
 
 function route(
@@ -192,7 +197,8 @@ const GEONDAE_TO_SADANG: Route[] = [
     route('r3', 'CHEAPEST', 34, 1650, [
         subway(7, '석남 방면', LINE7_GEONDAE_TO_ISU.slice(0, 8), 14, 9300, ['COMFORTABLE']),
         walk('고속터미널역 3호선 승강장으로 환승', 3, 250),
-        subway(3, '오금 방면', ['고속터미널', '교대'], 2, 1600, ['COMFORTABLE']),
+        // 혼잡도 데이터 없음(회색) 확인용
+        subway(3, '오금 방면', ['고속터미널', '교대'], 2, 1600, [null]),
         walk('교대역 2호선 승강장으로 환승', 2, 150),
         subway(2, '사당 방면', ['교대', '서초', '방배', '사당'], 6, 3600, ['RELAXED', 'COMFORTABLE']),
     ]),

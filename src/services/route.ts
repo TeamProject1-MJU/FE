@@ -7,8 +7,10 @@
  */
 
 import { findMockRoutes, MOCK_STATIONS } from '@/mocks/routes';
+import { resolveSlot } from '@/services/congestion';
 import {
     RouteSearchError,
+    type Route,
     type RouteSearchResponse,
     type StationSummary,
 } from '@/types/route';
@@ -49,11 +51,39 @@ export async function searchRoute(
     return {
         ...result.data,
         routes: result.data.routes.map(route => ({
-            ...route,
+            ...withStationSlots(route, now),
             summary: {
                 ...route.summary,
                 arrivalAt: new Date(now + route.summary.totalTimeSec * 1000).toISOString(),
             },
         })),
     };
+}
+
+/**
+ * mock 전용: 각 정차역의 혼잡도 조회 시간대를 채웁니다.
+ * 명세 6.2: 역의 시간대 = 출발 예정 시각 + 그 역까지 누적 소요시간이 속한 30분 구간,
+ * 06:00~23:00 밖이면 첫차(06:00) 슬롯 + firstTrain·slotDate.
+ * 실제 연동 후에는 서버가 내려주므로 필요 없습니다.
+ */
+function withStationSlots(route: Route, departAt: number): Route {
+    let elapsedSec = 0;
+
+    const steps = route.steps.map(step => {
+        const startSec = elapsedSec;
+        elapsedSec += step.durationSec;
+        if (!step.stations?.length) return step;
+
+        const gaps = Math.max(step.stations.length - 1, 1);
+        return {
+            ...step,
+            stations: step.stations.map((station, index) => {
+                const passAt = new Date(departAt + (startSec + (step.durationSec * index) / gaps) * 1000);
+                const { slotStart, slotDate, firstTrain } = resolveSlot(passAt);
+                return { ...station, slotStart, slotDate: slotDate ?? '', firstTrain };
+            }),
+        };
+    });
+
+    return { ...route, steps };
 }
