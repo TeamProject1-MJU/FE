@@ -1,14 +1,15 @@
 import { useState } from 'react';
-import { router } from 'expo-router';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { router, useLocalSearchParams } from 'expo-router';
+import { ActivityIndicator, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { CalendarModal, TimeWheelModal } from '@/components/rooms/appointment-picker';
-import { formatAppointmentParam } from '@/constants/home-mock';
+import { formatAppointmentParam, formatMonthDay, formatTime } from '@/constants/home-mock';
 import { createRoom, ROOM_NAME_MAX, roomNameLength } from '@/services/room';
-import { RoomError } from '@/types/room';
+import { RoomError, type CreatedRoom } from '@/types/room';
 
 const NAVY = '#0f1c3f';
 const SECONDARY = '#6b7488';
@@ -16,15 +17,23 @@ const BORDER = '#e6e9ef';
 const WHITE = '#ffffff';
 const BG = '#f3f5f8';
 const RED = '#e5484d';
+const MINT = '#2bcf9a';
+const MINT_DEEP = '#12a77a';
+const MINT_SOFT = '#e8f8f1';
 
 /**
- * 새 약속방 만들기 (#42, 상세설계서 그림 26 ❸·그림 27 ❺, API 명세 7.1 POST /rooms)
+ * 새 약속방 만들기 (#42·#43, 상세설계서 그림 26 ❸·그림 27 ❺, API 명세 7.1 POST /rooms)
  *
- * 기존 약속방 화면의 '방 만들기' 폼을 옮겼습니다. 정원은 명세상 4명 고정이라 인원 선택은 뺐습니다.
- * mock 으로 방을 만들고(만든 사람이 방장) 바로 약속방으로 들어갑니다. 목록에도 반영됩니다.
+ * 방 이름(1~30자)과 선택 사항인 약속 시각을 받아 mock 으로 방을 만듭니다. 정원은 4명 고정.
+ * 만든 사람이 방장(OWNER)이고 처음 인원은 1명입니다. 결과는 약속방 목록에도 반영됩니다.
+ * 생성 후에는 초대 코드를 확인·복사하고 약속방으로 들어갑니다(초대 코드는 방장에게만, 그림 28 ❻).
+ * 테스트용: /rooms/new?mock=error → 첫 생성 실패
  */
 export default function NewRoomScreen() {
     const insets = useSafeAreaInsets();
+    const { mock } = useLocalSearchParams<{ mock?: string }>();
+    const [failNext, setFailNext] = useState(mock === 'error');
+    const [created, setCreated] = useState<{ room: CreatedRoom; at: Date | null } | null>(null);
     const [roomName, setRoomName] = useState('');
     const [date, setDate] = useState('');
     const [time, setTime] = useState('');
@@ -54,22 +63,27 @@ export default function NewRoomScreen() {
         setNotice('');
         setSaving(true);
         try {
-            const room = await createRoom({ name: roomName, appointmentAt: at ? at.toISOString() : null });
-            // 만든 방으로 들어갑니다. 뒤로 가면 목록으로 돌아갑니다.
-            router.replace({
-                pathname: '/rooms/[roomId]',
-                params: {
-                    roomId: room.id,
-                    roomName: room.name,
-                    appointmentAt: at ? formatAppointmentParam(at) : '',
-                    maxMembers: String(room.maxMembers),
-                },
-            });
+            const fail = failNext;
+            setFailNext(false); // 다시 시도하면 성공하도록
+            const room = await createRoom({ name: roomName, appointmentAt: at ? at.toISOString() : null }, fail);
+            setCreated({ room, at });
         } catch (error) {
+            // 실패해도 입력값은 그대로 둡니다.
             setNotice(error instanceof RoomError ? error.message : '약속방을 만들지 못했어요. 다시 시도해 주세요.');
+        } finally {
             setSaving(false);
         }
     };
+
+    const clearAppointment = () => {
+        setDate('');
+        setTime('');
+        setNotice('');
+    };
+
+    if (created) {
+        return <CreatedView room={created.room} at={created.at} topInset={insets.top} bottomInset={insets.bottom} />;
+    }
 
     return (
         <View style={styles.root}>
@@ -91,7 +105,7 @@ export default function NewRoomScreen() {
                         </Text>
                     </View>
                     <TextInput
-                        style={styles.input}
+                        style={[styles.input, nameLength > ROOM_NAME_MAX && styles.inputError]}
                         placeholder="예: 금요일 저녁"
                         placeholderTextColor="#a1a8b8"
                         value={roomName}
@@ -116,6 +130,14 @@ export default function NewRoomScreen() {
                         <Text style={[styles.selectText, !time && styles.placeholder]}>{time || '스크롤하여 시간 선택'}</Text>
                         <Ionicons name="chevron-down" size={17} color={SECONDARY} />
                     </Pressable>
+                    {date || time ? (
+                        <Pressable onPress={clearAppointment} style={styles.clearLink} accessibilityRole="button">
+                            <Ionicons name="close-circle" size={15} color={SECONDARY} />
+                            <Text style={styles.clearText}>약속 시각 지우기</Text>
+                        </Pressable>
+                    ) : (
+                        <Text style={styles.hint}>약속 시각은 나중에 방장이 정해도 돼요.</Text>
+                    )}
 
                     <View style={styles.infoRow}>
                         <Ionicons name="people-outline" size={17} color={SECONDARY} />
@@ -157,7 +179,112 @@ export default function NewRoomScreen() {
     );
 }
 
+/** 생성 완료: 초대 코드 확인·복사 → 약속방으로 */
+function CreatedView({
+                         room,
+                         at,
+                         topInset,
+                         bottomInset,
+                     }: {
+    room: CreatedRoom;
+    at: Date | null;
+    topInset: number;
+    bottomInset: number;
+}) {
+    const [copied, setCopied] = useState(false);
+
+    const copy = async () => {
+        await Clipboard.setStringAsync(room.roomCode);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1800);
+    };
+
+    const share = () => {
+        Share.share({ message: `LinkRo 약속방 "${room.name}"에 초대할게요. 초대 코드: ${room.roomCode}` }).catch(() => undefined);
+    };
+
+    const enter = () => {
+        // 목록 → 새 약속방 자리를 약속방으로 바꿉니다. 뒤로 가면 목록으로 돌아갑니다.
+        router.replace({
+            pathname: '/rooms/[roomId]',
+            params: {
+                roomId: room.id,
+                roomName: room.name,
+                appointmentAt: at ? formatAppointmentParam(at) : '',
+                maxMembers: String(room.maxMembers),
+            },
+        });
+    };
+
+    return (
+        <View style={[styles.root, { paddingTop: topInset + 28, paddingBottom: bottomInset + 20 }]}>
+            <StatusBar style="dark" />
+            <View style={styles.doneContent}>
+                <View style={styles.doneIcon}>
+                    <Ionicons name="checkmark" size={30} color={WHITE} />
+                </View>
+                <Text style={styles.doneTitle}>약속방을 만들었어요</Text>
+                <Text style={styles.doneCaption}>초대 코드를 보내 친구들을 불러 보세요</Text>
+
+                <View style={styles.roomCard}>
+                    <Text style={styles.roomName} numberOfLines={1}>
+                        {room.name}
+                    </Text>
+                    <Text style={styles.roomMeta}>
+                        {at ? `${formatMonthDay(at)} ${formatTime(at)}` : '약속 시각 미정'} · {room.memberCount}/{room.maxMembers}명 ·
+                        방장
+                    </Text>
+                </View>
+
+                <Text style={styles.codeLabel}>초대 코드</Text>
+                <Pressable
+                    style={({ pressed }) => [styles.codeBox, pressed && styles.pressed]}
+                    onPress={copy}
+                    accessibilityRole="button"
+                    accessibilityLabel={`초대 코드 ${room.roomCode.split('').join(' ')}, 눌러서 복사`}
+                >
+                    <Text style={styles.codeText}>{room.roomCode}</Text>
+                    <View style={styles.copyChip}>
+                        <Ionicons name={copied ? 'checkmark' : 'copy-outline'} size={14} color={MINT_DEEP} />
+                        <Text style={styles.copyText}>{copied ? '복사됨' : '복사'}</Text>
+                    </View>
+                </Pressable>
+                <Text style={styles.codeHint}>초대 코드는 방장에게만 보여요. 최대 4명까지 들어올 수 있어요.</Text>
+
+                <Pressable style={({ pressed }) => [styles.shareButton, pressed && styles.pressed]} onPress={share}>
+                    <Ionicons name="share-outline" size={18} color={NAVY} />
+                    <Text style={styles.shareText}>친구에게 공유</Text>
+                </Pressable>
+            </View>
+
+            <Pressable
+                style={({ pressed }) => [styles.primaryButton, styles.enterButton, pressed && styles.pressed]}
+                onPress={enter}
+                accessibilityRole="button"
+            >
+                <Text style={styles.primaryText}>약속방으로 들어가기</Text>
+            </Pressable>
+        </View>
+    );
+}
+
 const styles = StyleSheet.create({
+    doneContent: { flex: 1, alignItems: 'center', paddingHorizontal: 20 },
+    doneIcon: { width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center', backgroundColor: MINT },
+    doneTitle: { marginTop: 16, color: NAVY, fontSize: 22, fontWeight: '900' },
+    doneCaption: { marginTop: 6, color: SECONDARY, fontSize: 13.5, fontWeight: '600' },
+    roomCard: { alignSelf: 'stretch', marginTop: 24, padding: 16, borderRadius: 16, borderWidth: 1, borderColor: BORDER, backgroundColor: WHITE },
+    roomName: { color: NAVY, fontSize: 17, fontWeight: '800' },
+    roomMeta: { marginTop: 5, color: SECONDARY, fontSize: 13, fontWeight: '600' },
+    codeLabel: { alignSelf: 'flex-start', marginTop: 22, marginBottom: 8, color: NAVY, fontSize: 13, fontWeight: '800' },
+    codeBox: { alignSelf: 'stretch', height: 64, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 16, borderWidth: 1.5, borderColor: MINT, backgroundColor: MINT_SOFT },
+    codeText: { color: NAVY, fontSize: 26, fontWeight: '900', letterSpacing: 6 },
+    copyChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 9, backgroundColor: WHITE },
+    copyText: { color: MINT_DEEP, fontSize: 12.5, fontWeight: '800' },
+    codeHint: { alignSelf: 'flex-start', marginTop: 8, color: SECONDARY, fontSize: 12, fontWeight: '600' },
+    shareButton: { alignSelf: 'stretch', marginTop: 16, height: 48, borderRadius: 13, borderWidth: 1, borderColor: BORDER, backgroundColor: WHITE, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+    shareText: { color: NAVY, fontSize: 14.5, fontWeight: '800' },
+    enterButton: { marginHorizontal: 20 },
     root: { flex: 1, backgroundColor: BG },
     header: { backgroundColor: WHITE, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 15, borderBottomWidth: 1, borderColor: BORDER },
     backButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
@@ -168,6 +295,10 @@ const styles = StyleSheet.create({
     labelRow: { flexDirection: 'row', justifyContent: 'space-between' },
     counter: { fontSize: 12, fontWeight: '600', color: '#a1a8b8' },
     optional: { fontSize: 12, fontWeight: '600', color: '#a1a8b8' },
+    inputError: { borderColor: RED },
+    clearLink: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: -8, marginBottom: 16 },
+    clearText: { color: SECONDARY, fontSize: 12.5, fontWeight: '700' },
+    hint: { color: '#a1a8b8', fontSize: 12, fontWeight: '600', marginTop: -8, marginBottom: 16 },
     input: { backgroundColor: '#f8f9fb', borderRadius: 11, borderWidth: 1, borderColor: BORDER, minHeight: 48, paddingHorizontal: 13, color: NAVY, fontSize: 14, marginBottom: 17 },
     selectBox: { borderRadius: 11, borderWidth: 1, borderColor: BORDER, backgroundColor: '#f8f9fb', height: 49, flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 13, marginBottom: 17 },
     selectText: { flex: 1, color: NAVY, fontSize: 14, fontWeight: '600' },
