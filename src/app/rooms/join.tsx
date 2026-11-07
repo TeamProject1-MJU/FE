@@ -6,8 +6,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { formatAppointmentParam } from '@/constants/home-mock';
-import { getMockRoom, joinRoom } from '@/services/room';
-import { RoomError } from '@/types/room';
+import { getMockRoom, isValidRoomCode, joinRoom, normalizeRoomCode } from '@/services/room';
+import { RoomError, type RoomErrorCode } from '@/types/room';
 
 const NAVY = '#0f1c3f';
 const MINT = '#2bcf9a';
@@ -19,24 +19,29 @@ const RED = '#e5484d';
 const CODE_LENGTH = 6;
 
 /**
- * 약속방 입장 (#42, 상세설계서 그림 27, API 명세 7.2 POST /rooms/join)
+ * 약속방 입장 (#42·#44, 상세설계서 그림 27, API 명세 7.2 POST /rooms/join)
  *
- * mock 초대 코드: A3K9PZ(입장 가능), FULL44(정원 초과). 그 밖의 코드는 '코드를 다시 확인' 안내.
+ * 코드 정규화: 공백·기호를 빼고 대문자로 (서버 형식 ^[A-Z0-9]{6}$).
+ * mock 초대 코드
+ * - A3K9PZ: 진행 중 방 입장, CFM7Q2: 약속역 확정된 방 입장
+ * - FULL44: 정원 초과, BUSY99: 처리 중(다시 시도하면 입장), K7Q2MX: 이미 참여 중인 방
+ * - 그 밖: 없는 코드
  */
 export default function JoinRoomScreen() {
     const insets = useSafeAreaInsets();
     const inputRef = useRef<TextInput>(null);
     const [code, setCode] = useState('');
-    const [error, setError] = useState('');
+    const [error, setError] = useState<{ code: RoomErrorCode | 'UNKNOWN'; message: string } | null>(null);
     const [joining, setJoining] = useState(false);
 
     const goBack = () => (router.canGoBack() ? router.back() : router.replace('/rooms'));
-    const ready = code.length === CODE_LENGTH && !joining;
+    const formatOk = isValidRoomCode(code);
+    const ready = formatOk && !joining;
 
     const join = async () => {
         if (!ready) return;
         setJoining(true);
-        setError('');
+        setError(null);
         try {
             const { roomId } = await joinRoom(code);
             const room = getMockRoom(roomId);
@@ -50,7 +55,12 @@ export default function JoinRoomScreen() {
                 },
             });
         } catch (caught) {
-            setError(caught instanceof RoomError ? caught.message : '입장하지 못했어요. 다시 시도해 주세요.');
+            // 409(이미 참여·정원 초과·처리 중)도 성공으로 바꾸지 않고 안내만 합니다.
+            setError(
+                caught instanceof RoomError
+                    ? { code: caught.code, message: caught.message }
+                    : { code: 'UNKNOWN', message: '입장하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.' },
+            );
             setJoining(false);
         }
     };
@@ -95,8 +105,9 @@ export default function JoinRoomScreen() {
                         style={styles.hiddenInput}
                         value={code}
                         onChangeText={value => {
-                            setCode(value.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, CODE_LENGTH));
-                            setError('');
+                            // 붙여넣은 코드의 공백·기호를 빼고 대문자로 맞춥니다.
+                            setCode(normalizeRoomCode(value).replace(/[^A-Z0-9]/g, '').slice(0, CODE_LENGTH));
+                            setError(null);
                         }}
                         autoCapitalize="characters"
                         autoCorrect={false}
@@ -109,7 +120,16 @@ export default function JoinRoomScreen() {
                         accessibilityLabel="초대 코드"
                     />
                 </View>
-                {!!error && <Text style={styles.error}>{error}</Text>}
+                {error ? (
+                    <View style={styles.errorRow} accessibilityLiveRegion="polite">
+                        <Ionicons name="alert-circle" size={15} color={RED} />
+                        <Text style={styles.error}>{error.message}</Text>
+                    </View>
+                ) : (
+                    <Text style={styles.help}>
+                        {code.length === 0 ? '영문과 숫자 6자리예요' : `${code.length}/${CODE_LENGTH}자 입력`}
+                    </Text>
+                )}
 
                 <Pressable
                     style={({ pressed }) => [styles.primaryButton, !ready && styles.primaryDisabled, pressed && styles.pressed]}
@@ -117,7 +137,13 @@ export default function JoinRoomScreen() {
                     disabled={!ready}
                     accessibilityRole="button"
                 >
-                    {joining ? <ActivityIndicator color={WHITE} /> : <Text style={styles.primaryText}>입장하기</Text>}
+                    {joining ? (
+                        <ActivityIndicator color={WHITE} />
+                    ) : (
+                        <Text style={styles.primaryText}>
+                            {error?.code === 'ROOM_BUSY' || error?.code === 'UNKNOWN' ? '다시 시도' : '입장하기'}
+                        </Text>
+                    )}
                 </Pressable>
 
                 <View style={styles.dividerRow}>
@@ -158,7 +184,9 @@ const styles = StyleSheet.create({
     codeChar: { color: NAVY, fontSize: 20, fontWeight: '900' },
     // 6칸 위를 덮는 실제 입력창. iOS 는 opacity 0 인 뷰를 터치하지 못하므로 글자만 투명하게 둡니다.
     hiddenInput: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, color: 'transparent', backgroundColor: 'transparent', fontSize: 1 },
-    error: { marginTop: 9, color: RED, fontSize: 12.5, fontWeight: '600' },
+    errorRow: { marginTop: 9, flexDirection: 'row', alignItems: 'center', gap: 5 },
+    error: { flex: 1, color: RED, fontSize: 12.5, fontWeight: '600' },
+    help: { marginTop: 9, color: SECONDARY, fontSize: 12.5, fontWeight: '600' },
     primaryButton: { marginTop: 16, height: 52, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: NAVY },
     primaryDisabled: { backgroundColor: '#a5acba' },
     primaryText: { color: WHITE, fontSize: 15, fontWeight: '800' },
