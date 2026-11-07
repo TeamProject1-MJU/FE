@@ -406,21 +406,61 @@ function requireOwner(roomId: string) {
     return room;
 }
 
-/** 7.5 방 정보 수정 (OWNER). 약속 시각이 바뀌면 이전 추천 결과는 최신이 아니게 됩니다. */
+/** 7.5 PATCH /rooms/{roomId} 요청: 모든 필드 선택. 생략하면 유지, appointmentAt null 은 해제 */
+export type UpdateRoomPatch = {
+    name?: string;
+    appointmentAt?: string | null;
+};
+
+/** 수정 요청 실패를 흉내 내는 방 (mock, 화면 확인용). 한 번 실패한 뒤 다시 시도하면 성공합니다. */
+const updateFailOnce = new Map<string, 'error' | 'busy'>();
+
+/**
+ * 7.5 방 정보 수정 (OWNER, #46)
+ * - 수정할 수 있는 필드는 name·appointmentAt 뿐 (정원 4명 고정, 명세 7.5)
+ * - 생략한 필드는 그대로 두고, appointmentAt: null 은 약속 시각 해제로 처리합니다
+ *   (명세 7.5 "모든 필드 선택". TODO: 백엔드와 null = 해제인지 확인)
+ * - 이름은 앞뒤 공백 제거 후 1~30자 (명세 부록 A ck_room_name), 아니면 VALIDATION_ERROR(400)
+ * - 방장이 아니면 NOT_ROOM_OWNER(403), 없는 방 ROOM_NOT_FOUND(404), 락 대기 초과 ROOM_BUSY(409, 7.12)
+ * - 약속 시각을 바꿔도 추천을 새로 만들지 않고 기존 추천·후보·확정 약속역은 그대로 둡니다 (명세 7.5).
+ *   TODO: 실제 연동 시 WS ROOM_UPDATED 수신 → 8.2 재조회로 isStale 갱신 (이번 범위 밖)
+ * mock: 'error' 면 한 번 NETWORK_ERROR, 'busy' 면 한 번 ROOM_BUSY (다시 시도하면 성공)
+ */
 export async function updateRoom(
     roomId: string,
-    patch: Partial<Pick<RoomSummary, 'name' | 'appointmentAt'>>,
-): Promise<RoomSummary | undefined> {
+    patch: UpdateRoomPatch,
+    mock?: 'error' | 'busy',
+): Promise<RoomSummary> {
     await wait(MOCK_DELAY_MS);
-    requireOwner(roomId);
+    if (mock) updateFailOnce.set(roomId, mock);
+
+    const room = requireOwner(roomId);
+
+    const next: UpdateRoomPatch = {};
     if (patch.name !== undefined) {
         const length = roomNameLength(patch.name);
         if (length === 0) throw new RoomError('VALIDATION_ERROR', '약속방 이름을 입력해 주세요.');
         if (length > ROOM_NAME_MAX) throw new RoomError('VALIDATION_ERROR', `약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`);
-        patch = { ...patch, name: patch.name.trim() };
+        next.name = patch.name.trim();
     }
-    rooms = rooms.map(room => (room.id === roomId ? { ...room, ...patch } : room));
-    return getMockRoom(roomId);
+    if (patch.appointmentAt !== undefined) {
+        if (patch.appointmentAt !== null && Number.isNaN(new Date(patch.appointmentAt).getTime())) {
+            throw new RoomError('VALIDATION_ERROR', '약속 시각 형식이 올바르지 않아요.');
+        }
+        next.appointmentAt = patch.appointmentAt;
+    }
+
+    const failure = updateFailOnce.get(roomId);
+    if (failure) {
+        updateFailOnce.delete(roomId); // 다시 시도하면 성공하도록
+        if (failure === 'busy') throw new RoomError('ROOM_BUSY', '다른 요청을 처리하는 중이에요. 잠시 후 다시 시도해 주세요.');
+        throw new RoomError('NETWORK_ERROR', '변경 내용을 저장하지 못했어요. 다시 시도해 주세요.');
+    }
+
+    // 바꾸지 않은 필드(selectedStation·status·memberCount 등)는 그대로 유지합니다
+    const updated: RoomSummary = { ...room, ...next };
+    rooms = rooms.map(item => (item.id === roomId ? updated : item));
+    return updated;
 }
 
 /** 7.10 약속역 확정 / 7.11 해제 (OWNER). 해제해도 후보 목록은 그대로 둡니다. */
