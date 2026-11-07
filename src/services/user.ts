@@ -16,6 +16,8 @@ import {
     UserError,
     type User,
 } from '@/types/user';
+import { signIn, signOut } from '@/stores/auth-store';
+import { clearSelectedRoute } from '@/stores/route-store';
 
 const MOCK_DELAY_MS = 700;
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -66,9 +68,22 @@ export async function updateNickname(nickname: string, failForTest = false): Pro
     return mockUser;
 }
 
-/** 4.3 로그아웃. TODO: 저장한 Access·Refresh Token 삭제 */
-export async function logout(): Promise<void> {
+/** 4.1 카카오 로그인 mock: 로그인 상태로 바꿉니다. TODO: 카카오 SDK + POST /auth/kakao 연동 */
+export function mockKakaoLogin() {
+    signIn({ userId: mockUser.id, nickname: mockUser.nickname });
+}
+
+/**
+ * 4.3 로그아웃 (#40)
+ * 성공하면 mock 로그인 상태와 이전 사용자의 화면 데이터(선택 경로)를 지웁니다.
+ * failForTest 가 true 면 네트워크 실패를 흉내 냅니다(실패 상태 확인용).
+ * TODO: POST /auth/logout { refreshToken } 호출, 저장한 Access·Refresh Token 삭제
+ */
+export async function logout(failForTest = false): Promise<void> {
     await wait(MOCK_DELAY_MS);
+    if (failForTest) throw new UserError('NETWORK_ERROR', '로그아웃하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.');
+    signOut();
+    clearSelectedRoute();
 }
 
 /** 4.6 회원 탈퇴. TODO: 저장한 토큰 삭제 */

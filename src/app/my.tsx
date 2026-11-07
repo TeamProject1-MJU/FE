@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { fetchMe, logout, nicknameLength, updateNickname, validateNickname, withdraw } from '@/services/user';
+import { resetToLogin, useRedirectIfSignedOut } from '@/stores/auth-store';
 import { NICKNAME_MAX, UserError, type User } from '@/types/user';
 
 const NAVY = '#0f1c3f';
@@ -58,6 +59,11 @@ export default function MyScreen() {
     const [failNext, setFailNext] = useState(mock === 'error');
     const [sheet, setSheet] = useState<Sheet>(null);
     const [toast, setToast] = useState('');
+    // 테스트용: /my?mock=logout-error → 첫 로그아웃 실패
+    const [failLogout, setFailLogout] = useState(mock === 'logout-error');
+
+    // 로그아웃한 뒤 이 화면으로 돌아오면 로그인 화면으로 보냅니다 (#40)
+    useRedirectIfSignedOut();
 
     const tabBarHeight = TAB_BAR_CONTENT_HEIGHT + Math.max(insets.bottom, 8);
 
@@ -234,9 +240,13 @@ export default function MyScreen() {
                     description="다시 로그인하면 이전 정보를 그대로 이용할 수 있어요."
                     confirmLabel="로그아웃"
                     onClose={() => setSheet(null)}
+                    failText="로그아웃하지 못했어요."
                     onConfirm={async () => {
-                        await logout();
-                        router.replace('/login');
+                        const fail = failLogout;
+                        setFailLogout(false); // 다시 시도하면 성공하도록
+                        await logout(fail);
+                        // 로그인 상태를 지운 뒤, 이전 화면 기록 없이 로그인 화면으로 이동
+                        resetToLogin();
                     }}
                 />
             )}
@@ -404,6 +414,7 @@ function ConfirmSheet({
                           description,
                           confirmLabel,
                           danger = false,
+                          failText,
                           onClose,
                           onConfirm,
                       }: {
@@ -413,23 +424,42 @@ function ConfirmSheet({
     description: string;
     confirmLabel: string;
     danger?: boolean;
+    /** 실패했을 때 제목 (예: '로그아웃하지 못했어요.') */
+    failText?: string;
     onClose: () => void;
     onConfirm: () => Promise<void>;
 }) {
     const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
 
     const confirm = async () => {
         setBusy(true);
+        setError('');
         try {
             await onConfirm();
+        } catch (caught) {
+            // 실패하면 시트를 닫지 않고 안내 + 다시 시도
+            setError(caught instanceof UserError ? caught.message : failText ?? '처리하지 못했어요. 다시 시도해 주세요.');
         } finally {
             setBusy(false);
         }
     };
 
+    // 처리 중에는 닫지 않습니다.
+    const close = () => {
+        if (!busy) onClose();
+    };
+
     return (
-        <SheetFrame title={title} onClose={onClose}>
+        <SheetFrame title={title} onClose={close}>
             <SheetHero icon={icon} heading={heading} description={description} />
+
+            {!!error && (
+                <View style={styles.sheetError} accessibilityLiveRegion="polite">
+                    <Ionicons name="alert-circle" size={17} color={RED} />
+                    <Text style={styles.sheetErrorText}>{error}</Text>
+                </View>
+            )}
 
             <Pressable
                 style={({ pressed }) => [styles.primary, danger && styles.danger, pressed && styles.pressed]}
@@ -437,11 +467,15 @@ function ConfirmSheet({
                 disabled={busy}
                 accessibilityRole="button"
             >
-                {busy ? <ActivityIndicator color={CARD} /> : <Text style={styles.primaryText}>{confirmLabel}</Text>}
+                {busy ? (
+                    <ActivityIndicator color={CARD} />
+                ) : (
+                    <Text style={styles.primaryText}>{error ? '다시 시도' : confirmLabel}</Text>
+                )}
             </Pressable>
             <Pressable
                 style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}
-                onPress={onClose}
+                onPress={close}
                 disabled={busy}
                 accessibilityRole="button"
             >
@@ -803,6 +837,24 @@ const styles = StyleSheet.create({
         color: SECONDARY,
         fontSize: 12.5,
         fontWeight: '600',
+    },
+
+    sheetError: {
+        marginBottom: 4,
+        padding: 11,
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 7,
+        borderRadius: 12,
+        backgroundColor: '#fdecec',
+    },
+
+    sheetErrorText: {
+        flex: 1,
+        color: '#b42318',
+        fontSize: 13,
+        fontWeight: '600',
+        lineHeight: 18,
     },
 
     primary: {
