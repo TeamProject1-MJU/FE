@@ -8,7 +8,7 @@
  * - GET    /rooms/{roomId}           방 상세 (7.4, 초대 코드 미포함)
  * - PATCH  /rooms/{roomId}           방 정보 수정 (OWNER)
  * - DELETE /rooms/{roomId}/members/me  나가기 (7.8)
- * - GET    /rooms/{roomId}/invite-code  초대 코드 (7.9, OWNER)
+ * - GET    /rooms/{roomId}/invite-code  초대 코드 (7.9, OWNER, #47)
  * - PUT    /rooms/{roomId}/selected-station  약속역 확정 (7.10, OWNER)
  * - DELETE /rooms/{roomId}/selected-station  약속역 해제 (7.11, OWNER, 후보는 유지)
  *
@@ -271,10 +271,62 @@ function issueRoomCode() {
     return code;
 }
 
-/** 7.9 초대 코드 조회 (OWNER 만). 방장이 아니면 undefined */
-export async function fetchInviteCode(roomId: string): Promise<string | undefined> {
+/** 초대 코드 조회 실패를 흉내 내는 방 (mock, #47 화면 확인용). 한 번 실패한 뒤 다시 시도하면 성공합니다. */
+const inviteFailOnce = new Set<string>();
+
+/**
+ * 7.9 GET /rooms/{roomId}/invite-code (OWNER, #47)
+ * - 응답은 { roomCode } (명세 7.9). 방 목록(7.3)·상세(7.4) 응답에는 코드가 없고 이 API 로만 받습니다.
+ * - 현재 OWNER(meeting_members.role) 기준입니다. 최초 생성자(created_by)여도 방장이 위임됐으면 NOT_ROOM_OWNER(403)
+ * - 없는 방 ROOM_NOT_FOUND(404), 참여하지 않은 방 NOT_ROOM_MEMBER(403)
+ * mock: 'error' 면 한 번 NETWORK_ERROR (다시 시도하면 성공)
+ * TODO: 실제 연동 시 GET /rooms/{roomId}/invite-code 호출로 교체
+ */
+export async function fetchInviteCode(roomId: string, mock?: 'error'): Promise<{ roomCode: string }> {
     await wait(MOCK_DELAY_MS);
-    return getMockRoom(roomId)?.myRole === 'OWNER' ? inviteCodes.get(roomId) : undefined;
+    if (mock) inviteFailOnce.add(roomId);
+
+    const room = getMockRoom(roomId);
+    if (!room) {
+        const invited = Object.values(INVITE_ONLY).some(item => item.room.id === roomId);
+        if (invited) throw new RoomError('NOT_ROOM_MEMBER', '참여하지 않은 약속방이에요.');
+        throw new RoomError('ROOM_NOT_FOUND', '약속방을 찾을 수 없어요.');
+    }
+    if (room.myRole !== 'OWNER') throw new RoomError('NOT_ROOM_OWNER', '초대 코드는 방장만 볼 수 있어요.');
+
+    if (inviteFailOnce.has(roomId)) {
+        inviteFailOnce.delete(roomId); // 다시 시도하면 성공하도록
+        throw new RoomError('NETWORK_ERROR', '초대 코드를 불러오지 못했어요.');
+    }
+
+    let roomCode = inviteCodes.get(roomId);
+    if (!roomCode) {
+        // 초대 코드로 들어간 방의 코드는 INVITE_ONLY 의 키입니다 (방장이 위임된 경우 대비)
+        roomCode = Object.entries(INVITE_ONLY).find(([, item]) => item.room.id === roomId)?.[0] ?? issueRoomCode();
+        inviteCodes.set(roomId, roomCode);
+    }
+    return { roomCode };
+}
+
+/**
+ * 방장 변경 mock (#47 화면 확인용). 실제로는 7.8 나가기 승계나 회원 탈퇴로만 바뀝니다.
+ * - 'give'  : 내가 방장인 방에서 가장 먼저 들어온 다른 멤버에게 방장을 넘기고 나는 MEMBER 가 됩니다
+ * - 'take'  : 내가 멤버인 방에서 내가 방장이 되고 기존 방장은 MEMBER 가 됩니다
+ * 바뀐 역할은 7.4 상세(myRole)·7.9 초대 코드 조회에 바로 반영됩니다.
+ */
+export function mockTransferOwner(roomId: string, direction: 'give' | 'take') {
+    const room = getMockRoom(roomId);
+    const members = membersByRoom.get(roomId);
+    if (!room || !members) return;
+    const iAmOwner = room.myRole === 'OWNER';
+    if ((direction === 'give' && !iAmOwner) || (direction === 'take' && iAmOwner)) return;
+
+    const sorted = [...members].sort((a, b) => new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime());
+    const nextOwnerId = direction === 'take' ? ME.userId : sorted.find(item => item.userId !== ME.userId)?.userId;
+    if (!nextOwnerId) return;
+
+    membersByRoom.set(roomId, members.map(item => ({ ...item, role: item.userId === nextOwnerId ? 'OWNER' : 'MEMBER' })));
+    rooms = rooms.map(item => (item.id === roomId ? { ...item, myRole: nextOwnerId === ME.userId ? 'OWNER' : 'MEMBER' } : item));
 }
 
 /**
@@ -406,61 +458,21 @@ function requireOwner(roomId: string) {
     return room;
 }
 
-/** 7.5 PATCH /rooms/{roomId} 요청: 모든 필드 선택. 생략하면 유지, appointmentAt null 은 해제 */
-export type UpdateRoomPatch = {
-    name?: string;
-    appointmentAt?: string | null;
-};
-
-/** 수정 요청 실패를 흉내 내는 방 (mock, 화면 확인용). 한 번 실패한 뒤 다시 시도하면 성공합니다. */
-const updateFailOnce = new Map<string, 'error' | 'busy'>();
-
-/**
- * 7.5 방 정보 수정 (OWNER, #46)
- * - 수정할 수 있는 필드는 name·appointmentAt 뿐 (정원 4명 고정, 명세 7.5)
- * - 생략한 필드는 그대로 두고, appointmentAt: null 은 약속 시각 해제로 처리합니다
- *   (명세 7.5 "모든 필드 선택". TODO: 백엔드와 null = 해제인지 확인)
- * - 이름은 앞뒤 공백 제거 후 1~30자 (명세 부록 A ck_room_name), 아니면 VALIDATION_ERROR(400)
- * - 방장이 아니면 NOT_ROOM_OWNER(403), 없는 방 ROOM_NOT_FOUND(404), 락 대기 초과 ROOM_BUSY(409, 7.12)
- * - 약속 시각을 바꿔도 추천을 새로 만들지 않고 기존 추천·후보·확정 약속역은 그대로 둡니다 (명세 7.5).
- *   TODO: 실제 연동 시 WS ROOM_UPDATED 수신 → 8.2 재조회로 isStale 갱신 (이번 범위 밖)
- * mock: 'error' 면 한 번 NETWORK_ERROR, 'busy' 면 한 번 ROOM_BUSY (다시 시도하면 성공)
- */
+/** 7.5 방 정보 수정 (OWNER). 약속 시각이 바뀌면 이전 추천 결과는 최신이 아니게 됩니다. */
 export async function updateRoom(
     roomId: string,
-    patch: UpdateRoomPatch,
-    mock?: 'error' | 'busy',
-): Promise<RoomSummary> {
+    patch: Partial<Pick<RoomSummary, 'name' | 'appointmentAt'>>,
+): Promise<RoomSummary | undefined> {
     await wait(MOCK_DELAY_MS);
-    if (mock) updateFailOnce.set(roomId, mock);
-
-    const room = requireOwner(roomId);
-
-    const next: UpdateRoomPatch = {};
+    requireOwner(roomId);
     if (patch.name !== undefined) {
         const length = roomNameLength(patch.name);
         if (length === 0) throw new RoomError('VALIDATION_ERROR', '약속방 이름을 입력해 주세요.');
         if (length > ROOM_NAME_MAX) throw new RoomError('VALIDATION_ERROR', `약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`);
-        next.name = patch.name.trim();
+        patch = { ...patch, name: patch.name.trim() };
     }
-    if (patch.appointmentAt !== undefined) {
-        if (patch.appointmentAt !== null && Number.isNaN(new Date(patch.appointmentAt).getTime())) {
-            throw new RoomError('VALIDATION_ERROR', '약속 시각 형식이 올바르지 않아요.');
-        }
-        next.appointmentAt = patch.appointmentAt;
-    }
-
-    const failure = updateFailOnce.get(roomId);
-    if (failure) {
-        updateFailOnce.delete(roomId); // 다시 시도하면 성공하도록
-        if (failure === 'busy') throw new RoomError('ROOM_BUSY', '다른 요청을 처리하는 중이에요. 잠시 후 다시 시도해 주세요.');
-        throw new RoomError('NETWORK_ERROR', '변경 내용을 저장하지 못했어요. 다시 시도해 주세요.');
-    }
-
-    // 바꾸지 않은 필드(selectedStation·status·memberCount 등)는 그대로 유지합니다
-    const updated: RoomSummary = { ...room, ...next };
-    rooms = rooms.map(item => (item.id === roomId ? updated : item));
-    return updated;
+    rooms = rooms.map(room => (room.id === roomId ? { ...room, ...patch } : room));
+    return getMockRoom(roomId);
 }
 
 /** 7.10 약속역 확정 / 7.11 해제 (OWNER). 해제해도 후보 목록은 그대로 둡니다. */
