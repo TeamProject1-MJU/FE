@@ -21,6 +21,11 @@ export function setSelectedRoute(value: SelectedRoute) {
     selected = value;
 }
 
+/** 로그아웃 시 이전 사용자의 경로를 지웁니다 (#40) */
+export function clearSelectedRoute() {
+    selected = null;
+}
+
 export function getSelectedRoute(routeId?: string): SelectedRoute | null {
     if (!selected) return null;
     if (routeId && selected.route.routeId !== routeId) return null;

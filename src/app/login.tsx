@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import LinkRoLogo, { LinkRoColors } from '@/components/linkro-logo';
+import { mockKakaoLogin } from '@/services/user';
 
 const BACKGROUND = '#f3f5f8';
 const SECONDARY = '#6b7488';
@@ -19,7 +20,8 @@ export default function LoginScreen() {
     const insets = useSafeAreaInsets();
 
     const handleKakaoLogin = () => {
-        // 카카오 로그인 API 연동은 별도 이슈에서 진행
+        // 카카오 로그인 API 연동은 별도 이슈에서 진행 (지금은 mock 로그인 상태로만 전환)
+        mockKakaoLogin();
         router.replace(HOME_ROUTE);
     };
 

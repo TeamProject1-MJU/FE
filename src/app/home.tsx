@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import LinkRoLogo from '@/components/linkro-logo';
+import { useRedirectIfSignedOut } from '@/stores/auth-store';
 import {
     formatAppointmentParam,
     formatDday,
@@ -45,6 +46,7 @@ type IoniconName = ComponentProps<typeof Ionicons>['name'];
 
 export default function HomeScreen() {
     const insets = useSafeAreaInsets();
+    useRedirectIfSignedOut();
     const { height: windowHeight } = useWindowDimensions();
     const [sheetHeight, setSheetHeight] = useState(0);
 
