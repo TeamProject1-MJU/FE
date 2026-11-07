@@ -23,7 +23,7 @@ import {
     fetchRecommendation,
     listRecommendationRuns,
 } from '@/services/recommendation';
-import { fetchCandidates, fetchRoomDetail, getMyUserId, proposeCandidate, updateMyDeparture } from '@/services/room';
+import { createProposal, fetchProposals, fetchRoomDetail, getMyUserId, updateMyDeparture } from '@/services/room';
 import {
     RecommendationError,
     type AppliedConstraints,
@@ -33,7 +33,7 @@ import {
     type RecommendationResult,
     type RecommendationRun,
 } from '@/types/recommendation';
-import { RoomError, type RoomCandidate, type RoomDetail, type RoomMember } from '@/types/room';
+import { RoomError, type RoomDetail, type RoomMember, type StationProposalList } from '@/types/room';
 
 const NAVY = '#0f1c3f';
 const MINT = '#2bcf9a';
@@ -97,7 +97,9 @@ export default function RoomRecommendationsScreen() {
 
     const [detail, setDetail] = useState<RoomDetail | null>(null);
     const [run, setRun] = useState<RecommendationRun | null>(null);
-    const [candidates, setCandidates] = useState<RoomCandidate[]>([]);
+    /** 약속역 후보 (7.15): 이미 후보인 역·후보 상한(9개) 확인용 */
+    const [proposals, setProposals] = useState<StationProposalList | null>(null);
+    const [sharing, setSharing] = useState(false);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState<LoadError | null>(null);
 
@@ -122,7 +124,7 @@ export default function RoomRecommendationsScreen() {
             const room = await fetchRoomDetail(roomId);
             setDetail(room);
             const [list, latest] = await Promise.all([
-                fetchCandidates(roomId),
+                fetchProposals(roomId),
                 runIdParam
                     ? fetchRecommendation(roomId, runIdParam)
                     : (() => {
@@ -131,7 +133,7 @@ export default function RoomRecommendationsScreen() {
                         return fetchLatestRecommendation(roomId, fail ? 'error' : undefined);
                     })(),
             ]);
-            setCandidates(list);
+            setProposals(list);
             setRun(latest);
             setView(latest ? 'result' : 'input');
         } catch (error) {
@@ -240,19 +242,23 @@ export default function RoomRecommendationsScreen() {
         );
     };
 
-    /** 그림 33 ❺ 이 역으로 약속방에 공유 → 약속역 후보 제안 (7.14, sourceResultId) */
+    /** 그림 33 ❺ 이 역으로 약속방에 공유 → 약속역 후보 제안 (7.14, resultId = 이 결과 카드의 resultId) */
     const shareAsCandidate = async (item: RecommendationResult) => {
-        if (!detail) return;
+        if (!detail || sharing) return;
+        setSharing(true);
+        setNotice('');
         try {
-            await proposeCandidate(
-                detail.id,
-                { id: item.recommendedStation.id, name: item.recommendedStation.name, lines: item.recommendedStation.lines },
-                item.resultId,
-            );
-            setCandidates(await fetchCandidates(detail.id));
+            await createProposal(detail.id, item.recommendedStation.id, item.resultId);
             setNotice(`${item.recommendedStation.name}역을 약속역 후보로 올렸어요. 약속방의 '약속역 후보' 탭에서 투표할 수 있어요.`);
         } catch (error) {
-            setNotice(error instanceof RoomError ? error.message : '후보를 올리지 못했어요.');
+            setNotice(error instanceof RoomError ? error.message : '후보를 올리지 못했어요. 다시 시도해 주세요.');
+        } finally {
+            try {
+                setProposals(await fetchProposals(detail.id)); // 중복·상한 상태를 서버 기준으로 다시 맞춤
+            } catch {
+                // 목록 재조회 실패는 버튼 상태만 이전 값으로 둡니다
+            }
+            setSharing(false);
         }
     };
 
@@ -476,7 +482,14 @@ export default function RoomRecommendationsScreen() {
 
     /* ───────── 결과 보기 (그림 33·34·37) ───────── */
     const createdAt = new Date(run.createdAt);
-    const alreadyCandidate = result ? candidates.some(item => item.station.id === result.recommendedStation.id) : false;
+    const alreadyCandidate = result ? !!proposals?.items.some(item => item.station.id === result.recommendedStation.id) : false;
+    const proposalsFull = !!proposals && proposals.items.length >= proposals.maxProposals;
+    const shareDisabled = alreadyCandidate || proposalsFull || sharing;
+    const shareLabel = alreadyCandidate
+        ? '이미 약속역 후보에 있어요'
+        : proposalsFull
+            ? `후보가 가득 찼어요 (${proposals?.items.length}/${proposals?.maxProposals})`
+            : sharing ? '후보로 올리는 중' : '이 역으로 약속방에 공유';
     const summary = [
         `${members.length}명`,
         appointmentAt ? `${formatMonthDay(appointmentAt)} ${formatTime(appointmentAt)} 약속` : '약속 시각 미정',
@@ -598,9 +611,9 @@ export default function RoomRecommendationsScreen() {
                             </View>
 
                             {/* ❺ 공유 · 경로 */}
-                            <Pressable style={({ pressed }) => [styles.primaryButton, alreadyCandidate && styles.primaryDisabled, pressed && styles.pressed]} onPress={() => shareAsCandidate(result)} disabled={alreadyCandidate} accessibilityRole="button">
-                                <Ionicons name={alreadyCandidate ? 'checkmark-done' : 'paper-plane-outline'} size={18} color={WHITE} />
-                                <Text style={styles.primaryText}>{alreadyCandidate ? '이미 약속역 후보에 있어요' : '이 역으로 약속방에 공유'}</Text>
+                            <Pressable style={({ pressed }) => [styles.primaryButton, shareDisabled && styles.primaryDisabled, pressed && styles.pressed]} onPress={() => shareAsCandidate(result)} disabled={shareDisabled} accessibilityRole="button">
+                                <Ionicons name={alreadyCandidate ? 'checkmark-done' : proposalsFull ? 'alert-circle-outline' : 'paper-plane-outline'} size={18} color={WHITE} />
+                                <Text style={styles.primaryText}>{shareLabel}</Text>
                             </Pressable>
                             <Pressable style={[styles.secondaryButton, !me?.departureStation && styles.secondaryOff]} onPress={() => openRoute(result)} disabled={!me?.departureStation} accessibilityRole="button">
                                 <Text style={styles.secondaryText}>경로 자세히 보기</Text>

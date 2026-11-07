@@ -15,23 +15,22 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import InviteCodeSheet from '@/components/rooms/invite-code-sheet';
+import ProposalPanel, { type ProposalState } from '@/components/rooms/proposal-panel';
 import { openStationPicker, type Station } from '@/app/station-search';
 import { formatDday, formatMonthDay, formatTime } from '@/constants/home-mock';
 import {
-    deleteCandidate,
-    fetchCandidates,
     fetchInviteCode,
+    fetchProposals,
     fetchRoomDetail,
     getMyUserId,
     leaveRoom,
+    mockFillProposals,
     mockTransferOwner,
     previewLeave,
-    proposeCandidate,
     setSelectedStation,
     updateMyDeparture,
-    voteCandidate,
 } from '@/services/room';
-import { RoomError, type RoomCandidate, type RoomDetail, type RoomStation } from '@/types/room';
+import { RoomError, type RoomDetail } from '@/types/room';
 
 const NAVY = '#0f1c3f';
 const MINT = '#2bcf9a';
@@ -48,16 +47,6 @@ type Tab = 'chat' | 'vote';
 type ChatMessage = { id: string; mine: boolean; sender: string; text: string };
 type Sheet = 'leave' | 'station' | 'invite' | null;
 type LoadError = 'ROOM_NOT_FOUND' | 'NOT_ROOM_MEMBER' | 'UNKNOWN';
-
-/** 후보 제안용 예시 역 (TODO: 역 검색 화면 연결 후 stationId 로 교체) */
-const STATION_OPTIONS: RoomStation[] = [
-    { id: 105, name: '강남', lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] },
-    { id: 119, name: '왕십리', lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] },
-    { id: 109, name: '사당', lines: [{ lineId: 4, lineName: '4호선', color: '#00A5DE' }] },
-    { id: 112, name: '홍대입구', lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] },
-    { id: 101, name: '서울역', lines: [{ lineId: 1, lineName: '1호선', color: '#0052A4' }] },
-];
-
 
 /**
  * 약속방 상세 화면 (#45, 상세설계서 그림 28·31·32·35·36·38·39, API 명세 v1.12 7.4~7.11)
@@ -76,11 +65,19 @@ const STATION_OPTIONS: RoomStation[] = [
  *   /rooms/room-2?mock=owner-take     → 멤버인 방에서 내가 방장이 된 상태로 진입 (초대 코드 버튼 생김)
  *   /rooms/room-4?mock=departure-error        → 출발역 첫 저장 실패(NETWORK_ERROR), 다시 시도하면 성공 (#48)
  *   /rooms/room-4?mock=departure-unsupported  → 출발역 첫 저장이 STATION_UNSUPPORTED(422)로 거절 (#48)
+ *   약속역 후보·투표 (#50, ?tab=vote 로 후보 탭을 바로 열 수 있어요)
+ *   /rooms/room-2?tab=vote                       → 나는 MEMBER, 후보 3개(내 제안 1개만 삭제 가능), 아직 투표 안 함
+ *   /rooms/room-4?tab=vote                       → 나는 OWNER, 모든 후보 삭제·확정 가능
+ *   /rooms/room-1?tab=vote                       → 후보 없음(빈 목록)
+ *   /rooms/room-2?tab=vote&mock=proposals-error  → 후보 첫 조회 실패, 다시 시도하면 성공
+ *   /rooms/room-4?tab=vote&mock=proposals-full   → 후보 9/9, 제안 버튼 비활성 + 안내
+ *   /rooms/room-2?tab=vote&mock=propose-error    → 첫 직접 제안 실패(NETWORK_ERROR), 다시 하면 성공
+ *   /rooms/room-2?tab=vote&mock=vote-error       → 첫 투표 실패(NETWORK_ERROR), 다시 하면 성공
  * TODO: 실제 API·권한 검사·WebSocket 채팅은 후속 이슈에서 연동합니다.
  */
 export default function RoomDetailScreen() {
     const insets = useSafeAreaInsets();
-    const params = useLocalSearchParams<{ roomId: string; mock?: string }>();
+    const params = useLocalSearchParams<{ roomId: string; mock?: string; tab?: string }>();
     // 홈 '다가오는 약속' 카드(roomId: preview)는 같은 mock 방(room-2)으로 엽니다.
     const roomId = params.roomId === 'preview' ? 'room-2' : String(params.roomId);
     const failNext = useRef(params.mock === 'error');
@@ -93,19 +90,43 @@ export default function RoomDetailScreen() {
     const [departureFailed, setDepartureFailed] = useState<{ station: Station; message: string } | null>(null);
     const [departureSaved, setDepartureSaved] = useState<string | null>(null);
     const ownerMockApplied = useRef(false);
+    const proposalsFailNext = useRef(params.mock === 'proposals-error');
+    const proposalsFillApplied = useRef(false);
     const myUserId = getMyUserId();
 
     const [detail, setDetail] = useState<RoomDetail | null>(null);
     const [loadError, setLoadError] = useState<LoadError | null>(null);
     /** 헤더 칩 미리보기용 초대 코드 (7.9). 실패해도 칩은 남겨 두고 시트에서 다시 시도합니다 */
     const [inviteCode, setInviteCode] = useState<string | null>(null);
-    const [candidates, setCandidates] = useState<RoomCandidate[]>([]);
-    const [tab, setTab] = useState<Tab>('chat');
+    /** 약속역 후보 목록 (7.15). 방 상세와 따로 불러와서 실패해도 방 화면은 그대로 보여줘요 */
+    const [proposals, setProposals] = useState<ProposalState>({ status: 'loading' });
+    const [tab, setTab] = useState<Tab>(params.tab === 'vote' ? 'vote' : 'chat');
     const [sheet, setSheet] = useState<Sheet>(null);
     const [notice, setNotice] = useState('');
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [messageInput, setMessageInput] = useState('');
     const [busy, setBusy] = useState(false);
+
+    /** 7.15 후보 목록 재조회 (제안·삭제·투표·확정 후, 화면 복귀 시) */
+    const loadProposals = useCallback(async () => {
+        try {
+            if (!proposalsFillApplied.current && params.mock === 'proposals-full') {
+                proposalsFillApplied.current = true;
+                mockFillProposals(roomId);
+            }
+            const fail = proposalsFailNext.current;
+            proposalsFailNext.current = false; // 다시 시도하면 성공하도록
+            const list = await fetchProposals(roomId, fail ? 'error' : undefined);
+            setProposals({ status: 'ready', list });
+        } catch (error) {
+            setProposals({ status: 'error', message: error instanceof RoomError ? error.message : '네트워크 상태를 확인하고 다시 시도해 주세요.' });
+        }
+    }, [roomId, params.mock]);
+
+    const retryProposals = useCallback(async () => {
+        setProposals({ status: 'loading' });
+        await loadProposals();
+    }, [loadProposals]);
 
     const load = useCallback(async () => {
         setLoadError(null);
@@ -119,8 +140,7 @@ export default function RoomDetailScreen() {
             }
             const room = await fetchRoomDetail(roomId, fail ? 'error' : undefined);
             setDetail(room);
-            const list = await fetchCandidates(roomId);
-            setCandidates(list);
+            loadProposals();
             // 초대 코드는 현재 OWNER 일 때만 7.9 로 따로 조회 (상세 응답엔 없음). 실패해도 상세는 그대로 보여줍니다
             if (room.myRole === 'OWNER') {
                 try {
@@ -136,7 +156,7 @@ export default function RoomDetailScreen() {
             const code = error instanceof RoomError ? error.code : null;
             setLoadError(code === 'ROOM_NOT_FOUND' || code === 'NOT_ROOM_MEMBER' ? code : 'UNKNOWN');
         }
-    }, [roomId, params.mock]);
+    }, [roomId, params.mock, loadProposals]);
 
     useFocusEffect(
         useCallback(() => {
@@ -235,7 +255,10 @@ export default function RoomDetailScreen() {
     const at = detail.appointmentAt ? new Date(detail.appointmentAt) : null;
     const station = detail.selectedStation;
     const setCount = detail.members.filter(item => item.departureStation).length;
-    const iVoted = candidates.some(item => item.votedByMe);
+    const proposalItems = proposals.status === 'ready' ? proposals.list.items : [];
+    // 방 카드 요약: 최다 득표 후보 (동점이면 개수만). 투표는 참고용이라 확정과는 무관해요
+    const topVotes = Math.max(0, ...proposalItems.map(item => item.voteCount));
+    const leaders = topVotes > 0 ? proposalItems.filter(item => item.voteCount === topVotes) : [];
 
     return (
         <View style={styles.root}>
@@ -323,7 +346,13 @@ export default function RoomDetailScreen() {
                             <>
                                 <View style={styles.flex}>
                                     <Text style={styles.stripLabel}>약속역 미정</Text>
-                                    <Text style={styles.stripCaption}>아직 약속역을 정하지 않았어요</Text>
+                                    <Text style={styles.stripCaption}>
+                                        {proposalItems.length === 0
+                                            ? '아직 약속역을 정하지 않았어요'
+                                            : leaders.length === 1
+                                                ? `후보 ${proposalItems.length}개 · ${leaders[0].station.name}역 ${topVotes}표로 검토 중`
+                                                : `후보 ${proposalItems.length}개 검토 중`}
+                                    </Text>
                                 </View>
                                 <Pressable style={[styles.stripButton, styles.stripPrimary]} onPress={openRecommendations}>
                                     <Text style={[styles.stripButtonText, styles.stripPrimaryText]}>추천받기</Text>
@@ -404,7 +433,7 @@ export default function RoomDetailScreen() {
                 <View style={styles.tabs}>
                     {([
                         ['chat', '채팅', 'chatbubble-ellipses-outline'],
-                        ['vote', `약속역 후보 ${candidates.length}`, 'checkbox-outline'],
+                        ['vote', proposals.status === 'ready' ? `약속역 후보 ${proposalItems.length}` : '약속역 후보', 'checkbox-outline'],
                     ] as const).map(([key, title, icon]) => (
                         <Pressable key={key} style={[styles.tab, tab === key && styles.tabActive]} onPress={() => { setTab(key); setNotice(''); }}>
                             <Ionicons name={icon} size={17} color={tab === key ? NAVY : SECONDARY} />
@@ -449,80 +478,21 @@ export default function RoomDetailScreen() {
                         <Text style={styles.mockNote}>채팅은 화면 미리보기예요. 실시간 채팅은 연동 후 제공돼요.</Text>
                     </View>
                 ) : (
-                    <View style={styles.panel}>
-                        <View style={styles.rowBetween}>
-                            <Text style={styles.cardTitle}>약속역 후보</Text>
-                            <Text style={styles.counter}>{candidates.length}/5</Text>
-                        </View>
-                        <Text style={styles.panelCaption}>
-                            1인 1표, 투표 후에는 바꿀 수 없어요.{' '}
-                            {isOwner ? '투표를 참고해 방장이 약속역을 확정해요.' : '방장이 최종 확정할 수 있어요.'}
-                        </Text>
-
-                        {candidates.length === 0 && <Text style={styles.emptyLine}>아직 후보가 없어요. 추천받거나 직접 제안해 보세요.</Text>}
-
-                        {candidates.map(candidate => {
-                            const confirmed = station?.id === candidate.station.id;
-                            const canDelete = isOwner || candidate.proposerId === myUserId;
-                            return (
-                                <View key={candidate.id} style={[styles.candidate, confirmed && styles.candidateConfirmed]}>
-                                    <View style={styles.rowBetween}>
-                                        <View style={styles.nameRow}>
-                                            <Text style={styles.candidateName}>{candidate.station.name}</Text>
-                                            {confirmed && <Text style={styles.confirmedTag}>확정</Text>}
-                                        </View>
-                                        <Text style={styles.counter}>{candidate.voteCount}표</Text>
-                                    </View>
-                                    <Text style={styles.proposer}>제안 · {candidate.proposerNickname}</Text>
-                                    <View style={styles.candidateActions}>
-                                        <Pressable
-                                            style={[styles.voteButton, candidate.votedByMe && styles.voted, iVoted && !candidate.votedByMe && styles.disabled]}
-                                            disabled={iVoted || busy}
-                                            onPress={() => run(() => voteCandidate(detail.id, candidate.id), '투표했어요.')}
-                                        >
-                                            <Ionicons name={candidate.votedByMe ? 'checkmark-circle' : 'hand-left-outline'} size={15} color={candidate.votedByMe ? WHITE : NAVY} />
-                                            <Text style={[styles.voteText, candidate.votedByMe && styles.votedText]}>
-                                                {candidate.votedByMe ? '내 투표' : '투표'}
-                                            </Text>
-                                        </Pressable>
-                                        {isOwner && !confirmed && (
-                                            <Pressable
-                                                style={styles.confirmButton}
-                                                disabled={busy}
-                                                onPress={() => run(() => setSelectedStation(detail.id, candidate.station), `${candidate.station.name}(으)로 약속역을 확정했어요.`)}
-                                            >
-                                                <Text style={styles.confirmText}>약속역으로 확정</Text>
-                                            </Pressable>
-                                        )}
-                                        {canDelete && (
-                                            <Pressable
-                                                style={styles.deleteButton}
-                                                disabled={busy}
-                                                onPress={() => run(() => deleteCandidate(detail.id, candidate.id), '후보를 삭제했어요.')}
-                                            >
-                                                <Text style={styles.deleteText}>삭제</Text>
-                                            </Pressable>
-                                        )}
-                                    </View>
-                                </View>
-                            );
-                        })}
-
-                        <Text style={[styles.cardTitle, { marginTop: 18 }]}>후보 제안</Text>
-                        <View style={styles.stationChips}>
-                            {STATION_OPTIONS.filter(option => !candidates.some(item => item.station.id === option.id)).map(option => (
-                                <Pressable
-                                    key={option.id}
-                                    style={styles.stationChip}
-                                    disabled={busy}
-                                    onPress={() => run(() => proposeCandidate(detail.id, option), `${option.name}을(를) 후보로 제안했어요.`)}
-                                >
-                                    <Ionicons name="add" size={14} color={NAVY} />
-                                    <Text style={styles.stationChipText}>{option.name}</Text>
-                                </Pressable>
-                            ))}
-                        </View>
-                    </View>
+                    /* 약속역 후보·투표 (#50, 그림 35·38·39) */
+                    <ProposalPanel
+                        roomId={detail.id}
+                        roomName={detail.name}
+                        isOwner={isOwner}
+                        myUserId={myUserId}
+                        memberCount={detail.memberCount}
+                        state={proposals}
+                        onReload={proposals.status === 'error' ? retryProposals : loadProposals}
+                        onConfirm={target => run(() => setSelectedStation(detail.id, target), `${target.name}역으로 약속역을 확정했어요.`)}
+                        confirmBusy={busy}
+                        onOpenRecommendations={openRecommendations}
+                        mockProposeError={params.mock === 'propose-error'}
+                        mockVoteError={params.mock === 'vote-error'}
+                    />
                 )}
 
                 {!!notice && (
@@ -731,7 +701,6 @@ const styles = StyleSheet.create({
     center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 28 },
     stateTitle: { color: NAVY, fontSize: 17, fontWeight: '800', marginTop: 6 },
     caption: { color: SECONDARY, fontSize: 12.5, lineHeight: 19, textAlign: 'center' },
-    panelCaption: { color: SECONDARY, fontSize: 12.5, lineHeight: 19 },
     primaryButton: { marginTop: 10, paddingHorizontal: 22, height: 46, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: NAVY },
     primaryText: { color: WHITE, fontSize: 14.5, fontWeight: '800' },
     linkButton: { padding: 10 },
@@ -808,24 +777,6 @@ const styles = StyleSheet.create({
     sendButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', backgroundColor: NAVY, borderRadius: 12 },
     mockNote: { marginTop: 8, color: '#a1a8b8', fontSize: 11.5 },
 
-    emptyLine: { marginTop: 12, color: SECONDARY, fontSize: 13 },
-    candidate: { marginTop: 12, padding: 13, borderRadius: 14, borderWidth: 1, borderColor: BORDER, backgroundColor: '#fafbfc' },
-    candidateConfirmed: { borderColor: MINT, backgroundColor: '#f1fcf8' },
-    candidateName: { color: NAVY, fontSize: 15.5, fontWeight: '800' },
-    confirmedTag: { overflow: 'hidden', paddingHorizontal: 7, paddingVertical: 2, borderRadius: 7, backgroundColor: '#d9f6eb', color: MINT_DEEP, fontSize: 10.5, fontWeight: '800' },
-    proposer: { marginTop: 5, color: SECONDARY, fontSize: 12 },
-    candidateActions: { marginTop: 11, flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
-    voteButton: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 11, height: 34, borderRadius: 10, borderWidth: 1, borderColor: BORDER, backgroundColor: WHITE },
-    voted: { backgroundColor: NAVY, borderColor: NAVY },
-    voteText: { color: NAVY, fontSize: 12.5, fontWeight: '800' },
-    votedText: { color: WHITE },
-    confirmButton: { paddingHorizontal: 11, height: 34, borderRadius: 10, backgroundColor: '#e3f8f0', justifyContent: 'center' },
-    confirmText: { color: MINT_DEEP, fontSize: 12.5, fontWeight: '800' },
-    deleteButton: { paddingHorizontal: 8, height: 34, justifyContent: 'center' },
-    deleteText: { color: RED, fontSize: 12.5, fontWeight: '700' },
-    stationChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
-    stationChip: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 11, height: 34, borderRadius: 17, borderWidth: 1, borderColor: BORDER },
-    stationChipText: { color: NAVY, fontSize: 12.5, fontWeight: '700' },
     disabled: { opacity: 0.45 },
 
     notice: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 12, backgroundColor: '#e9edf5' },
