@@ -51,11 +51,39 @@ export type CreateRoomRequest = {
 /** 7.1 POST /rooms 응답 (roomCode 는 방장에게만) */
 export type CreatedRoom = RoomSummary & { roomCode: string; ownerId: string };
 
+/** 7.4 GET /rooms/{roomId} 상세 (초대 코드는 포함하지 않음, 방장은 7.9 로 따로 조회) */
+export type RoomDetail = RoomSummary & {
+    ownerId: string;
+    /** 약속역을 확정한 시각, 미확정이면 null */
+    confirmedAt: string | null;
+    members: RoomMember[];
+};
+
+/** 약속역 후보 (1인 1표, 투표 변경·취소 없음) */
+export type RoomCandidate = {
+    id: string;
+    station: RoomStation;
+    proposerId: string;
+    proposerNickname: string;
+    voteCount: number;
+    votedByMe: boolean;
+};
+
+/** 7.8 나가기 응답 */
+export type LeaveRoomResult = {
+    roomDeleted: boolean;
+    newOwnerId: string | null;
+};
+
 export type RoomErrorCode =
     | 'ROOM_CODE_INVALID'
     | 'ROOM_FULL'
     | 'ALREADY_JOINED'
     | 'ROOM_BUSY'
+    | 'ROOM_NOT_FOUND'
+    | 'NOT_ROOM_MEMBER'
+    | 'NOT_ROOM_OWNER'
+    | 'ALREADY_VOTED'
     | 'VALIDATION_ERROR'
     | 'NETWORK_ERROR';
 
