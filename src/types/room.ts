@@ -84,6 +84,8 @@ export type RoomErrorCode =
     | 'NOT_ROOM_MEMBER'
     | 'NOT_ROOM_OWNER'
     | 'ALREADY_VOTED'
+    | 'STATION_NOT_FOUND'
+    | 'STATION_UNSUPPORTED'
     | 'VALIDATION_ERROR'
     | 'NETWORK_ERROR';
 

@@ -7,6 +7,7 @@
  * - POST   /rooms/join               초대 코드로 참여 { roomCode }
  * - GET    /rooms/{roomId}           방 상세 (7.4, 초대 코드 미포함)
  * - PATCH  /rooms/{roomId}           방 정보 수정 (OWNER)
+ * - PATCH  /rooms/{roomId}/members/me  내 출발역 설정/변경 (7.7, #48)
  * - DELETE /rooms/{roomId}/members/me  나가기 (7.8)
  * - GET    /rooms/{roomId}/invite-code  초대 코드 (7.9, OWNER, #47)
  * - PUT    /rooms/{roomId}/selected-station  약속역 확정 (7.10, OWNER)
@@ -15,6 +16,7 @@
  * 지금은 앱이 켜져 있는 동안만 유지되는 mock 목록으로 생성·참여·수정·나가기 결과를 반영합니다.
  */
 
+import { MOCK_STATIONS } from '@/app/station-search';
 import {
     RoomError,
     type CreateRoomRequest,
@@ -416,6 +418,63 @@ export async function fetchRoomMembers(roomId: string): Promise<RoomMember[]> {
     return membersByRoom.get(roomId) ?? [];
 }
 
+/** 출발역 변경 실패를 흉내 내는 방 (mock, #48 화면 확인용). 한 번 실패한 뒤 다시 시도하면 성공합니다. */
+const departureFailOnce = new Map<string, 'error' | 'unsupported'>();
+
+export type UpdateMyDepartureRequest = {
+    /** 7.7 요청 본문 { departureStationId } — 역 검색 화면(5.2)에서 고른 역의 id */
+    departureStationId: number;
+};
+
+/**
+ * 7.7 PATCH /rooms/{roomId}/members/me (멤버, #48)
+ * - OWNER·MEMBER 모두 **본인** 출발역만 설정/변경합니다. 다른 멤버 출발역은 건드리지 않아요.
+ * - 없는 역 STATION_NOT_FOUND(404), isSupported=false(미제공) STATION_UNSUPPORTED(422), 참여하지 않은 방 NOT_ROOM_MEMBER(403)
+ * - 실패하면 기존 출발역을 그대로 둡니다. 명세에 출발역 해제(null) API 는 없어요.
+ * - 성공하면 바뀐 내 멤버 정보를 돌려주고, 7.4 상세·7.6 멤버 목록 mock 에 바로 반영됩니다.
+ *   TODO: 실제 연동 시 WS DEPARTURE_UPDATED 수신 → 7.6 재조회·8.2 재조회(isStale) (이번 범위 밖)
+ * mock: 'error' 면 한 번 NETWORK_ERROR, 'unsupported' 면 한 번 STATION_UNSUPPORTED (다시 시도하면 성공)
+ */
+export async function updateMyDeparture(
+    roomId: string,
+    request: UpdateMyDepartureRequest,
+    mock?: 'error' | 'unsupported',
+): Promise<RoomMember> {
+    await wait(MOCK_DELAY_MS);
+    if (mock) departureFailOnce.set(roomId, mock);
+
+    const room = getMockRoom(roomId);
+    const members = membersByRoom.get(roomId);
+    if (!room || !members) throw new RoomError('ROOM_NOT_FOUND', '약속방을 찾을 수 없어요.');
+    const meIndex = members.findIndex(item => item.userId === ME.userId);
+    if (meIndex < 0) throw new RoomError('NOT_ROOM_MEMBER', '참여하지 않은 약속방이에요.');
+
+    const station = MOCK_STATIONS.find(item => item.id === request.departureStationId);
+    if (!station) throw new RoomError('STATION_NOT_FOUND', '선택한 역을 찾을 수 없어요.');
+
+    const failure = departureFailOnce.get(roomId);
+    if (failure) departureFailOnce.delete(roomId); // 다시 시도하면 성공하도록
+
+    if (!station.isSupported || failure === 'unsupported') {
+        throw new RoomError('STATION_UNSUPPORTED', `${station.name}역은 아직 경로·혼잡도 데이터가 제공되지 않아 출발역으로 설정할 수 없어요.`);
+    }
+    if (failure === 'error') throw new RoomError('NETWORK_ERROR', '출발역을 저장하지 못했어요. 다시 시도해 주세요.');
+
+    const updated: RoomMember = {
+        ...members[meIndex],
+        departureStation: {
+            id: station.id,
+            name: station.name,
+            isSupported: station.isSupported,
+            lines: station.lines.map(line => ({ lineId: line.lineId, lineName: line.lineName, color: line.color })),
+        },
+    };
+    const next = [...members];
+    next[meIndex] = updated;
+    membersByRoom.set(roomId, next);
+    return updated;
+}
+
 /** 확정 시각 (mock): 처음부터 확정돼 있던 방은 하루 전으로 둡니다 */
 const confirmedAtByRoom = new Map<string, string>();
 
@@ -458,21 +517,61 @@ function requireOwner(roomId: string) {
     return room;
 }
 
-/** 7.5 방 정보 수정 (OWNER). 약속 시각이 바뀌면 이전 추천 결과는 최신이 아니게 됩니다. */
+/** 7.5 PATCH /rooms/{roomId} 요청: 모든 필드 선택. 생략하면 유지, appointmentAt null 은 해제 */
+export type UpdateRoomPatch = {
+    name?: string;
+    appointmentAt?: string | null;
+};
+
+/** 수정 요청 실패를 흉내 내는 방 (mock, 화면 확인용). 한 번 실패한 뒤 다시 시도하면 성공합니다. */
+const updateFailOnce = new Map<string, 'error' | 'busy'>();
+
+/**
+ * 7.5 방 정보 수정 (OWNER, #46)
+ * - 수정할 수 있는 필드는 name·appointmentAt 뿐 (정원 4명 고정, 명세 7.5)
+ * - 생략한 필드는 그대로 두고, appointmentAt: null 은 약속 시각 해제로 처리합니다
+ *   (명세 7.5 "모든 필드 선택". TODO: 백엔드와 null = 해제인지 확인)
+ * - 이름은 앞뒤 공백 제거 후 1~30자 (명세 부록 A ck_room_name), 아니면 VALIDATION_ERROR(400)
+ * - 방장이 아니면 NOT_ROOM_OWNER(403), 없는 방 ROOM_NOT_FOUND(404), 락 대기 초과 ROOM_BUSY(409, 7.12)
+ * - 약속 시각을 바꿔도 추천을 새로 만들지 않고 기존 추천·후보·확정 약속역은 그대로 둡니다 (명세 7.5).
+ *   TODO: 실제 연동 시 WS ROOM_UPDATED 수신 → 8.2 재조회로 isStale 갱신 (이번 범위 밖)
+ * mock: 'error' 면 한 번 NETWORK_ERROR, 'busy' 면 한 번 ROOM_BUSY (다시 시도하면 성공)
+ */
 export async function updateRoom(
     roomId: string,
-    patch: Partial<Pick<RoomSummary, 'name' | 'appointmentAt'>>,
-): Promise<RoomSummary | undefined> {
+    patch: UpdateRoomPatch,
+    mock?: 'error' | 'busy',
+): Promise<RoomSummary> {
     await wait(MOCK_DELAY_MS);
-    requireOwner(roomId);
+    if (mock) updateFailOnce.set(roomId, mock);
+
+    const room = requireOwner(roomId);
+
+    const next: UpdateRoomPatch = {};
     if (patch.name !== undefined) {
         const length = roomNameLength(patch.name);
         if (length === 0) throw new RoomError('VALIDATION_ERROR', '약속방 이름을 입력해 주세요.');
         if (length > ROOM_NAME_MAX) throw new RoomError('VALIDATION_ERROR', `약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`);
-        patch = { ...patch, name: patch.name.trim() };
+        next.name = patch.name.trim();
     }
-    rooms = rooms.map(room => (room.id === roomId ? { ...room, ...patch } : room));
-    return getMockRoom(roomId);
+    if (patch.appointmentAt !== undefined) {
+        if (patch.appointmentAt !== null && Number.isNaN(new Date(patch.appointmentAt).getTime())) {
+            throw new RoomError('VALIDATION_ERROR', '약속 시각 형식이 올바르지 않아요.');
+        }
+        next.appointmentAt = patch.appointmentAt;
+    }
+
+    const failure = updateFailOnce.get(roomId);
+    if (failure) {
+        updateFailOnce.delete(roomId); // 다시 시도하면 성공하도록
+        if (failure === 'busy') throw new RoomError('ROOM_BUSY', '다른 요청을 처리하는 중이에요. 잠시 후 다시 시도해 주세요.');
+        throw new RoomError('NETWORK_ERROR', '변경 내용을 저장하지 못했어요. 다시 시도해 주세요.');
+    }
+
+    // 바꾸지 않은 필드(selectedStation·status·memberCount 등)는 그대로 유지합니다
+    const updated: RoomSummary = { ...room, ...next };
+    rooms = rooms.map(item => (item.id === roomId ? updated : item));
+    return updated;
 }
 
 /** 7.10 약속역 확정 / 7.11 해제 (OWNER). 해제해도 후보 목록은 그대로 둡니다. */

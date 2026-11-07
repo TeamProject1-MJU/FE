@@ -14,8 +14,8 @@ import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
-import { CalendarModal, TimeWheelModal } from '@/components/rooms/appointment-picker';
 import InviteCodeSheet from '@/components/rooms/invite-code-sheet';
+import { openStationPicker, type Station } from '@/app/station-search';
 import { formatDday, formatMonthDay, formatTime } from '@/constants/home-mock';
 import {
     deleteCandidate,
@@ -27,10 +27,8 @@ import {
     mockTransferOwner,
     previewLeave,
     proposeCandidate,
-    ROOM_NAME_MAX,
-    roomNameLength,
     setSelectedStation,
-    updateRoom,
+    updateMyDeparture,
     voteCandidate,
 } from '@/services/room';
 import { RoomError, type RoomCandidate, type RoomDetail, type RoomStation } from '@/types/room';
@@ -48,7 +46,7 @@ const GOLD = '#f2b705';
 
 type Tab = 'chat' | 'vote';
 type ChatMessage = { id: string; mine: boolean; sender: string; text: string };
-type Sheet = 'edit' | 'leave' | 'station' | 'invite' | null;
+type Sheet = 'leave' | 'station' | 'invite' | null;
 type LoadError = 'ROOM_NOT_FOUND' | 'NOT_ROOM_MEMBER' | 'UNKNOWN';
 
 /** 후보 제안용 예시 역 (TODO: 역 검색 화면 연결 후 stationId 로 교체) */
@@ -60,8 +58,6 @@ const STATION_OPTIONS: RoomStation[] = [
     { id: 110, name: '서울역', lines: [{ lineId: 1, lineName: '1호선', color: '#0052A4' }] },
 ];
 
-const pad = (value: number) => String(value).padStart(2, '0');
-const toDateValue = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 
 /**
  * 약속방 상세 화면 (#45, 상세설계서 그림 28·31·32·35·36·38·39, API 명세 v1.12 7.4~7.11)
@@ -78,6 +74,8 @@ const toDateValue = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth()
  *   /rooms/room-4?mock=invite-error   → 초대 코드 첫 조회 실패 (다시 시도하면 성공)
  *   /rooms/room-4?mock=owner-give     → 내 방장을 다른 멤버에게 넘긴 상태로 진입 (초대 코드·수정 버튼 사라짐)
  *   /rooms/room-2?mock=owner-take     → 멤버인 방에서 내가 방장이 된 상태로 진입 (초대 코드 버튼 생김)
+ *   /rooms/room-4?mock=departure-error        → 출발역 첫 저장 실패(NETWORK_ERROR), 다시 시도하면 성공 (#48)
+ *   /rooms/room-4?mock=departure-unsupported  → 출발역 첫 저장이 STATION_UNSUPPORTED(422)로 거절 (#48)
  * TODO: 실제 API·권한 검사·WebSocket 채팅은 후속 이슈에서 연동합니다.
  */
 export default function RoomDetailScreen() {
@@ -87,6 +85,13 @@ export default function RoomDetailScreen() {
     const roomId = params.roomId === 'preview' ? 'room-2' : String(params.roomId);
     const failNext = useRef(params.mock === 'error');
     const inviteFailNext = useRef(params.mock === 'invite-error');
+    const departureFailNext = useRef<'error' | 'unsupported' | undefined>(
+        params.mock === 'departure-error' ? 'error' : params.mock === 'departure-unsupported' ? 'unsupported' : undefined,
+    );
+    /** 출발역 저장 상태 (#48): 저장 중인 역 / 실패한 역(다시 시도용) */
+    const [departureSaving, setDepartureSaving] = useState<Station | null>(null);
+    const [departureFailed, setDepartureFailed] = useState<{ station: Station; message: string } | null>(null);
+    const [departureSaved, setDepartureSaved] = useState<string | null>(null);
     const ownerMockApplied = useRef(false);
     const myUserId = getMyUserId();
 
@@ -166,6 +171,43 @@ export default function RoomDetailScreen() {
         });
     };
 
+    /**
+     * 내 출발역 설정/변경 (#48, 그림 28 ❼·그림 30 ❹, 명세 7.7)
+     * 공통 역 검색 화면(#33)을 열고, 고른 역을 7.7 로 저장합니다. 미제공 역은 역 검색 화면에서 이미 막히고,
+     * 서비스에서도 STATION_UNSUPPORTED 로 한 번 더 거절합니다. 실패하면 기존 출발역은 그대로예요.
+     */
+    const saveDeparture = async (station: Station) => {
+        if (!detail) return;
+        setDepartureSaving(station);
+        setDepartureFailed(null);
+        setNotice('');
+        try {
+            const fail = departureFailNext.current;
+            departureFailNext.current = undefined; // 다시 시도하면 성공하도록
+            await updateMyDeparture(detail.id, { departureStationId: station.id }, fail);
+            setDepartureSaving(null);
+            await load(); // 방 상세·멤버 목록에 반영 (7.4/7.6 재조회)
+            setDepartureSaved(`${station.name}으로 설정했어요`);
+            setTimeout(() => setDepartureSaved(null), 2500);
+        } catch (error) {
+            const message = error instanceof RoomError ? error.message : '출발역을 저장하지 못했어요. 다시 시도해 주세요.';
+            const retryable = !(error instanceof RoomError) || error.code === 'NETWORK_ERROR' || error.code === 'ROOM_BUSY';
+            setDepartureFailed(retryable ? { station, message } : null);
+            setNotice(message);
+        } finally {
+            setDepartureSaving(null);
+        }
+    };
+
+    const pickDeparture = () => {
+        if (!detail) return;
+        const me = detail.members.find(item => item.userId === myUserId);
+        openStationPicker(
+            { purpose: 'departure', contextLabel: detail.name, selectedStationId: me?.departureStation?.id },
+            saveDeparture,
+        );
+    };
+
     const sendMessage = () => {
         const value = messageInput.trim();
         if (!value) return;
@@ -239,7 +281,7 @@ export default function RoomDetailScreen() {
                         </View>
                         {/* 그림 28 ❾ 방 정보 수정: 방장만 */}
                         {isOwner && (
-                            <Pressable style={styles.editButton} onPress={() => setSheet('edit')} accessibilityRole="button">
+                            <Pressable style={styles.editButton} onPress={() => router.push(`/rooms/${detail.id}/edit`)} accessibilityRole="button">
                                 <Ionicons name="create-outline" size={14} color={WHITE} />
                                 <Text style={styles.editText}>수정</Text>
                             </Pressable>
@@ -315,17 +357,43 @@ export default function RoomDetailScreen() {
                                         {member.role === 'OWNER' && <Text style={styles.ownerTag}>방장</Text>}
                                         {mine && <Text style={styles.meTag}>나</Text>}
                                     </View>
-                                    {member.departureStation ? (
-                                        <Text style={styles.departure}>출발 · {member.departureStation.name}</Text>
+                                    {mine && departureSaving ? (
+                                        <Text style={styles.departureSaving} numberOfLines={1}>{departureSaving.name}으로 저장하는 중…</Text>
+                                    ) : member.departureStation ? (
+                                        <View style={styles.departureRow}>
+                                            <Text style={styles.departure}>출발 · {member.departureStation.name}</Text>
+                                            {/* 노선 표시: 7.4 members[].departureStation.lines 의 color 그대로 */}
+                                            {member.departureStation.lines?.map(line => (
+                                                <View key={line.lineId} style={[styles.lineDot, { backgroundColor: line.color }]} accessibilityLabel={line.lineName}>
+                                                    <Text style={styles.lineDotText}>{line.lineName.replace(/호선$/, '').slice(0, 2)}</Text>
+                                                </View>
+                                            ))}
+                                        </View>
                                     ) : (
                                         <Text style={styles.departureEmpty}>출발역 미설정</Text>
                                     )}
+                                    {mine && departureFailed && !departureSaving && (
+                                        <Text style={styles.departureError} numberOfLines={2}>{departureFailed.message}</Text>
+                                    )}
+                                    {mine && departureSaved && !departureSaving && (
+                                        <Text style={styles.departureSaved}>✓ {departureSaved}</Text>
+                                    )}
                                 </View>
-                                {/* 출발역 편집은 내 카드에만 */}
+                                {/* 출발역 편집은 내 카드에만 (명세 7.6). OWNER·MEMBER 모두 본인 것만 */}
                                 {mine && (
-                                    <Pressable style={styles.smallButton} onPress={openRecommendations} accessibilityRole="button">
-                                        <Text style={styles.smallButtonText}>{member.departureStation ? '출발역 변경' : '출발역 설정'}</Text>
-                                    </Pressable>
+                                    departureSaving ? (
+                                        <View style={[styles.smallButton, styles.smallButtonBusy]}>
+                                            <ActivityIndicator size="small" color={NAVY} />
+                                        </View>
+                                    ) : departureFailed ? (
+                                        <Pressable style={[styles.smallButton, styles.smallButtonRetry]} onPress={() => saveDeparture(departureFailed.station)} accessibilityRole="button">
+                                            <Text style={[styles.smallButtonText, { color: WHITE }]}>다시 시도</Text>
+                                        </Pressable>
+                                    ) : (
+                                        <Pressable style={styles.smallButton} onPress={pickDeparture} accessibilityRole="button" accessibilityLabel={member.departureStation ? '내 출발역 변경' : '내 출발역 설정'}>
+                                            <Text style={styles.smallButtonText}>{member.departureStation ? '출발역 변경' : '출발역 설정'}</Text>
+                                        </Pressable>
+                                    )
                                 )}
                             </View>
                         );
@@ -464,19 +532,6 @@ export default function RoomDetailScreen() {
                     </View>
                 )}
             </ScrollView>
-
-            {sheet === 'edit' && (
-                <EditSheet
-                    detail={detail}
-                    bottomInset={insets.bottom}
-                    onClose={() => setSheet(null)}
-                    onSaved={async message => {
-                        setSheet(null);
-                        await load();
-                        setNotice(message);
-                    }}
-                />
-            )}
             {detail && (
                 <InviteCodeSheet
                     visible={sheet === 'invite'}
@@ -617,101 +672,6 @@ function SheetButtons({
     );
 }
 
-/** 그림 31 방 정보 수정 (OWNER, 명세 7.5) */
-function EditSheet({
-                       detail,
-                       bottomInset,
-                       onClose,
-                       onSaved,
-                   }: {
-    detail: RoomDetail;
-    bottomInset: number;
-    onClose: () => void;
-    onSaved: (message: string) => void;
-}) {
-    const initial = detail.appointmentAt ? new Date(detail.appointmentAt) : null;
-    const [name, setName] = useState(detail.name);
-    const [date, setDate] = useState(initial ? toDateValue(initial) : '');
-    const [time, setTime] = useState(initial ? formatTime(initial) : '');
-    const [calendarOpen, setCalendarOpen] = useState(false);
-    const [timeOpen, setTimeOpen] = useState(false);
-    const [error, setError] = useState('');
-    const [saving, setSaving] = useState(false);
-    const length = roomNameLength(name);
-
-    const save = async () => {
-        if (length === 0) return setError('약속방 이름을 입력해 주세요.');
-        if (length > ROOM_NAME_MAX) return setError(`약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`);
-        if (!!date !== !!time) return setError('약속 날짜와 시간을 모두 고르거나, 둘 다 비워 두세요.');
-
-        let at: Date | null = null;
-        if (date && time) {
-            const [y, m, d] = date.split('-').map(Number);
-            const [h, min] = time.split(':').map(Number);
-            at = new Date(y, m - 1, d, h, min);
-            if (at.getTime() < Date.now()) return setError('현재 이후의 약속 날짜와 시간을 선택해 주세요.');
-        }
-
-        const patch: { name?: string; appointmentAt?: string | null } = {};
-        if (name.trim() !== detail.name) patch.name = name;
-        const nextAt = at ? at.toISOString() : null;
-        const timeChanged = (initial?.getTime() ?? null) !== (at?.getTime() ?? null);
-        if (timeChanged) patch.appointmentAt = nextAt;
-        if (Object.keys(patch).length === 0) return onClose();
-
-        setSaving(true);
-        setError('');
-        try {
-            await updateRoom(detail.id, patch);
-            onSaved(timeChanged ? '저장했어요. 약속 시각이 바뀌어 이전 추천 결과는 최신이 아니에요.' : '저장했어요.');
-        } catch (caught) {
-            setError(caught instanceof RoomError ? caught.message : '저장하지 못했어요. 다시 시도해 주세요.');
-        } finally {
-            setSaving(false);
-        }
-    };
-
-    return (
-        <BottomSheet bottomInset={bottomInset} onClose={onClose}>
-            <Text style={styles.sheetTitle}>방 정보 수정</Text>
-
-            <View style={styles.rowBetween}>
-                <Text style={styles.fieldLabel}>약속방 이름</Text>
-                <Text style={[styles.counter, length > ROOM_NAME_MAX && { color: RED }]}>{length}/{ROOM_NAME_MAX}</Text>
-            </View>
-            <TextInput style={[styles.input, length > ROOM_NAME_MAX && { borderColor: RED }]} value={name} onChangeText={value => { setName(value); setError(''); }} />
-
-            <Text style={styles.fieldLabel}>약속 시각 <Text style={styles.optional}>(선택)</Text></Text>
-            <View style={styles.pickRow}>
-                <Pressable style={styles.pickBox} onPress={() => setCalendarOpen(true)}>
-                    <Ionicons name="calendar-outline" size={18} color={NAVY} />
-                    <Text style={[styles.pickText, !date && styles.placeholder]}>{date || '날짜'}</Text>
-                </Pressable>
-                <Pressable style={styles.pickBox} onPress={() => setTimeOpen(true)}>
-                    <Ionicons name="time-outline" size={18} color={NAVY} />
-                    <Text style={[styles.pickText, !time && styles.placeholder]}>{time || '시간'}</Text>
-                </Pressable>
-            </View>
-            {(date || time) && (
-                <Pressable onPress={() => { setDate(''); setTime(''); setError(''); }} style={styles.clearLink}>
-                    <Ionicons name="close-circle" size={15} color={SECONDARY} />
-                    <Text style={styles.clearText}>약속 시각 지우기</Text>
-                </Pressable>
-            )}
-            <View style={styles.staleNote}>
-                <Ionicons name="alert-circle-outline" size={16} color={ORANGE} />
-                <Text style={styles.staleText}>약속 시각이 바뀌면 이전 추천 결과는 최신이 아니게 돼요.</Text>
-            </View>
-
-            {!!error && <Text style={styles.errorText}>{error}</Text>}
-            <SheetButtons cancel="취소" confirm="저장" busy={saving} onCancel={onClose} onConfirm={save} />
-
-            <CalendarModal visible={calendarOpen} value={date} onClose={() => setCalendarOpen(false)} onConfirm={value => { setDate(value); setError(''); }} />
-            <TimeWheelModal visible={timeOpen} value={time || '19:00'} onClose={() => setTimeOpen(false)} onConfirm={value => { setTime(value); setError(''); }} />
-        </BottomSheet>
-    );
-}
-
 /** 그림 32 방 나가기 (명세 7.8) */
 function LeaveSheet({
                         detail,
@@ -815,7 +775,15 @@ const styles = StyleSheet.create({
     memberName: { color: NAVY, fontSize: 14.5, fontWeight: '800' },
     ownerTag: { overflow: 'hidden', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, backgroundColor: '#fff4cf', color: '#9a6a00', fontSize: 10.5, fontWeight: '800' },
     meTag: { overflow: 'hidden', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, backgroundColor: '#e3f8f0', color: MINT_DEEP, fontSize: 10.5, fontWeight: '800' },
-    departure: { marginTop: 3, color: SECONDARY, fontSize: 12.5, fontWeight: '600' },
+    departureRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3, flexWrap: 'wrap' },
+    departure: { color: SECONDARY, fontSize: 12.5, fontWeight: '600' },
+    departureSaving: { marginTop: 3, color: SECONDARY, fontSize: 12.5, fontWeight: '600' },
+    departureError: { marginTop: 3, color: RED, fontSize: 12, fontWeight: '600' },
+    departureSaved: { marginTop: 3, color: MINT_DEEP, fontSize: 12, fontWeight: '700' },
+    lineDot: { minWidth: 18, height: 18, paddingHorizontal: 4, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+    lineDotText: { color: WHITE, fontSize: 10, fontWeight: '800' },
+    smallButtonBusy: { width: 76, borderColor: BORDER },
+    smallButtonRetry: { backgroundColor: RED, borderColor: RED },
     departureEmpty: { marginTop: 3, color: ORANGE, fontSize: 12.5, fontWeight: '700' },
     smallButton: { paddingHorizontal: 10, height: 32, borderRadius: 9, borderWidth: 1, borderColor: NAVY, alignItems: 'center', justifyContent: 'center' },
     smallButtonText: { color: NAVY, fontSize: 12, fontWeight: '800' },
@@ -875,16 +843,5 @@ const styles = StyleSheet.create({
     sheetPrimary: { backgroundColor: NAVY },
     sheetDanger: { backgroundColor: RED },
     sheetConfirmText: { color: WHITE, fontSize: 15, fontWeight: '800' },
-    fieldLabel: { marginTop: 4, marginBottom: 7, color: NAVY, fontSize: 13.5, fontWeight: '800' },
-    optional: { color: SECONDARY, fontWeight: '600' },
-    input: { height: 48, borderWidth: 1, borderColor: BORDER, borderRadius: 12, paddingHorizontal: 13, color: NAVY, fontSize: 15, marginBottom: 12, backgroundColor: '#fafbfc' },
-    pickRow: { flexDirection: 'row', gap: 8 },
-    pickBox: { flex: 1, height: 48, borderWidth: 1, borderColor: BORDER, borderRadius: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: '#fafbfc' },
-    pickText: { color: NAVY, fontSize: 14.5, fontWeight: '700' },
-    placeholder: { color: '#a1a8b8', fontWeight: '600' },
-    clearLink: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start' },
-    clearText: { color: SECONDARY, fontSize: 12.5, fontWeight: '700' },
-    staleNote: { marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 6, padding: 10, borderRadius: 10, backgroundColor: '#fff6e0' },
-    staleText: { flex: 1, color: '#7a5600', fontSize: 12.5, fontWeight: '600' },
     errorText: { marginTop: 10, color: RED, fontSize: 13, fontWeight: '700' },
 });
