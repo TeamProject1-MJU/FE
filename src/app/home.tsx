@@ -268,11 +268,10 @@ export default function HomeScreen() {
                     label="약속방"
                     onPress={() => router.push('/rooms')}
                 />
-                {/* TODO: 마이페이지 화면 구현 후 '/my' 로 연결 */}
                 <BottomTab
                     icon="person-outline"
                     label="마이"
-                    onPress={() => showPreparing('마이페이지')}
+                    onPress={() => router.push('/my')}
                 />
             </View>
         </View>
