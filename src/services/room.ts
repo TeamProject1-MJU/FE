@@ -5,8 +5,12 @@
  * - GET    /rooms                    내 방 목록
  * - POST   /rooms                    방 생성 { name, appointmentAt } (정원 4명 고정)
  * - POST   /rooms/join               초대 코드로 참여 { roomCode }
+ * - GET    /rooms/{roomId}           방 상세 (7.4, 초대 코드 미포함)
  * - PATCH  /rooms/{roomId}           방 정보 수정 (OWNER)
- * - DELETE /rooms/{roomId}/members/me  나가기
+ * - DELETE /rooms/{roomId}/members/me  나가기 (7.8)
+ * - GET    /rooms/{roomId}/invite-code  초대 코드 (7.9, OWNER)
+ * - PUT    /rooms/{roomId}/selected-station  약속역 확정 (7.10, OWNER)
+ * - DELETE /rooms/{roomId}/selected-station  약속역 해제 (7.11, OWNER, 후보는 유지)
  *
  * 지금은 앱이 켜져 있는 동안만 유지되는 mock 목록으로 생성·참여·수정·나가기 결과를 반영합니다.
  */
@@ -15,7 +19,11 @@ import {
     RoomError,
     type CreateRoomRequest,
     type CreatedRoom,
+    type LeaveRoomResult,
+    type RoomCandidate,
+    type RoomDetail,
     type RoomMember,
+    type RoomStation,
     type RoomSummary,
 } from '@/types/room';
 
@@ -187,8 +195,41 @@ const INVITE_ONLY: Record<string, { room: RoomSummary; members: RoomMember[] }> 
 };
 const BUSY_ONCE = new Set(['BUSY99']);
 
-/** 방 id → 멤버 목록 (참여 결과를 멤버 목록에 반영) */
-const membersByRoom = new Map<string, RoomMember[]>();
+function meAs(role: RoomMember['role'], departureStation: RoomMember['departureStation'], daysAgo: number): RoomMember {
+    const joinedAt = new Date();
+    joinedAt.setDate(joinedAt.getDate() - daysAgo);
+    return { ...ME, role, joinedAt: joinedAt.toISOString(), departureStation };
+}
+
+/** 방 id → 멤버 목록 (참여 결과를 멤버 목록에 반영). 목록 mock 방(room-1~4)도 인원 수에 맞춰 채워 둡니다. */
+const membersByRoom = new Map<string, RoomMember[]>([
+    ['room-1', [
+        meAs('OWNER', STATION.hongdae, 10),
+        member('선호', 'MEMBER', STATION.gangnam, 9),
+        member('지우', 'MEMBER', STATION.jamsil, 8),
+        member('하은', 'MEMBER', null, 7),
+    ]],
+    ['room-2', [
+        member('선호', 'OWNER', STATION.gangnam, 6),
+        meAs('MEMBER', STATION.hongdae, 5),
+        member('준호', 'MEMBER', null, 4),
+    ]],
+    ['room-4', [meAs('OWNER', null, 3), member('유나', 'MEMBER', STATION.jamsil, 2)]],
+    ['room-3', [member('도윤', 'OWNER', STATION.gangnam, 3), meAs('MEMBER', null, 2)]],
+]);
+const ownerOf = (members: RoomMember[]) => members.find(item => item.role === 'OWNER');
+
+/** 방 id → 약속역 후보 (mock) */
+const candidatesByRoom = new Map<string, RoomCandidate[]>([
+    ['room-4', [
+        { id: 'cand-1', station: { id: 108, name: '왕십리', lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] }, proposerId: 'user-9', proposerNickname: '유나', voteCount: 1, votedByMe: false },
+        { id: 'cand-2', station: { id: 109, name: '사당', lines: [{ lineId: 4, lineName: '4호선', color: '#00A5DE' }] }, proposerId: ME.userId, proposerNickname: ME.nickname, voteCount: 0, votedByMe: false },
+    ]],
+    ['room-3', [
+        { id: 'cand-3', station: { id: 105, name: '강남', lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] }, proposerId: 'user-x', proposerNickname: '도윤', voteCount: 1, votedByMe: false },
+    ]],
+]);
+let candSeq = 10;
 
 /** 초대 코드 → 방 id (내가 이미 들어가 있는 방 포함, ALREADY_JOINED 판단용) */
 const codeToRoomId = new Map<string, string>([
@@ -323,21 +364,153 @@ export async function fetchRoomMembers(roomId: string): Promise<RoomMember[]> {
     return membersByRoom.get(roomId) ?? [];
 }
 
-/** 7.5 방 정보 수정 (OWNER) */
+/** 확정 시각 (mock): 처음부터 확정돼 있던 방은 하루 전으로 둡니다 */
+const confirmedAtByRoom = new Map<string, string>();
+
+/**
+ * 7.4 방 상세 (#45)
+ * - 없는 방 ROOM_NOT_FOUND(404), 참여하지 않은 방 NOT_ROOM_MEMBER(403)
+ * - 초대 코드는 포함하지 않습니다 (방장은 7.9 fetchInviteCode 로 따로 조회)
+ * mock: 'error' 면 조회 실패 (화면 확인용)
+ */
+export async function fetchRoomDetail(roomId: string, mock?: 'error'): Promise<RoomDetail> {
+    await wait(MOCK_DELAY_MS);
+    if (mock === 'error') throw new RoomError('NETWORK_ERROR', '약속방 정보를 불러오지 못했어요.');
+    const room = getMockRoom(roomId);
+    if (!room) {
+        const invited = Object.values(INVITE_ONLY).some(item => item.room.id === roomId);
+        if (invited) throw new RoomError('NOT_ROOM_MEMBER', '참여하지 않은 약속방이에요.');
+        throw new RoomError('ROOM_NOT_FOUND', '약속방을 찾을 수 없어요.');
+    }
+    const members = membersByRoom.get(roomId) ?? [];
+    const confirmedAt = room.selectedStation
+        ? confirmedAtByRoom.get(roomId) ?? new Date(Date.now() - 86_400_000).toISOString()
+        : null;
+    return {
+        ...room,
+        memberCount: members.length || room.memberCount,
+        ownerId: ownerOf(members)?.userId ?? ME.userId,
+        confirmedAt,
+        members,
+    };
+}
+
+export function getMyUserId() {
+    return ME.userId;
+}
+
+function requireOwner(roomId: string) {
+    const room = getMockRoom(roomId);
+    if (!room) throw new RoomError('ROOM_NOT_FOUND', '약속방을 찾을 수 없어요.');
+    if (room.myRole !== 'OWNER') throw new RoomError('NOT_ROOM_OWNER', '방장만 할 수 있어요.');
+    return room;
+}
+
+/** 7.5 방 정보 수정 (OWNER). 약속 시각이 바뀌면 이전 추천 결과는 최신이 아니게 됩니다. */
 export async function updateRoom(
     roomId: string,
     patch: Partial<Pick<RoomSummary, 'name' | 'appointmentAt'>>,
 ): Promise<RoomSummary | undefined> {
     await wait(MOCK_DELAY_MS);
+    requireOwner(roomId);
+    if (patch.name !== undefined) {
+        const length = roomNameLength(patch.name);
+        if (length === 0) throw new RoomError('VALIDATION_ERROR', '약속방 이름을 입력해 주세요.');
+        if (length > ROOM_NAME_MAX) throw new RoomError('VALIDATION_ERROR', `약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`);
+        patch = { ...patch, name: patch.name.trim() };
+    }
     rooms = rooms.map(room => (room.id === roomId ? { ...room, ...patch } : room));
     return getMockRoom(roomId);
 }
 
-/** 7.8 나가기: 목록에서 빠집니다 */
-export async function leaveRoom(roomId: string): Promise<void> {
+/** 7.10 약속역 확정 / 7.11 해제 (OWNER). 해제해도 후보 목록은 그대로 둡니다. */
+export async function setSelectedStation(roomId: string, station: RoomStation | null): Promise<void> {
+    await wait(MOCK_DELAY_MS);
+    requireOwner(roomId);
+    if (station) confirmedAtByRoom.set(roomId, new Date().toISOString());
+    else confirmedAtByRoom.delete(roomId);
+    rooms = rooms.map(room =>
+        room.id === roomId
+            ? { ...room, selectedStation: station, status: station ? 'CONFIRMED' : 'OPEN' }
+            : room,
+    );
+}
+
+/** 약속역 후보 목록 (mock) */
+export async function fetchCandidates(roomId: string): Promise<RoomCandidate[]> {
+    await wait(MOCK_DELAY_MS / 2);
+    return candidatesByRoom.get(roomId) ?? [];
+}
+
+/** 후보 제안 (mock): 같은 역 중복 불가, 방당 최대 5개 */
+export async function proposeCandidate(roomId: string, station: RoomStation): Promise<void> {
+    await wait(MOCK_DELAY_MS / 2);
+    const list = candidatesByRoom.get(roomId) ?? [];
+    if (list.some(item => item.station.id === station.id)) throw new RoomError('VALIDATION_ERROR', '이미 후보에 있는 역이에요.');
+    if (list.length >= 5) throw new RoomError('VALIDATION_ERROR', '약속역 후보는 방당 5개까지예요.');
+    candidatesByRoom.set(roomId, [
+        ...list,
+        { id: `cand-${candSeq++}`, station, proposerId: ME.userId, proposerNickname: ME.nickname, voteCount: 0, votedByMe: false },
+    ]);
+}
+
+/** 후보 투표 (mock): 1인 1표, 한 번 투표하면 바꾸거나 취소할 수 없어요 */
+export async function voteCandidate(roomId: string, candidateId: string): Promise<void> {
+    await wait(MOCK_DELAY_MS / 2);
+    const list = candidatesByRoom.get(roomId) ?? [];
+    if (list.some(item => item.votedByMe)) throw new RoomError('ALREADY_VOTED', '이미 투표했어요. 투표는 바꿀 수 없어요.');
+    candidatesByRoom.set(
+        roomId,
+        list.map(item => (item.id === candidateId ? { ...item, voteCount: item.voteCount + 1, votedByMe: true } : item)),
+    );
+}
+
+/** 후보 삭제 (mock): 제안자 또는 방장. 이미 확정된 약속역은 바뀌지 않아요 */
+export async function deleteCandidate(roomId: string, candidateId: string): Promise<void> {
+    await wait(MOCK_DELAY_MS / 2);
+    const list = candidatesByRoom.get(roomId) ?? [];
+    const target = list.find(item => item.id === candidateId);
+    if (!target) return;
+    if (target.proposerId !== ME.userId) requireOwner(roomId);
+    candidatesByRoom.set(roomId, list.filter(item => item.id !== candidateId));
+}
+
+/**
+ * 7.8 나가기
+ * - 방장이 나가면 가장 먼저 들어온(joinedAt) 멤버가 방장이 됩니다.
+ * - 마지막 멤버가 나가면 방이 삭제됩니다.
+ */
+export async function leaveRoom(roomId: string): Promise<LeaveRoomResult> {
     await wait(MOCK_DELAY_MS);
     rooms = rooms.filter(room => room.id !== roomId);
     // 나간 방은 같은 코드로 다시 참여할 수 있도록 내 멤버 정보를 지웁니다.
-    const members = membersByRoom.get(roomId);
-    if (members) membersByRoom.set(roomId, members.filter(item => item.userId !== ME.userId));
+    const members = membersByRoom.get(roomId) ?? [];
+    const wasOwner = ownerOf(members)?.userId === ME.userId;
+    const rest = members
+        .filter(item => item.userId !== ME.userId)
+        .sort((a, b) => new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime());
+
+    if (rest.length === 0) {
+        membersByRoom.delete(roomId);
+        candidatesByRoom.delete(roomId);
+        return { roomDeleted: true, newOwnerId: null };
+    }
+    let newOwnerId: string | null = null;
+    if (wasOwner) {
+        newOwnerId = rest[0].userId;
+        rest[0] = { ...rest[0], role: 'OWNER' };
+    }
+    membersByRoom.set(roomId, rest);
+    return { roomDeleted: false, newOwnerId };
+}
+
+/** 나가기 확인 문구용: 내가 나가면 누가 방장이 되는지, 방이 삭제되는지 */
+export function previewLeave(detail: RoomDetail) {
+    const rest = detail.members
+        .filter(item => item.userId !== ME.userId)
+        .sort((a, b) => new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime());
+    return {
+        willDelete: rest.length === 0,
+        nextOwner: detail.myRole === 'OWNER' ? rest[0]?.nickname ?? null : null,
+    };
 }
