@@ -31,6 +31,17 @@ export type RoomSummary = {
     selectedStation: RoomStation | null;
 };
 
+/** 7.6 GET /rooms/{roomId}/members 항목 (7.4 members 와 같은 구조) */
+export type RoomMember = {
+    userId: string;
+    nickname: string;
+    role: RoomRole;
+    /** ISO-8601 */
+    joinedAt: string;
+    /** 출발역을 아직 정하지 않았으면 null */
+    departureStation: (RoomStation & { isSupported: boolean }) | null;
+};
+
 /** 7.1 POST /rooms 요청 */
 export type CreateRoomRequest = {
     name: string;
@@ -44,6 +55,7 @@ export type RoomErrorCode =
     | 'ROOM_CODE_INVALID'
     | 'ROOM_FULL'
     | 'ALREADY_JOINED'
+    | 'ROOM_BUSY'
     | 'VALIDATION_ERROR'
     | 'NETWORK_ERROR';
 
