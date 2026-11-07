@@ -52,10 +52,10 @@ type LoadError = 'ROOM_NOT_FOUND' | 'NOT_ROOM_MEMBER' | 'UNKNOWN';
 /** 후보 제안용 예시 역 (TODO: 역 검색 화면 연결 후 stationId 로 교체) */
 const STATION_OPTIONS: RoomStation[] = [
     { id: 105, name: '강남', lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] },
-    { id: 108, name: '왕십리', lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] },
+    { id: 119, name: '왕십리', lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] },
     { id: 109, name: '사당', lines: [{ lineId: 4, lineName: '4호선', color: '#00A5DE' }] },
-    { id: 106, name: '홍대입구', lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] },
-    { id: 110, name: '서울역', lines: [{ lineId: 1, lineName: '1호선', color: '#0052A4' }] },
+    { id: 112, name: '홍대입구', lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] },
+    { id: 101, name: '서울역', lines: [{ lineId: 1, lineName: '1호선', color: '#0052A4' }] },
 ];
 
 

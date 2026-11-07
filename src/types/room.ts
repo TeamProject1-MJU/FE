@@ -67,6 +67,8 @@ export type RoomCandidate = {
     proposerNickname: string;
     voteCount: number;
     votedByMe: boolean;
+    /** 추천 결과에서 제안한 경우 그 결과 카드의 resultId (7.14 source_result_id), 직접 제안이면 없음 */
+    sourceResultId?: string;
 };
 
 /** 7.8 나가기 응답 */

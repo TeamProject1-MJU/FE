@@ -114,8 +114,9 @@ const ME = { userId: '0192f3a4-7b1c-7c3e-9a10-5d2e8f6b1a01', nickname: '민지' 
 
 const STATION = {
     gangnam: { id: 105, name: '강남', isSupported: true, lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] },
-    hongdae: { id: 106, name: '홍대입구', isSupported: true, lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] },
-    jamsil: { id: 107, name: '잠실', isSupported: true, lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] },
+    hongdae: { id: 112, name: '홍대입구', isSupported: true, lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] },
+    jamsil: { id: 118, name: '잠실', isSupported: true, lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }, { lineId: 8, lineName: '8호선', color: '#E6186C' }] },
+    kondae: { id: 114, name: '건대입구', isSupported: true, lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }, { lineId: 7, lineName: '7호선', color: '#747F00' }] },
 };
 
 let memberSeq = 1;
@@ -214,7 +215,7 @@ const membersByRoom = new Map<string, RoomMember[]>([
     ['room-2', [
         member('선호', 'OWNER', STATION.gangnam, 6),
         meAs('MEMBER', STATION.hongdae, 5),
-        member('준호', 'MEMBER', null, 4),
+        member('준호', 'MEMBER', STATION.kondae, 4),
     ]],
     ['room-4', [meAs('OWNER', null, 3), member('유나', 'MEMBER', STATION.jamsil, 2)]],
     ['room-3', [member('도윤', 'OWNER', STATION.gangnam, 3), meAs('MEMBER', null, 2)]],
@@ -224,7 +225,7 @@ const ownerOf = (members: RoomMember[]) => members.find(item => item.role === 'O
 /** 방 id → 약속역 후보 (mock) */
 const candidatesByRoom = new Map<string, RoomCandidate[]>([
     ['room-4', [
-        { id: 'cand-1', station: { id: 108, name: '왕십리', lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] }, proposerId: 'user-9', proposerNickname: '유나', voteCount: 1, votedByMe: false },
+        { id: 'cand-1', station: { id: 119, name: '왕십리', lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] }, proposerId: 'user-9', proposerNickname: '유나', voteCount: 1, votedByMe: false },
         { id: 'cand-2', station: { id: 109, name: '사당', lines: [{ lineId: 4, lineName: '4호선', color: '#00A5DE' }] }, proposerId: ME.userId, proposerNickname: ME.nickname, voteCount: 0, votedByMe: false },
     ]],
     ['room-3', [
@@ -258,6 +259,11 @@ export async function fetchMyRooms(mock?: 'empty' | 'error'): Promise<RoomSummar
 
 export function getMockRoom(roomId: string): RoomSummary | undefined {
     return rooms.find(room => room.id === roomId);
+}
+
+/** 멤버 목록 동기 조회 (추천 mock 이 isStale 판정·출발역 검사에 씀, #49) */
+export function getMockMembers(roomId: string): RoomMember[] {
+    return membersByRoom.get(roomId) ?? [];
 }
 
 /** 방장이 볼 수 있는 초대 코드 (방 id → 코드, mock) */
@@ -593,15 +599,18 @@ export async function fetchCandidates(roomId: string): Promise<RoomCandidate[]> 
     return candidatesByRoom.get(roomId) ?? [];
 }
 
-/** 후보 제안 (mock): 같은 역 중복 불가, 방당 최대 5개 */
-export async function proposeCandidate(roomId: string, station: RoomStation): Promise<void> {
+/**
+ * 후보 제안 (mock): 같은 역 중복 불가, 방당 최대 5개
+ * sourceResultId: 추천 결과 카드에서 제안한 경우 그 결과의 resultId (명세 7.14 source_result_id), 직접 제안이면 생략
+ */
+export async function proposeCandidate(roomId: string, station: RoomStation, sourceResultId?: string): Promise<void> {
     await wait(MOCK_DELAY_MS / 2);
     const list = candidatesByRoom.get(roomId) ?? [];
     if (list.some(item => item.station.id === station.id)) throw new RoomError('VALIDATION_ERROR', '이미 후보에 있는 역이에요.');
     if (list.length >= 5) throw new RoomError('VALIDATION_ERROR', '약속역 후보는 방당 5개까지예요.');
     candidatesByRoom.set(roomId, [
         ...list,
-        { id: `cand-${candSeq++}`, station, proposerId: ME.userId, proposerNickname: ME.nickname, voteCount: 0, votedByMe: false },
+        { id: `cand-${candSeq++}`, station, proposerId: ME.userId, proposerNickname: ME.nickname, voteCount: 0, votedByMe: false, sourceResultId },
     ]);
 }
 
