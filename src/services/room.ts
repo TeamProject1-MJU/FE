@@ -12,6 +12,10 @@
  * - GET    /rooms/{roomId}/invite-code  초대 코드 (7.9, OWNER, #47)
  * - PUT    /rooms/{roomId}/selected-station  약속역 확정 (7.10, OWNER)
  * - DELETE /rooms/{roomId}/selected-station  약속역 해제 (7.11, OWNER, 후보는 유지)
+ * - POST   /rooms/{roomId}/station-proposals                     후보 제안 (7.14, #50)
+ * - GET    /rooms/{roomId}/station-proposals                     후보 목록·득표 (7.15, #50)
+ * - DELETE /rooms/{roomId}/station-proposals/{proposalId}        후보 삭제 (7.16, 제안자 또는 OWNER, #50)
+ * - PUT    /rooms/{roomId}/station-proposals/{proposalId}/vote   참고용 투표 (7.17, 1인 1표, #50)
  *
  * 지금은 앱이 켜져 있는 동안만 유지되는 mock 목록으로 생성·참여·수정·나가기 결과를 반영합니다.
  */
@@ -22,11 +26,13 @@ import {
     type CreateRoomRequest,
     type CreatedRoom,
     type LeaveRoomResult,
-    type RoomCandidate,
+    type ProposalVoteResult,
     type RoomDetail,
     type RoomMember,
     type RoomStation,
     type RoomSummary,
+    type StationProposal,
+    type StationProposalList,
 } from '@/types/room';
 
 const MOCK_DELAY_MS = 600;
@@ -222,17 +228,49 @@ const membersByRoom = new Map<string, RoomMember[]>([
 ]);
 const ownerOf = (members: RoomMember[]) => members.find(item => item.role === 'OWNER');
 
-/** 방 id → 약속역 후보 (mock) */
-const candidatesByRoom = new Map<string, RoomCandidate[]>([
+/**
+ * 방 id → 약속역 후보 (mock)
+ * 투표는 후보마다 투표한 userId 목록(voterIds)으로 들고 있어요. 후보를 지우면 그 표도 함께 사라집니다 (명세 7.17 cascade)
+ */
+type StoredProposal = Omit<StationProposal, 'isSelected' | 'voteCount' | 'votedByMe'> & { voterIds: string[] };
+
+/** 방당 후보 최대 개수 (명세 7.14 기본 9, 서버 설정값) */
+const MAX_PROPOSALS = 9;
+
+function stationRef(stationId: number): RoomStation {
+    const found = MOCK_STATIONS.find(item => item.id === stationId);
+    if (!found) return { id: stationId, name: `역 ${stationId}` };
+    return { id: found.id, name: found.name, lines: found.lines.map(({ lineId, lineName, color }) => ({ lineId, lineName, color })) };
+}
+
+let proposalSeq = 1;
+function seedProposal(roomId: string, stationId: number, proposer: string, voters: string[], minutesAgo: number): StoredProposal {
+    const members = membersByRoom.get(roomId) ?? [];
+    const userOf = (nickname: string) => members.find(item => item.nickname === nickname)?.userId ?? `user-${nickname}`;
+    return {
+        id: `proposal-${proposalSeq++}`,
+        station: stationRef(stationId),
+        proposedBy: { userId: userOf(proposer), nickname: proposer },
+        resultId: null,
+        createdAt: new Date(Date.now() - minutesAgo * 60_000).toISOString(),
+        voterIds: voters.map(userOf),
+    };
+}
+
+const proposalsByRoom = new Map<string, StoredProposal[]>([
+    // room-2: 나는 MEMBER (설계서 그림 39). 준호가 제안한 건대입구에 2표, 내가 제안한 뚝섬은 내가 지울 수 있어요
+    ['room-2', [
+        seedProposal('room-2', 116, ME.nickname, [], 20),
+        seedProposal('room-2', 115, '선호', [], 40),
+        seedProposal('room-2', 114, '준호', ['선호', '준호'], 90),
+    ]],
+    // room-4: 나는 OWNER (설계서 그림 38). 모든 후보를 지울 수 있어요
     ['room-4', [
-        { id: 'cand-1', station: { id: 119, name: '왕십리', lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] }, proposerId: 'user-9', proposerNickname: '유나', voteCount: 1, votedByMe: false },
-        { id: 'cand-2', station: { id: 109, name: '사당', lines: [{ lineId: 4, lineName: '4호선', color: '#00A5DE' }] }, proposerId: ME.userId, proposerNickname: ME.nickname, voteCount: 0, votedByMe: false },
+        seedProposal('room-4', 109, ME.nickname, [], 30),
+        seedProposal('room-4', 119, '유나', ['유나'], 60),
     ]],
-    ['room-3', [
-        { id: 'cand-3', station: { id: 105, name: '강남', lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D' }] }, proposerId: 'user-x', proposerNickname: '도윤', voteCount: 1, votedByMe: false },
-    ]],
+    ['room-3', [seedProposal('room-3', 105, '도윤', ['도윤'], 45)]],
 ]);
-let candSeq = 10;
 
 /** 초대 코드 → 방 id (내가 이미 들어가 있는 방 포함, ALREADY_JOINED 판단용) */
 const codeToRoomId = new Map<string, string>([
@@ -593,46 +631,116 @@ export async function setSelectedStation(roomId: string, station: RoomStation | 
     );
 }
 
-/** 약속역 후보 목록 (mock) */
-export async function fetchCandidates(roomId: string): Promise<RoomCandidate[]> {
+/* ───────────────── 약속역 후보 · 투표 (7.14~7.17, #50) ───────────────── */
+
+function requireMember(roomId: string) {
+    const room = getMockRoom(roomId);
+    if (!room) throw new RoomError('ROOM_NOT_FOUND', '약속방을 찾을 수 없어요.');
+    return room;
+}
+
+function toProposal(roomId: string, stored: StoredProposal): StationProposal {
+    const { voterIds, ...rest } = stored;
+    const selected = getMockRoom(roomId)?.selectedStation ?? null;
+    return {
+        ...rest,
+        isSelected: selected?.id === stored.station.id,
+        voteCount: voterIds.length,
+        votedByMe: voterIds.includes(ME.userId),
+    };
+}
+
+/** 7.15 후보 목록 (최신 제안 순). 득표순 정렬은 화면에서 해요 */
+export async function fetchProposals(roomId: string, mock?: 'error'): Promise<StationProposalList> {
     await wait(MOCK_DELAY_MS / 2);
-    return candidatesByRoom.get(roomId) ?? [];
+    const room = requireMember(roomId);
+    if (mock === 'error') throw new RoomError('NETWORK_ERROR', '네트워크 상태를 확인하고 다시 시도해 주세요.');
+    const items = [...(proposalsByRoom.get(roomId) ?? [])]
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .map(item => toProposal(roomId, item));
+    return { selectedStation: room.selectedStation, maxProposals: MAX_PROPOSALS, items };
 }
 
 /**
- * 후보 제안 (mock): 같은 역 중복 불가, 방당 최대 5개
- * sourceResultId: 추천 결과 카드에서 제안한 경우 그 결과의 resultId (명세 7.14 source_result_id), 직접 제안이면 생략
+ * 7.14 후보 제안 (모든 멤버)
+ * - resultId: 추천 결과 카드에서 제안한 경우 그 결과의 resultId, 직접 제안이면 생략 (TODO: 서버가 RESULT_NOT_FOUND 검증)
+ * - 같은 역 중복 ALREADY_PROPOSED(409), 미제공 역 STATION_UNSUPPORTED(422), 9개 초과 PROPOSAL_LIMIT_EXCEEDED(422)
  */
-export async function proposeCandidate(roomId: string, station: RoomStation, sourceResultId?: string): Promise<void> {
+export async function createProposal(
+    roomId: string,
+    stationId: number,
+    resultId?: string,
+    mock?: 'error' | 'busy',
+): Promise<StationProposal> {
     await wait(MOCK_DELAY_MS / 2);
-    const list = candidatesByRoom.get(roomId) ?? [];
-    if (list.some(item => item.station.id === station.id)) throw new RoomError('VALIDATION_ERROR', '이미 후보에 있는 역이에요.');
-    if (list.length >= 5) throw new RoomError('VALIDATION_ERROR', '약속역 후보는 방당 5개까지예요.');
-    candidatesByRoom.set(roomId, [
-        ...list,
-        { id: `cand-${candSeq++}`, station, proposerId: ME.userId, proposerNickname: ME.nickname, voteCount: 0, votedByMe: false, sourceResultId },
-    ]);
+    requireMember(roomId);
+    if (mock === 'busy') throw new RoomError('ROOM_BUSY', '다른 요청을 처리하는 중이에요. 잠시 후 다시 시도해 주세요.');
+    if (mock === 'error') throw new RoomError('NETWORK_ERROR', '후보를 제안하지 못했어요. 다시 시도해 주세요.');
+    const station = MOCK_STATIONS.find(item => item.id === stationId);
+    if (!station) throw new RoomError('STATION_NOT_FOUND', '역을 찾을 수 없어요.');
+    if (!station.isSupported) throw new RoomError('STATION_UNSUPPORTED', `${station.name}역은 아직 지원하지 않는 역이라 후보로 올릴 수 없어요.`);
+    const list = proposalsByRoom.get(roomId) ?? [];
+    if (list.some(item => item.station.id === stationId)) throw new RoomError('ALREADY_PROPOSED', `${station.name}역은 이미 후보에 있어요.`);
+    if (list.length >= MAX_PROPOSALS) throw new RoomError('PROPOSAL_LIMIT_EXCEEDED', `약속역 후보는 방당 ${MAX_PROPOSALS}개까지예요. 다른 후보를 지운 뒤 제안해 주세요.`);
+    const stored: StoredProposal = {
+        id: `proposal-${proposalSeq++}`,
+        station: stationRef(stationId),
+        proposedBy: { userId: ME.userId, nickname: ME.nickname },
+        resultId: resultId ?? null,
+        createdAt: new Date().toISOString(),
+        voterIds: [],
+    };
+    proposalsByRoom.set(roomId, [...list, stored]);
+    return toProposal(roomId, stored);
 }
 
-/** 후보 투표 (mock): 1인 1표, 한 번 투표하면 바꾸거나 취소할 수 없어요 */
-export async function voteCandidate(roomId: string, candidateId: string): Promise<void> {
+/**
+ * 7.17 참고용 투표 (모든 멤버, 본인 제안 후보도 가능)
+ * 같은 후보에 다시 투표하면 상태 그대로 200(멱등), 다른 후보에 투표하면 ALREADY_VOTED(409)
+ */
+export async function voteProposal(roomId: string, proposalId: string, mock?: 'error'): Promise<ProposalVoteResult> {
     await wait(MOCK_DELAY_MS / 2);
-    const list = candidatesByRoom.get(roomId) ?? [];
-    if (list.some(item => item.votedByMe)) throw new RoomError('ALREADY_VOTED', '이미 투표했어요. 투표는 바꿀 수 없어요.');
-    candidatesByRoom.set(
-        roomId,
-        list.map(item => (item.id === candidateId ? { ...item, voteCount: item.voteCount + 1, votedByMe: true } : item)),
-    );
+    requireMember(roomId);
+    if (mock === 'error') throw new RoomError('NETWORK_ERROR', '투표하지 못했어요. 다시 시도해 주세요.');
+    const list = proposalsByRoom.get(roomId) ?? [];
+    const target = list.find(item => item.id === proposalId);
+    if (!target) throw new RoomError('PROPOSAL_NOT_FOUND', '이미 삭제된 후보예요.');
+    if (!target.voterIds.includes(ME.userId)) {
+        if (list.some(item => item.voterIds.includes(ME.userId))) {
+            throw new RoomError('ALREADY_VOTED', '이미 다른 후보에 투표했어요. 투표는 바꾸거나 취소할 수 없어요.');
+        }
+        target.voterIds = [...target.voterIds, ME.userId];
+    }
+    return { proposalId, voteCount: target.voterIds.length, votedByMe: true };
 }
 
-/** 후보 삭제 (mock): 제안자 또는 방장. 이미 확정된 약속역은 바뀌지 않아요 */
-export async function deleteCandidate(roomId: string, candidateId: string): Promise<void> {
+/** 7.16 후보 삭제 (제안자 본인 또는 OWNER). 그 후보의 표도 함께 사라지고, 확정된 약속역은 바뀌지 않아요 */
+export async function deleteProposal(roomId: string, proposalId: string): Promise<void> {
     await wait(MOCK_DELAY_MS / 2);
-    const list = candidatesByRoom.get(roomId) ?? [];
-    const target = list.find(item => item.id === candidateId);
-    if (!target) return;
-    if (target.proposerId !== ME.userId) requireOwner(roomId);
-    candidatesByRoom.set(roomId, list.filter(item => item.id !== candidateId));
+    const room = requireMember(roomId);
+    const list = proposalsByRoom.get(roomId) ?? [];
+    const target = list.find(item => item.id === proposalId);
+    if (!target) throw new RoomError('PROPOSAL_NOT_FOUND', '이미 삭제된 후보예요.');
+    if (target.proposedBy.userId !== ME.userId && room.myRole !== 'OWNER') {
+        throw new RoomError('NOT_PROPOSAL_OWNER', '후보를 제안한 사람이나 방장만 지울 수 있어요.');
+    }
+    proposalsByRoom.set(roomId, list.filter(item => item.id !== proposalId));
+}
+
+/** 화면 확인용(?mock=proposals-full): 다른 멤버가 제안한 후보로 9개를 채워요 */
+export function mockFillProposals(roomId: string) {
+    const list = proposalsByRoom.get(roomId) ?? [];
+    const other = (membersByRoom.get(roomId) ?? []).find(item => item.userId !== ME.userId);
+    const free = MOCK_STATIONS.filter(item => item.isSupported && !list.some(p => p.station.id === item.id));
+    const added = free.slice(0, Math.max(0, MAX_PROPOSALS - list.length)).map((station, index) => ({
+        id: `proposal-${proposalSeq++}`,
+        station: stationRef(station.id),
+        proposedBy: { userId: other?.userId ?? 'user-x', nickname: other?.nickname ?? '멤버' },
+        resultId: null,
+        createdAt: new Date(Date.now() - (120 + index) * 60_000).toISOString(),
+        voterIds: [],
+    }));
+    proposalsByRoom.set(roomId, [...list, ...added]);
 }
 
 /**
@@ -652,7 +760,7 @@ export async function leaveRoom(roomId: string): Promise<LeaveRoomResult> {
 
     if (rest.length === 0) {
         membersByRoom.delete(roomId);
-        candidatesByRoom.delete(roomId);
+        proposalsByRoom.delete(roomId);
         return { roomDeleted: true, newOwnerId: null };
     }
     let newOwnerId: string | null = null;
@@ -661,6 +769,8 @@ export async function leaveRoom(roomId: string): Promise<LeaveRoomResult> {
         rest[0] = { ...rest[0], role: 'OWNER' };
     }
     membersByRoom.set(roomId, rest);
+    // 나간 멤버의 투표는 함께 삭제돼요 (7.17 cascade). 내가 제안한 후보는 그대로 남아요 (7.14)
+    for (const item of proposalsByRoom.get(roomId) ?? []) item.voterIds = item.voterIds.filter(id => id !== ME.userId);
     return { roomDeleted: false, newOwnerId };
 }
 

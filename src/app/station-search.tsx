@@ -202,15 +202,16 @@ export function findNearbySupported(origin: Station, count = 2): NearbyStation[]
  * 어디서 역을 고르는지.
  * - origin / destination : 혼자 이동 경로 검색(6.1)의 출발·도착역
  * - departure            : 약속방 내 내 출발역(7.7)
+ * - proposal             : 약속방 약속역 후보 직접 제안(7.14, #50)
  *
- * 세 경우 모두 서버가 isSupported=true만 받는다(STATION_UNSUPPORTED 422).
+ * 네 경우 모두 서버가 isSupported=true만 받는다(STATION_UNSUPPORTED 422).
  * 따라서 선택 규칙은 동일하고, purpose는 화면 문구에만 쓰인다.
  */
-export type StationPickerPurpose = 'origin' | 'destination' | 'departure';
+export type StationPickerPurpose = 'origin' | 'destination' | 'departure' | 'proposal';
 
 export type StationPickerOptions = {
     purpose: StationPickerPurpose;
-    /** 약속방 이름 등, 제목 문구에 붙일 맥락 (departure에서 사용) */
+    /** 약속방 이름 등, 제목 문구에 붙일 맥락 (departure·proposal에서 사용) */
     contextLabel?: string;
     /** 이미 선택돼 있는 역 — 목록에서 체크 표시 */
     selectedStationId?: number;
@@ -261,6 +262,11 @@ export function pickerCopy(purpose: StationPickerPurpose, contextLabel?: string)
             return {
                 chip: '약속방 · 내 출발역',
                 title: contextLabel ? `${contextLabel},\n어디서 출발하세요?` : '어디서\n출발하세요?',
+            };
+        case 'proposal':
+            return {
+                chip: '약속방 · 약속역 후보 제안',
+                title: '어느 역에서\n만나면 좋을까요?',
             };
     }
 }

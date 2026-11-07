@@ -59,16 +59,38 @@ export type RoomDetail = RoomSummary & {
     members: RoomMember[];
 };
 
-/** 약속역 후보 (1인 1표, 투표 변경·취소 없음) */
-export type RoomCandidate = {
+/**
+ * 7.15 약속역 후보 항목 (7.14 응답 + 득표 정보)
+ * - 1인 1표(방 전체), 투표 후 변경·취소 불가. 후보가 삭제되면 그 표도 함께 사라져요 (7.17)
+ * - station 은 명세상 { id, name } 이에요. lines 는 화면 노선 배지용 (TODO: 응답에 없으면 역 목록에서 채움)
+ */
+export type StationProposal = {
     id: string;
     station: RoomStation;
-    proposerId: string;
-    proposerNickname: string;
+    proposedBy: { userId: string; nickname: string };
+    /** 추천 결과 카드에서 제안했으면 그 결과의 resultId (8.1), 직접 제안이면 null */
+    resultId: string | null;
+    /** OWNER 가 확정한 약속역(selectedStation)과 같은 역인지 */
+    isSelected: boolean;
+    voteCount: number;
+    /** 내가 투표한 후보인지 (방당 한 후보에서만 true) */
+    votedByMe: boolean;
+    createdAt: string;
+};
+
+/** 7.15 GET /rooms/{roomId}/station-proposals 응답. items 는 최신 제안 순, 득표순 정렬은 프론트가 해요 */
+export type StationProposalList = {
+    selectedStation: RoomStation | null;
+    /** 방당 후보 최대 개수 (기본 9, 서버 설정값) */
+    maxProposals: number;
+    items: StationProposal[];
+};
+
+/** 7.17 PUT .../vote 응답 */
+export type ProposalVoteResult = {
+    proposalId: string;
     voteCount: number;
     votedByMe: boolean;
-    /** 추천 결과에서 제안한 경우 그 결과 카드의 resultId (7.14 source_result_id), 직접 제안이면 없음 */
-    sourceResultId?: string;
 };
 
 /** 7.8 나가기 응답 */
@@ -86,6 +108,11 @@ export type RoomErrorCode =
     | 'NOT_ROOM_MEMBER'
     | 'NOT_ROOM_OWNER'
     | 'ALREADY_VOTED'
+    | 'ALREADY_PROPOSED'
+    | 'PROPOSAL_LIMIT_EXCEEDED'
+    | 'PROPOSAL_NOT_FOUND'
+    | 'NOT_PROPOSAL_OWNER'
+    | 'RESULT_NOT_FOUND'
     | 'STATION_NOT_FOUND'
     | 'STATION_UNSUPPORTED'
     | 'VALIDATION_ERROR'
