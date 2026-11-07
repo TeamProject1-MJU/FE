@@ -86,7 +86,16 @@ export async function logout(failForTest = false): Promise<void> {
     clearSelectedRoute();
 }
 
-/** 4.6 회원 탈퇴. TODO: 저장한 토큰 삭제 */
-export async function withdraw(): Promise<void> {
+/**
+ * 4.6 회원 탈퇴 (#41)
+ * 서버: 참여 중인 모든 방에서 나가기(방장이면 승계, 마지막 멤버면 방 삭제) → soft delete → Refresh Token 모두 폐기.
+ * 성공하면 mock 로그인 상태와 이전 사용자의 화면 데이터(선택 경로)를 지웁니다.
+ * failForTest 가 true 면 실패를 흉내 냅니다(실패 상태 확인용).
+ * TODO: DELETE /users/me 호출, 저장한 Access·Refresh Token 삭제
+ */
+export async function withdraw(failForTest = false): Promise<void> {
     await wait(MOCK_DELAY_MS);
+    if (failForTest) throw new UserError('NETWORK_ERROR', '탈퇴하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.');
+    signOut();
+    clearSelectedRoute();
 }

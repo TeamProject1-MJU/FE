@@ -61,6 +61,8 @@ export default function MyScreen() {
     const [toast, setToast] = useState('');
     // 테스트용: /my?mock=logout-error → 첫 로그아웃 실패
     const [failLogout, setFailLogout] = useState(mock === 'logout-error');
+    // 테스트용: /my?mock=withdraw-error → 첫 탈퇴 실패
+    const [failWithdraw, setFailWithdraw] = useState(mock === 'withdraw-error');
 
     // 로그아웃한 뒤 이 화면으로 돌아오면 로그인 화면으로 보냅니다 (#40)
     useRedirectIfSignedOut();
@@ -256,14 +258,26 @@ export default function MyScreen() {
                     title="회원 탈퇴"
                     icon="person-remove-outline"
                     heading="정말 탈퇴하시겠어요?"
-                    description="탈퇴하면 참여 중인 모든 약속방에서 나가게 돼요. 방장이라면 권한이 위임되고, 마지막 참여자라면 방이 삭제돼요. 같은 카카오 계정으로 다시 로그인하면 계정은 복구되지만 약속방은 복구되지 않아요."
+                    description="탈퇴하면 아래처럼 처리돼요."
+                    // 명세 4.6·4.1·7.8 기준 안내 (명세에 없는 '카카오 계정 삭제', '모든 기록 즉시 삭제' 같은 표현은 쓰지 않음)
+                    details={[
+                        '참여 중인 모든 약속방에서 나가요. 그 방에서 한 후보 투표도 함께 지워져요.',
+                        '내가 방장인 방은 가장 먼저 들어온 참여자에게 방장이 넘어가요.',
+                        '내가 마지막 참여자인 방은 대화·추천 기록과 함께 삭제돼요.',
+                        '같은 카카오 계정으로 다시 로그인하면 계정은 복구되지만, 나간 약속방은 복구되지 않아요.',
+                    ]}
                     confirmLabel="탈퇴하기"
                     danger
+                    failText="탈퇴하지 못했어요."
+                    successText="탈퇴가 완료됐어요"
                     onClose={() => setSheet(null)}
                     onConfirm={async () => {
-                        await withdraw();
-                        router.replace('/login');
+                        const fail = failWithdraw;
+                        setFailWithdraw(false); // 다시 시도하면 성공하도록
+                        await withdraw(fail);
                     }}
+                    // 완료 안내를 잠깐 보여준 뒤, 이전 화면 기록 없이 로그인 화면으로 이동
+                    onDone={resetToLogin}
                 />
             )}
         </View>
@@ -415,8 +429,11 @@ function ConfirmSheet({
                           confirmLabel,
                           danger = false,
                           failText,
+                          details,
+                          successText,
                           onClose,
                           onConfirm,
+                          onDone,
                       }: {
     title: string;
     icon: IoniconName;
@@ -426,17 +443,30 @@ function ConfirmSheet({
     danger?: boolean;
     /** 실패했을 때 제목 (예: '로그아웃하지 못했어요.') */
     failText?: string;
+    /** 설명 아래 항목별 안내 */
+    details?: string[];
+    /** 있으면 성공 후 완료 안내를 잠깐 보여주고 onDone 을 부릅니다 */
+    successText?: string;
     onClose: () => void;
     onConfirm: () => Promise<void>;
+    onDone?: () => void;
 }) {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState('');
+    const [done, setDone] = useState(false);
+
+    useEffect(() => {
+        if (!done) return;
+        const timer = setTimeout(() => onDone?.(), 1200);
+        return () => clearTimeout(timer);
+    }, [done, onDone]);
 
     const confirm = async () => {
         setBusy(true);
         setError('');
         try {
             await onConfirm();
+            if (successText) setDone(true);
         } catch (caught) {
             // 실패하면 시트를 닫지 않고 안내 + 다시 시도
             setError(caught instanceof UserError ? caught.message : failText ?? '처리하지 못했어요. 다시 시도해 주세요.');
@@ -445,14 +475,37 @@ function ConfirmSheet({
         }
     };
 
-    // 처리 중에는 닫지 않습니다.
+    // 처리 중·완료 후에는 닫지 않습니다.
     const close = () => {
-        if (!busy) onClose();
+        if (!busy && !done) onClose();
     };
+
+    if (done) {
+        return (
+            <SheetFrame title={title} onClose={close}>
+                <View style={styles.doneBox} accessibilityLiveRegion="polite">
+                    <Ionicons name="checkmark-circle" size={44} color={MINT_DEEP} />
+                    <Text style={styles.heroHeading}>{successText}</Text>
+                    <Text style={styles.heroDescription}>로그인 화면으로 이동할게요.</Text>
+                </View>
+            </SheetFrame>
+        );
+    }
 
     return (
         <SheetFrame title={title} onClose={close}>
             <SheetHero icon={icon} heading={heading} description={description} />
+
+            {!!details?.length && (
+                <View style={styles.details}>
+                    {details.map(item => (
+                        <View key={item} style={styles.detailRow}>
+                            <View style={styles.detailDot} />
+                            <Text style={styles.detailText}>{item}</Text>
+                        </View>
+                    ))}
+                </View>
+            )}
 
             {!!error && (
                 <View style={styles.sheetError} accessibilityLiveRegion="polite">
@@ -837,6 +890,43 @@ const styles = StyleSheet.create({
         color: SECONDARY,
         fontSize: 12.5,
         fontWeight: '600',
+    },
+
+    details: {
+        marginTop: -6,
+        marginBottom: 6,
+        padding: 13,
+        gap: 8,
+        borderRadius: 13,
+        backgroundColor: BACKGROUND,
+    },
+
+    detailRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 8,
+    },
+
+    detailDot: {
+        width: 5,
+        height: 5,
+        marginTop: 7,
+        borderRadius: 3,
+        backgroundColor: SECONDARY,
+    },
+
+    detailText: {
+        flex: 1,
+        color: '#4b5468',
+        fontSize: 13,
+        fontWeight: '600',
+        lineHeight: 19,
+    },
+
+    doneBox: {
+        paddingTop: 22,
+        paddingBottom: 28,
+        alignItems: 'center',
     },
 
     sheetError: {
