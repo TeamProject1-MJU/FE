@@ -12,6 +12,8 @@ import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
+import { getMockRoom } from '@/services/room';
+
 const NAVY = '#0f1c3f';
 const MINT = '#2bcf9a';
 const PURPLE = '#6a5ae0';
@@ -58,7 +60,8 @@ export default function RoomDetailScreen() {
     const [votes, setVotes] = useState<Record<Role, string[]>>({ OWNER: [], MEMBER: [] });
     const [selectedStation, setSelectedStation] = useState<string | null>(null);
 
-    const isPreview = roomId === 'preview';
+    // #42: 약속방 목록(mock)에 있는 방도 미리보기 화면으로 엽니다. TODO: GET /rooms/{roomId} 연동 시 교체
+    const isPreview = roomId === 'preview' || !!getMockRoom(roomId);
     const max = [2, 3, 4].includes(Number(maxMembers)) ? Number(maxMembers) : 4;
     const isOwner = role === 'OWNER';
 
