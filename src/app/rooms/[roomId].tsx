@@ -10,11 +10,12 @@ import {
     TextInput,
     View,
 } from 'react-native';
-import * as Clipboard from 'expo-clipboard';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
+import { CalendarModal, TimeWheelModal } from '@/components/rooms/appointment-picker';
+import InviteCodeSheet from '@/components/rooms/invite-code-sheet';
 import { formatDday, formatMonthDay, formatTime } from '@/constants/home-mock';
 import {
     deleteCandidate,
@@ -23,9 +24,13 @@ import {
     fetchRoomDetail,
     getMyUserId,
     leaveRoom,
+    mockTransferOwner,
     previewLeave,
     proposeCandidate,
+    ROOM_NAME_MAX,
+    roomNameLength,
     setSelectedStation,
+    updateRoom,
     voteCandidate,
 } from '@/services/room';
 import { RoomError, type RoomCandidate, type RoomDetail, type RoomStation } from '@/types/room';
@@ -43,7 +48,7 @@ const GOLD = '#f2b705';
 
 type Tab = 'chat' | 'vote';
 type ChatMessage = { id: string; mine: boolean; sender: string; text: string };
-type Sheet = 'leave' | 'station' | null;
+type Sheet = 'edit' | 'leave' | 'station' | 'invite' | null;
 type LoadError = 'ROOM_NOT_FOUND' | 'NOT_ROOM_MEMBER' | 'UNKNOWN';
 
 /** 후보 제안용 예시 역 (TODO: 역 검색 화면 연결 후 stationId 로 교체) */
@@ -55,6 +60,8 @@ const STATION_OPTIONS: RoomStation[] = [
     { id: 110, name: '서울역', lines: [{ lineId: 1, lineName: '1호선', color: '#0052A4' }] },
 ];
 
+const pad = (value: number) => String(value).padStart(2, '0');
+const toDateValue = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 
 /**
  * 약속방 상세 화면 (#45, 상세설계서 그림 28·31·32·35·36·38·39, API 명세 v1.12 7.4~7.11)
@@ -66,7 +73,11 @@ const STATION_OPTIONS: RoomStation[] = [
  * - 다른 멤버의 출발역은 볼 수만 있고 편집 버튼은 내 카드에만 있어요.
  * - 하위 화면(추천·출발역 입력)에서 돌아오면 다시 조회해서 바뀐 mock 상태를 보여줍니다.
  *
- * 테스트용: /rooms/room-1?mock=error → 첫 조회 실패
+ * 테스트용:
+ *   /rooms/room-1?mock=error          → 첫 조회 실패
+ *   /rooms/room-4?mock=invite-error   → 초대 코드 첫 조회 실패 (다시 시도하면 성공)
+ *   /rooms/room-4?mock=owner-give     → 내 방장을 다른 멤버에게 넘긴 상태로 진입 (초대 코드·수정 버튼 사라짐)
+ *   /rooms/room-2?mock=owner-take     → 멤버인 방에서 내가 방장이 된 상태로 진입 (초대 코드 버튼 생김)
  * TODO: 실제 API·권한 검사·WebSocket 채팅은 후속 이슈에서 연동합니다.
  */
 export default function RoomDetailScreen() {
@@ -75,13 +86,15 @@ export default function RoomDetailScreen() {
     // 홈 '다가오는 약속' 카드(roomId: preview)는 같은 mock 방(room-2)으로 엽니다.
     const roomId = params.roomId === 'preview' ? 'room-2' : String(params.roomId);
     const failNext = useRef(params.mock === 'error');
+    const inviteFailNext = useRef(params.mock === 'invite-error');
+    const ownerMockApplied = useRef(false);
     const myUserId = getMyUserId();
 
     const [detail, setDetail] = useState<RoomDetail | null>(null);
     const [loadError, setLoadError] = useState<LoadError | null>(null);
-    const [inviteCode, setInviteCode] = useState<string | undefined>();
+    /** 헤더 칩 미리보기용 초대 코드 (7.9). 실패해도 칩은 남겨 두고 시트에서 다시 시도합니다 */
+    const [inviteCode, setInviteCode] = useState<string | null>(null);
     const [candidates, setCandidates] = useState<RoomCandidate[]>([]);
-    const [copied, setCopied] = useState(false);
     const [tab, setTab] = useState<Tab>('chat');
     const [sheet, setSheet] = useState<Sheet>(null);
     const [notice, setNotice] = useState('');
@@ -94,20 +107,31 @@ export default function RoomDetailScreen() {
         try {
             const fail = failNext.current;
             failNext.current = false; // 다시 시도하면 성공하도록
+            // 방장 변경 mock (#47): 진입 시 한 번만 적용. 실제로는 7.8 승계·탈퇴로만 바뀝니다
+            if (!ownerMockApplied.current && (params.mock === 'owner-give' || params.mock === 'owner-take')) {
+                ownerMockApplied.current = true;
+                mockTransferOwner(roomId, params.mock === 'owner-give' ? 'give' : 'take');
+            }
             const room = await fetchRoomDetail(roomId, fail ? 'error' : undefined);
             setDetail(room);
-            const [code, list] = await Promise.all([
-                room.myRole === 'OWNER' ? fetchInviteCode(roomId) : Promise.resolve(undefined),
-                fetchCandidates(roomId),
-            ]);
-            setInviteCode(code);
+            const list = await fetchCandidates(roomId);
             setCandidates(list);
+            // 초대 코드는 현재 OWNER 일 때만 7.9 로 따로 조회 (상세 응답엔 없음). 실패해도 상세는 그대로 보여줍니다
+            if (room.myRole === 'OWNER') {
+                try {
+                    setInviteCode((await fetchInviteCode(roomId)).roomCode);
+                } catch {
+                    setInviteCode(null);
+                }
+            } else {
+                setInviteCode(null);
+            }
         } catch (error) {
             setDetail(null);
             const code = error instanceof RoomError ? error.code : null;
             setLoadError(code === 'ROOM_NOT_FOUND' || code === 'NOT_ROOM_MEMBER' ? code : 'UNKNOWN');
         }
-    }, [roomId]);
+    }, [roomId, params.mock]);
 
     useFocusEffect(
         useCallback(() => {
@@ -132,12 +156,6 @@ export default function RoomDetailScreen() {
         }
     };
 
-    const copyCode = async () => {
-        if (!inviteCode) return;
-        await Clipboard.setStringAsync(inviteCode);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1800);
-    };
 
     /** 추천받기·내 출발역 설정: 출발역·조건 입력 화면 (그림 30) */
     const openRecommendations = () => {
@@ -185,11 +203,16 @@ export default function RoomDetailScreen() {
                 onBack={back}
                 right={
                     <View style={styles.headerRight}>
-                        {/* 그림 28 ❻ 초대 코드: 방장에게만 보입니다 (명세 7.9) */}
-                        {isOwner && !!inviteCode && (
-                            <Pressable style={styles.codeChip} onPress={copyCode} accessibilityLabel={`초대 코드 ${inviteCode} 복사`}>
-                                <Text style={styles.codeText}>{copied ? '복사됨' : inviteCode}</Text>
-                                <Ionicons name={copied ? 'checkmark' : 'copy-outline'} size={14} color={NAVY} />
+                        {/* 그림 28 ❻ 초대 코드: 현재 방장(myRole)에게만 보입니다 (명세 7.9). 누르면 초대 코드 시트 */}
+                        {isOwner && (
+                            <Pressable
+                                style={styles.codeChip}
+                                onPress={() => setSheet('invite')}
+                                accessibilityRole="button"
+                                accessibilityLabel={inviteCode ? `초대 코드 ${inviteCode.split('').join(' ')} 보기` : '초대 코드 보기'}
+                            >
+                                <Ionicons name="key-outline" size={14} color={NAVY} />
+                                <Text style={styles.codeText}>{inviteCode ?? '초대 코드'}</Text>
                             </Pressable>
                         )}
                         {/* 그림 28 ❽ 나가기: 모든 멤버 */}
@@ -216,7 +239,7 @@ export default function RoomDetailScreen() {
                         </View>
                         {/* 그림 28 ❾ 방 정보 수정: 방장만 */}
                         {isOwner && (
-                            <Pressable style={styles.editButton} onPress={() => router.push(`/rooms/${detail.id}/edit`)} accessibilityRole="button">
+                            <Pressable style={styles.editButton} onPress={() => setSheet('edit')} accessibilityRole="button">
                                 <Ionicons name="create-outline" size={14} color={WHITE} />
                                 <Text style={styles.editText}>수정</Text>
                             </Pressable>
@@ -441,6 +464,32 @@ export default function RoomDetailScreen() {
                     </View>
                 )}
             </ScrollView>
+
+            {sheet === 'edit' && (
+                <EditSheet
+                    detail={detail}
+                    bottomInset={insets.bottom}
+                    onClose={() => setSheet(null)}
+                    onSaved={async message => {
+                        setSheet(null);
+                        await load();
+                        setNotice(message);
+                    }}
+                />
+            )}
+            {detail && (
+                <InviteCodeSheet
+                    visible={sheet === 'invite'}
+                    roomId={detail.id}
+                    roomName={detail.name}
+                    bottomInset={insets.bottom}
+                    mockError={inviteFailNext.current}
+                    onClose={() => {
+                        inviteFailNext.current = false;
+                        setSheet(null);
+                    }}
+                />
+            )}
             {sheet === 'leave' && (
                 <LeaveSheet
                     detail={detail}
@@ -565,6 +614,101 @@ function SheetButtons({
                 {busy ? <ActivityIndicator color={WHITE} /> : <Text style={styles.sheetConfirmText}>{confirm}</Text>}
             </Pressable>
         </View>
+    );
+}
+
+/** 그림 31 방 정보 수정 (OWNER, 명세 7.5) */
+function EditSheet({
+                       detail,
+                       bottomInset,
+                       onClose,
+                       onSaved,
+                   }: {
+    detail: RoomDetail;
+    bottomInset: number;
+    onClose: () => void;
+    onSaved: (message: string) => void;
+}) {
+    const initial = detail.appointmentAt ? new Date(detail.appointmentAt) : null;
+    const [name, setName] = useState(detail.name);
+    const [date, setDate] = useState(initial ? toDateValue(initial) : '');
+    const [time, setTime] = useState(initial ? formatTime(initial) : '');
+    const [calendarOpen, setCalendarOpen] = useState(false);
+    const [timeOpen, setTimeOpen] = useState(false);
+    const [error, setError] = useState('');
+    const [saving, setSaving] = useState(false);
+    const length = roomNameLength(name);
+
+    const save = async () => {
+        if (length === 0) return setError('약속방 이름을 입력해 주세요.');
+        if (length > ROOM_NAME_MAX) return setError(`약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`);
+        if (!!date !== !!time) return setError('약속 날짜와 시간을 모두 고르거나, 둘 다 비워 두세요.');
+
+        let at: Date | null = null;
+        if (date && time) {
+            const [y, m, d] = date.split('-').map(Number);
+            const [h, min] = time.split(':').map(Number);
+            at = new Date(y, m - 1, d, h, min);
+            if (at.getTime() < Date.now()) return setError('현재 이후의 약속 날짜와 시간을 선택해 주세요.');
+        }
+
+        const patch: { name?: string; appointmentAt?: string | null } = {};
+        if (name.trim() !== detail.name) patch.name = name;
+        const nextAt = at ? at.toISOString() : null;
+        const timeChanged = (initial?.getTime() ?? null) !== (at?.getTime() ?? null);
+        if (timeChanged) patch.appointmentAt = nextAt;
+        if (Object.keys(patch).length === 0) return onClose();
+
+        setSaving(true);
+        setError('');
+        try {
+            await updateRoom(detail.id, patch);
+            onSaved(timeChanged ? '저장했어요. 약속 시각이 바뀌어 이전 추천 결과는 최신이 아니에요.' : '저장했어요.');
+        } catch (caught) {
+            setError(caught instanceof RoomError ? caught.message : '저장하지 못했어요. 다시 시도해 주세요.');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <BottomSheet bottomInset={bottomInset} onClose={onClose}>
+            <Text style={styles.sheetTitle}>방 정보 수정</Text>
+
+            <View style={styles.rowBetween}>
+                <Text style={styles.fieldLabel}>약속방 이름</Text>
+                <Text style={[styles.counter, length > ROOM_NAME_MAX && { color: RED }]}>{length}/{ROOM_NAME_MAX}</Text>
+            </View>
+            <TextInput style={[styles.input, length > ROOM_NAME_MAX && { borderColor: RED }]} value={name} onChangeText={value => { setName(value); setError(''); }} />
+
+            <Text style={styles.fieldLabel}>약속 시각 <Text style={styles.optional}>(선택)</Text></Text>
+            <View style={styles.pickRow}>
+                <Pressable style={styles.pickBox} onPress={() => setCalendarOpen(true)}>
+                    <Ionicons name="calendar-outline" size={18} color={NAVY} />
+                    <Text style={[styles.pickText, !date && styles.placeholder]}>{date || '날짜'}</Text>
+                </Pressable>
+                <Pressable style={styles.pickBox} onPress={() => setTimeOpen(true)}>
+                    <Ionicons name="time-outline" size={18} color={NAVY} />
+                    <Text style={[styles.pickText, !time && styles.placeholder]}>{time || '시간'}</Text>
+                </Pressable>
+            </View>
+            {(date || time) && (
+                <Pressable onPress={() => { setDate(''); setTime(''); setError(''); }} style={styles.clearLink}>
+                    <Ionicons name="close-circle" size={15} color={SECONDARY} />
+                    <Text style={styles.clearText}>약속 시각 지우기</Text>
+                </Pressable>
+            )}
+            <View style={styles.staleNote}>
+                <Ionicons name="alert-circle-outline" size={16} color={ORANGE} />
+                <Text style={styles.staleText}>약속 시각이 바뀌면 이전 추천 결과는 최신이 아니게 돼요.</Text>
+            </View>
+
+            {!!error && <Text style={styles.errorText}>{error}</Text>}
+            <SheetButtons cancel="취소" confirm="저장" busy={saving} onCancel={onClose} onConfirm={save} />
+
+            <CalendarModal visible={calendarOpen} value={date} onClose={() => setCalendarOpen(false)} onConfirm={value => { setDate(value); setError(''); }} />
+            <TimeWheelModal visible={timeOpen} value={time || '19:00'} onClose={() => setTimeOpen(false)} onConfirm={value => { setTime(value); setError(''); }} />
+        </BottomSheet>
     );
 }
 
@@ -731,5 +875,16 @@ const styles = StyleSheet.create({
     sheetPrimary: { backgroundColor: NAVY },
     sheetDanger: { backgroundColor: RED },
     sheetConfirmText: { color: WHITE, fontSize: 15, fontWeight: '800' },
+    fieldLabel: { marginTop: 4, marginBottom: 7, color: NAVY, fontSize: 13.5, fontWeight: '800' },
+    optional: { color: SECONDARY, fontWeight: '600' },
+    input: { height: 48, borderWidth: 1, borderColor: BORDER, borderRadius: 12, paddingHorizontal: 13, color: NAVY, fontSize: 15, marginBottom: 12, backgroundColor: '#fafbfc' },
+    pickRow: { flexDirection: 'row', gap: 8 },
+    pickBox: { flex: 1, height: 48, borderWidth: 1, borderColor: BORDER, borderRadius: 12, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: '#fafbfc' },
+    pickText: { color: NAVY, fontSize: 14.5, fontWeight: '700' },
+    placeholder: { color: '#a1a8b8', fontWeight: '600' },
+    clearLink: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start' },
+    clearText: { color: SECONDARY, fontSize: 12.5, fontWeight: '700' },
+    staleNote: { marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 6, padding: 10, borderRadius: 10, backgroundColor: '#fff6e0' },
+    staleText: { flex: 1, color: '#7a5600', fontSize: 12.5, fontWeight: '600' },
     errorText: { marginTop: 10, color: RED, fontSize: 13, fontWeight: '700' },
 });
