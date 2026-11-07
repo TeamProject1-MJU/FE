@@ -2,6 +2,7 @@ import { ComponentProps, ReactNode, useCallback, useEffect, useState } from 'rea
 import { router, useLocalSearchParams } from 'expo-router';
 import {
     ActivityIndicator,
+    BackHandler,
     KeyboardAvoidingView,
     Linking,
     Platform,
@@ -16,7 +17,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
-import { fetchMe, logout, updateNickname, validateNickname, withdraw } from '@/services/user';
+import { fetchMe, logout, nicknameLength, updateNickname, validateNickname, withdraw } from '@/services/user';
 import { NICKNAME_MAX, UserError, type User } from '@/types/user';
 
 const NAVY = '#0f1c3f';
@@ -215,6 +216,7 @@ export default function MyScreen() {
             {sheet === 'nickname' && user && (
                 <NicknameSheet
                     current={user.nickname}
+                    failFirstSave={mock === 'save-error'}
                     onClose={() => setSheet(null)}
                     onSaved={saved => {
                         setLoad({ kind: 'done', user: saved });
@@ -262,6 +264,16 @@ export default function MyScreen() {
 
 function SheetFrame({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
     const insets = useSafeAreaInsets();
+
+    // 안드로이드 뒤로 가기: 화면을 나가지 않고 시트만 닫습니다.
+    useEffect(() => {
+        const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+            onClose();
+            return true;
+        });
+        return () => subscription.remove();
+    }, [onClose]);
+
     return (
         <KeyboardAvoidingView
             style={styles.sheetLayer}
@@ -289,40 +301,52 @@ function SheetHero({ icon, heading, description }: { icon: IoniconName; heading:
     );
 }
 
-/** 그림 41 닉네임 수정 */
+/** 그림 41 닉네임 수정 (#39) */
 function NicknameSheet({
                            current,
+                           failFirstSave = false,
                            onClose,
                            onSaved,
                        }: {
     current: string;
+    /** 테스트용: 첫 저장을 실패시킵니다 */
+    failFirstSave?: boolean;
     onClose: () => void;
     onSaved: (user: User) => void;
 }) {
     const [value, setValue] = useState(current);
     const [saving, setSaving] = useState(false);
-    const [serverError, setServerError] = useState('');
+    const [saveError, setSaveError] = useState('');
+    const [failNext, setFailNext] = useState(failFirstSave);
 
-    const localError = validateNickname(value);
+    const inputError = validateNickname(value);
     const unchanged = value.trim() === current;
-    const disabled = !!localError || unchanged || saving;
+    const disabled = !!inputError || unchanged || saving;
 
     const save = async () => {
         if (disabled) return;
         setSaving(true);
-        setServerError('');
+        setSaveError('');
         try {
-            onSaved(await updateNickname(value));
+            onSaved(await updateNickname(value, failNext));
         } catch (error) {
-            setServerError(error instanceof UserError ? error.message : '저장하지 못했어요. 다시 시도해 주세요.');
+            // 실패해도 입력값은 그대로 두고, 다시 저장할 수 있게 합니다.
+            setSaveError(error instanceof UserError ? error.message : '저장하지 못했어요. 다시 시도해 주세요.');
+            setFailNext(false);
             setSaving(false);
         }
     };
 
-    const message = serverError || (value.length > 0 ? localError : null);
+    // 저장 중에는 닫지 않습니다.
+    const close = () => {
+        if (!saving) onClose();
+    };
+
+    const message = saveError || inputError;
+    const length = nicknameLength(value);
 
     return (
-        <SheetFrame title="닉네임 수정" onClose={onClose}>
+        <SheetFrame title="닉네임 수정" onClose={close}>
             <SheetHero icon="person-outline" heading="닉네임을 바꿀 수 있어요" description="2~20자로 입력해주세요." />
 
             <View style={[styles.input, !!message && styles.inputError]}>
@@ -331,9 +355,9 @@ function NicknameSheet({
                     value={value}
                     onChangeText={text => {
                         setValue(text);
-                        setServerError('');
+                        setSaveError('');
                     }}
-                    maxLength={NICKNAME_MAX}
+                    editable={!saving}
                     autoFocus
                     returnKeyType="done"
                     onSubmitEditing={save}
@@ -341,12 +365,12 @@ function NicknameSheet({
                     placeholder="닉네임"
                     placeholderTextColor={DISABLED}
                 />
-                <Text style={styles.counter}>
-                    {value.trim().length}/{NICKNAME_MAX}
+                <Text style={[styles.counter, length > NICKNAME_MAX && { color: RED }]}>
+                    {length}/{NICKNAME_MAX}
                 </Text>
             </View>
             <Text style={[styles.inputHelp, !!message && { color: RED }]}>
-                {message ?? '다른 사용자와 같은 닉네임도 쓸 수 있어요.'}
+                {message ?? '앞뒤 공백은 빼고 저장해요. 다른 사용자와 같은 닉네임도 쓸 수 있어요.'}
             </Text>
 
             <Pressable
@@ -354,15 +378,25 @@ function NicknameSheet({
                 onPress={save}
                 disabled={disabled}
                 accessibilityRole="button"
-                accessibilityState={{ disabled }}
+                accessibilityState={{ disabled, busy: saving }}
             >
-                {saving ? <ActivityIndicator color={CARD} /> : <Text style={styles.primaryText}>저장</Text>}
+                {saving ? (
+                    <ActivityIndicator color={CARD} />
+                ) : (
+                    <Text style={styles.primaryText}>{saveError ? '다시 저장' : '저장'}</Text>
+                )}
+            </Pressable>
+            <Pressable
+                style={({ pressed }) => [styles.secondary, pressed && styles.pressed]}
+                onPress={close}
+                disabled={saving}
+                accessibilityRole="button"
+            >
+                <Text style={styles.secondaryText}>취소</Text>
             </Pressable>
         </SheetFrame>
     );
 }
-
-/** 그림 42 로그아웃 확인 · 그림 43 회원 탈퇴 확인 */
 function ConfirmSheet({
                           title,
                           icon,
