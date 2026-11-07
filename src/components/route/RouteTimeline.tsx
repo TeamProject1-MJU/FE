@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
-import Congestion, { CONGESTION_STYLE } from '@/components/route/Congestion';
+import Congestion, { congestionColor } from '@/components/route/Congestion';
 import LineBadge from '@/components/route/LineBadge';
 import type { Congestion as CongestionData, Route, RouteStep } from '@/types/route';
 
@@ -36,10 +36,10 @@ function stepCongestion(step: RouteStep): CongestionData | null {
 }
 
 /** 정차역 하나의 혼잡도 색 (데이터 없으면 회색, 명세 6.2) */
-function stopColor(step: RouteStep, stopIndex: number) {
+/** 정차역 하나의 혼잡도 라벨 (색만으로 구분하지 않도록 글자도 함께, 명세 6.2) */
+function stopLabel(step: RouteStep, stopIndex: number) {
     const congestion = step.stations?.[stopIndex]?.congestion;
-    if (!congestion?.supported || !congestion.level) return UNSUPPORTED;
-    return CONGESTION_STYLE[congestion.level].color;
+    return congestion?.supported && congestion.level ? congestion.levelLabel ?? '' : '미제공';
 }
 
 type Props = {
@@ -106,7 +106,7 @@ export default function RouteTimeline({ route, onSignCheck }: Props) {
                                         {first?.name}
                                     </Text>
                                     <View style={styles.flex} />
-                                    <Congestion congestion={stepCongestion(step)} compact />
+                                    <Congestion congestion={stepCongestion(step)} slot={step.stations?.[0]} compact />
                                 </View>
 
                                 <View style={[styles.row, styles.meta]}>
@@ -141,9 +141,25 @@ export default function RouteTimeline({ route, onSignCheck }: Props) {
                                             <View
                                                 style={[
                                                     styles.stopLevel,
-                                                    { backgroundColor: stopColor(step, stopIndex + 1) },
+                                                    {
+                                                        backgroundColor: congestionColor(
+                                                            step.stations?.[stopIndex + 1]?.congestion,
+                                                        ),
+                                                    },
                                                 ]}
                                             />
+                                            <Text
+                                                style={[
+                                                    styles.stopLevelText,
+                                                    {
+                                                        color: congestionColor(
+                                                            step.stations?.[stopIndex + 1]?.congestion,
+                                                        ),
+                                                    },
+                                                ]}
+                                            >
+                                                {stopLabel(step, stopIndex + 1)}
+                                            </Text>
                                         </View>
                                     ))}
 
@@ -346,7 +362,14 @@ const styles = StyleSheet.create({
     stopLevel: {
         width: 8,
         height: 8,
+        marginRight: 5,
         borderRadius: 4,
+    },
+
+    stopLevelText: {
+        minWidth: 44,
+        fontSize: 12,
+        fontWeight: '700',
     },
 
     signButton: {

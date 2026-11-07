@@ -105,7 +105,11 @@ export default function RouteGuideScreen() {
                                 </Text>
                             )}
                             <View style={styles.flex} />
-                            <Congestion congestion={selected.route.summary.congestion} compact />
+                            <Congestion
+                                congestion={selected.route.summary.congestion}
+                                slot={selected.route.steps.find(step => step.type === 'SUBWAY')?.stations?.[0]}
+                                compact
+                            />
                         </View>
 
                         <View style={styles.metaRow}>

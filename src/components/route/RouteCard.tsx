@@ -2,6 +2,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import Congestion from '@/components/route/Congestion';
+import CongestionBar from '@/components/route/CongestionBar';
 import LineBadge from '@/components/route/LineBadge';
 import type { Congestion as CongestionData, Route, RouteStep } from '@/types/route';
 
@@ -85,7 +86,7 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
                     </View>
                 )}
                 <View style={styles.flex} />
-                <Congestion congestion={summary.congestion} />
+                <Congestion congestion={summary.congestion} slot={subwaySteps[0]?.stations?.[0]} />
             </View>
 
             {/* 소요 시간 + 노선 막대 */}
@@ -99,16 +100,9 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
                 </View>
 
                 <View style={styles.flex}>
+                    {/* 정차역별 혼잡도 색 (명세 6.2) */}
                     <View style={styles.lineBar}>
-                        {route.steps.map((step, index) => (
-                            <View
-                                key={`${route.routeId}-bar-${index}`}
-                                style={{
-                                    flex: Math.max(step.durationSec, 60),
-                                    backgroundColor: step.type === 'WALKING' ? WALK : step.line?.color ?? WALK,
-                                }}
-                            />
-                        ))}
+                        <CongestionBar route={route} />
                     </View>
 
                     <View style={styles.lineLabels}>
@@ -169,7 +163,7 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
                                     {step.direction ?? ''} · {Math.max(step.stops.length - 1, 0)}개역 {toMinutes(step.durationSec)}분
                                 </Text>
                                 <View style={styles.flex} />
-                                <Congestion congestion={stepCongestion(step)} compact />
+                                <Congestion congestion={stepCongestion(step)} slot={step.stations?.[0]} compact />
                             </View>
                         </View>
                     </View>
@@ -259,11 +253,7 @@ const styles = StyleSheet.create({
     },
 
     lineBar: {
-        height: 5,
         marginTop: 12,
-        flexDirection: 'row',
-        borderRadius: 3,
-        overflow: 'hidden',
     },
 
     lineLabels: {
