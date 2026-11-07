@@ -137,9 +137,32 @@ export function getMockRoom(roomId: string): RoomSummary | undefined {
     return rooms.find(room => room.id === roomId);
 }
 
-/** 7.1 방 생성: 만든 사람이 방장(OWNER) */
-export async function createRoom(request: CreateRoomRequest): Promise<CreatedRoom> {
+/** 방장이 볼 수 있는 초대 코드 (방 id → 코드, mock) */
+const inviteCodes = new Map<string, string>([['room-1', 'K7Q2MX'], ['room-4', 'B8N3TD']]);
+
+/** 초대 코드 mock 발급: 명세 부록 A ck_room_code '^[A-Z0-9]{6}$' 형식 */
+function issueRoomCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 헷갈리는 0·O·1·I 제외
+    let code = '';
+    do {
+        code = Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    } while ([...inviteCodes.values()].includes(code) || code in JOINABLE || FULL_CODES.has(code));
+    return code;
+}
+
+/** 7.9 초대 코드 조회 (OWNER 만). 방장이 아니면 undefined */
+export async function fetchInviteCode(roomId: string): Promise<string | undefined> {
     await wait(MOCK_DELAY_MS);
+    return getMockRoom(roomId)?.myRole === 'OWNER' ? inviteCodes.get(roomId) : undefined;
+}
+
+/**
+ * 7.1 방 생성 (#43): 만든 사람이 방장(OWNER), 처음 인원 1명, 정원 4명 고정.
+ * failForTest 가 true 면 실패를 흉내 냅니다(실패 상태 확인용).
+ */
+export async function createRoom(request: CreateRoomRequest, failForTest = false): Promise<CreatedRoom> {
+    await wait(MOCK_DELAY_MS);
+    if (failForTest) throw new RoomError('NETWORK_ERROR', '약속방을 만들지 못했어요. 잠시 후 다시 시도해 주세요.');
     const name = request.name.trim();
     const length = roomNameLength(name);
     if (length === 0) throw new RoomError('VALIDATION_ERROR', '약속방 이름을 입력해 주세요.');
@@ -155,8 +178,11 @@ export async function createRoom(request: CreateRoomRequest): Promise<CreatedRoo
         appointmentAt: request.appointmentAt,
         selectedStation: null,
     };
+    const roomCode = issueRoomCode();
+    inviteCodes.set(room.id, roomCode);
     rooms = [...rooms, room];
-    return { ...room, roomCode: 'NEW' + String(seq).padStart(3, '0'), ownerId: 'me' };
+    // 응답의 roomCode 는 생성자(방장)에게만 내려옵니다 (명세 7.1)
+    return { ...room, roomCode, ownerId: 'me' };
 }
 
 /** 7.2 초대 코드로 참여. mock 코드: A3K9PZ(참여 가능), FULL44(정원 초과) */
