@@ -1,9 +1,8 @@
-import { useCallback, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import {
     ActivityIndicator,
     KeyboardAvoidingView,
-    Modal,
     Platform,
     Pressable,
     ScrollView,
@@ -16,6 +15,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import InviteCodeSheet from '@/components/rooms/invite-code-sheet';
+import RoomLeaveSheet from '@/components/rooms/room-leave-sheet';
+import { subscribeRoomMockChanges } from '@/stores/room-mock-events';
 import ProposalPanel, { type ProposalState } from '@/components/rooms/proposal-panel';
 import SelectedStationControls from '@/components/rooms/selected-station-controls';
 import { useSelectedStation } from '@/hooks/use-selected-station';
@@ -28,11 +29,13 @@ import {
     fetchProposals,
     fetchRoomDetail,
     getMyUserId,
-    leaveRoom,
     mockFillProposals,
     mockTransferOwner,
-    previewLeave,
     updateMyDeparture,
+    getLeaveMockRoomId,
+    mockLeaveRoomMember,
+    parseLeaveRoomScenario,
+    prepareLeaveMock,
 } from '@/services/room';
 import { RoomError, type RoomDetail } from '@/types/room';
 
@@ -82,9 +85,27 @@ export default function RoomDetailScreen() {
     const insets = useSafeAreaInsets();
     const params = useLocalSearchParams<{ roomId: string; mock?: string; tab?: string }>();
     // 홈 '다가오는 약속' 카드(roomId: preview)는 같은 mock 방(room-2)으로 엽니다.
-    const roomId = params.roomId === 'preview' ? 'room-2' : String(params.roomId);
+    const baseRoomId =
+        params.roomId === 'preview'
+            ? 'room-2'
+            : String(params.roomId);
+
+    const leaveScenario = parseLeaveRoomScenario(params.mock);
+
+    const roomId = getLeaveMockRoomId(
+        baseRoomId,
+        leaveScenario,
+    );
+
+    const leaveMock =
+        leaveScenario === 'leave-error' ||
+        leaveScenario === 'leave-busy'
+            ? leaveScenario
+            : undefined;
     const failNext = useRef(params.mock === 'error');
-    const inviteFailNext = useRef(params.mock === 'invite-error');
+    const [inviteFailNext, setInviteFailNext] = useState(
+        params.mock === 'invite-error',
+    );
     const departureFailNext = useRef<'error' | 'unsupported' | undefined>(
         params.mock === 'departure-error' ? 'error' : params.mock === 'departure-unsupported' ? 'unsupported' : undefined,
     );
@@ -131,6 +152,8 @@ export default function RoomDetailScreen() {
     const load = useCallback(async () => {
         setLoadError(null);
         try {
+            prepareLeaveMock(roomId, leaveScenario);
+
             const fail = failNext.current;
             failNext.current = false; // 다시 시도하면 성공하도록
             // 방장 변경 mock (#47): 진입 시 한 번만 적용. 실제로는 7.8 승계·탈퇴로만 바뀝니다
@@ -156,7 +179,50 @@ export default function RoomDetailScreen() {
             const code = error instanceof RoomError ? error.code : null;
             setLoadError(code === 'ROOM_NOT_FOUND' || code === 'NOT_ROOM_MEMBER' ? code : 'UNKNOWN');
         }
-    }, [roomId, params.mock, loadProposals]);
+    }, [roomId, params.mock, loadProposals, leaveScenario]);
+
+    useEffect(() => {
+        return subscribeRoomMockChanges(change => {
+            if (
+                change.roomId !== roomId ||
+                change.leftUserId === myUserId
+            ) {
+                return;
+            }
+
+            void load();
+        });
+    }, [roomId, myUserId, load]);
+
+    useEffect(() => {
+        // leave-successor 쿼리에서만 다른 방장의 퇴장을 재현해요.
+        if (
+            leaveScenario !== 'leave-successor' ||
+            !detail ||
+            detail.id !== roomId ||
+            detail.myRole !== 'MEMBER'
+        ) {
+            return;
+        }
+
+        const ownerId = detail.ownerId;
+
+        const timer = setTimeout(() => {
+            try {
+                mockLeaveRoomMember(roomId, ownerId);
+            } catch (error) {
+                setNotice(
+                    error instanceof RoomError
+                        ? error.message
+                        : '방 상태를 갱신하지 못했어요.',
+                );
+
+                void load();
+            }
+        }, 2000);
+
+        return () => clearTimeout(timer);
+    }, [detail, leaveScenario, roomId, load]);
 
     useFocusEffect(
         useCallback(() => {
@@ -485,21 +551,44 @@ export default function RoomDetailScreen() {
                     roomId={detail.id}
                     roomName={detail.name}
                     bottomInset={insets.bottom}
-                    mockError={inviteFailNext.current}
+                    mockError={inviteFailNext}
                     onClose={() => {
-                        inviteFailNext.current = false;
+                        setInviteFailNext(false);
                         setSheet(null);
                     }}
                 />
             )}
             {sheet === 'leave' && (
-                <LeaveSheet
+                <RoomLeaveSheet
                     detail={detail}
                     bottomInset={insets.bottom}
+                    mock={leaveMock}
                     onClose={() => setSheet(null)}
-                    onLeft={() => {
+                    onLeft={result => {
                         setSheet(null);
-                        router.replace('/rooms');
+
+                        const nextOwnerName = result.newOwnerId
+                            ? detail.members.find(
+                            member =>
+                                member.userId === result.newOwnerId,
+                        )?.nickname ?? '다른 참여자'
+                            : '';
+
+                        if (router.canDismiss()) {
+                            router.dismissAll();
+                        }
+
+                        router.replace({
+                            pathname: '/rooms',
+                            params: {
+                                leaveResult: result.roomDeleted
+                                    ? 'deleted'
+                                    : result.newOwnerId
+                                        ? 'transferred'
+                                        : 'left',
+                                nextOwnerName,
+                            },
+                        });
                     }}
                 />
             )}
@@ -558,89 +647,6 @@ function ErrorState({ error, onRetry }: { error: LoadError; onRetry: () => void 
                 </Pressable>
             )}
         </View>
-    );
-}
-
-function BottomSheet({ children, bottomInset, onClose }: { children: ReactNode; bottomInset: number; onClose: () => void }) {
-    return (
-        <Modal transparent animationType="fade" visible onRequestClose={onClose}>
-            <View style={styles.backdrop}>
-                <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-                <View style={[styles.sheet, { paddingBottom: bottomInset + 20 }]}>{children}</View>
-            </View>
-        </Modal>
-    );
-}
-
-function SheetButtons({
-                          cancel,
-                          confirm,
-                          danger,
-                          busy,
-                          onCancel,
-                          onConfirm,
-                      }: {
-    cancel: string;
-    confirm: string;
-    danger?: boolean;
-    busy?: boolean;
-    onCancel: () => void;
-    onConfirm: () => void;
-}) {
-    return (
-        <View style={styles.sheetButtons}>
-            <Pressable style={[styles.sheetButton, styles.sheetCancel]} onPress={onCancel} disabled={busy}>
-                <Text style={styles.sheetCancelText}>{cancel}</Text>
-            </Pressable>
-            <Pressable style={[styles.sheetButton, danger ? styles.sheetDanger : styles.sheetPrimary, busy && styles.disabled]} onPress={onConfirm} disabled={busy}>
-                {busy ? <ActivityIndicator color={WHITE} /> : <Text style={styles.sheetConfirmText}>{confirm}</Text>}
-            </Pressable>
-        </View>
-    );
-}
-
-/** 그림 32 방 나가기 (명세 7.8) */
-function LeaveSheet({
-                        detail,
-                        bottomInset,
-                        onClose,
-                        onLeft,
-                    }: {
-    detail: RoomDetail;
-    bottomInset: number;
-    onClose: () => void;
-    onLeft: () => void;
-}) {
-    const [leaving, setLeaving] = useState(false);
-    const [error, setError] = useState('');
-    const { willDelete, nextOwner } = previewLeave(detail);
-
-    const leave = async () => {
-        setLeaving(true);
-        setError('');
-        try {
-            await leaveRoom(detail.id);
-            onLeft();
-        } catch {
-            setError('나가지 못했어요. 다시 시도해 주세요.');
-            setLeaving(false);
-        }
-    };
-
-    return (
-        <BottomSheet bottomInset={bottomInset} onClose={onClose}>
-            <Text style={styles.sheetTitle}>약속방에서 나갈까요?</Text>
-            <Text style={styles.sheetBody}>
-                {willDelete
-                    ? '마지막 멤버라서 나가면 약속방이 삭제돼요.'
-                    : nextOwner
-                        ? `방장이 나가면 가장 먼저 들어온 ${nextOwner}님이 방장이 돼요.`
-                        : '나가면 이 약속방의 채팅과 후보를 더 볼 수 없어요.'}
-            </Text>
-            <Text style={styles.sheetHint}>초대 코드를 다시 받으면 정원 안에서 다시 들어올 수 있어요.</Text>
-            {!!error && <Text style={styles.errorText}>{error}</Text>}
-            <SheetButtons cancel="취소" confirm="나가기" danger busy={leaving} onCancel={onClose} onConfirm={leave} />
-        </BottomSheet>
     );
 }
 

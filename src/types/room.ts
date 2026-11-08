@@ -99,6 +99,18 @@ export type ProposalVoteResult = {
     votedByMe: boolean;
 };
 
+/** #53 나가기 요청 실패 확인용 쿼리 값 */
+export type LeaveRoomMock =
+    | 'leave-error'
+    | 'leave-busy';
+
+/** #53 역할·승계·삭제 흐름 확인용 쿼리 값 */
+export type LeaveRoomScenario =
+    | LeaveRoomMock
+    | 'leave-last'
+    | 'leave-tie'
+    | 'leave-successor';
+
 /** 7.8 나가기 응답 */
 export type LeaveRoomResult = {
     roomDeleted: boolean;

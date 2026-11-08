@@ -21,11 +21,14 @@
  */
 
 import { MOCK_STATIONS } from '@/app/station-search';
+import { emitRoomMockChange } from '@/stores/room-mock-events';
 import {
     RoomError,
     type CreateRoomRequest,
     type CreatedRoom,
     type LeaveRoomResult,
+    type LeaveRoomMock,
+    type LeaveRoomScenario,
     type ProposalVoteResult,
     type RoomDetail,
     type RoomMember,
@@ -457,9 +460,13 @@ export async function joinRoom(roomCode: string): Promise<{ roomId: string }> {
     return { roomId: target.room.id };
 }
 
-/** 7.6 멤버 목록 (mock). 목록을 모르는 기존 mock 방은 빈 배열 */
-export async function fetchRoomMembers(roomId: string): Promise<RoomMember[]> {
+/** 7.6 멤버 목록. 나간 방과 참여하지 않은 방은 조회할 수 없어요. */
+export async function fetchRoomMembers(
+    roomId: string,
+): Promise<RoomMember[]> {
     await wait(MOCK_DELAY_MS);
+    requireMember(roomId);
+
     return membersByRoom.get(roomId) ?? [];
 }
 
@@ -488,9 +495,16 @@ export async function updateMyDeparture(
     await wait(MOCK_DELAY_MS);
     if (mock) departureFailOnce.set(roomId, mock);
 
-    const room = getMockRoom(roomId);
+    requireMember(roomId);
+
     const members = membersByRoom.get(roomId);
-    if (!room || !members) throw new RoomError('ROOM_NOT_FOUND', '약속방을 찾을 수 없어요.');
+
+    if (!members) {
+        throw new RoomError(
+            'ROOM_NOT_FOUND',
+            '약속방을 찾을 수 없어요.',
+        );
+    }
     const meIndex = members.findIndex(item => item.userId === ME.userId);
     if (meIndex < 0) throw new RoomError('NOT_ROOM_MEMBER', '참여하지 않은 약속방이에요.');
 
@@ -564,9 +578,15 @@ export function getMyUserId() {
 }
 
 function requireOwner(roomId: string) {
-    const room = getMockRoom(roomId);
-    if (!room) throw new RoomError('ROOM_NOT_FOUND', '약속방을 찾을 수 없어요.');
-    if (room.myRole !== 'OWNER') throw new RoomError('NOT_ROOM_OWNER', '방장만 할 수 있어요.');
+    const room = requireMember(roomId);
+
+    if (room.myRole !== 'OWNER') {
+        throw new RoomError(
+            'NOT_ROOM_OWNER',
+            '방장만 할 수 있어요.',
+        );
+    }
+
     return room;
 }
 
@@ -757,7 +777,31 @@ export async function setSelectedStation(
 
 function requireMember(roomId: string) {
     const room = getMockRoom(roomId);
-    if (!room) throw new RoomError('ROOM_NOT_FOUND', '약속방을 찾을 수 없어요.');
+
+    if (!room) {
+        const exists = Object.values(INVITE_ONLY).some(
+            item => item.room.id === roomId,
+        );
+
+        throw new RoomError(
+            exists ? 'NOT_ROOM_MEMBER' : 'ROOM_NOT_FOUND',
+            exists
+                ? '참여하지 않은 약속방이에요.'
+                : '약속방을 찾을 수 없어요.',
+        );
+    }
+
+    if (
+        !membersByRoom
+            .get(roomId)
+            ?.some(item => item.userId === ME.userId)
+    ) {
+        throw new RoomError(
+            'NOT_ROOM_MEMBER',
+            '참여하지 않은 약속방이에요.',
+        );
+    }
+
     return room;
 }
 
@@ -865,44 +909,461 @@ export function mockFillProposals(roomId: string) {
     proposalsByRoom.set(roomId, [...list, ...added]);
 }
 
-/**
- * 7.8 나가기
- * - 방장이 나가면 가장 먼저 들어온(joinedAt) 멤버가 방장이 됩니다.
- * - 마지막 멤버가 나가면 방이 삭제됩니다.
- */
-export async function leaveRoom(roomId: string): Promise<LeaveRoomResult> {
-    await wait(MOCK_DELAY_MS);
-    rooms = rooms.filter(room => room.id !== roomId);
-    // 나간 방은 같은 코드로 다시 참여할 수 있도록 내 멤버 정보를 지웁니다.
-    const members = membersByRoom.get(roomId) ?? [];
-    const wasOwner = ownerOf(members)?.userId === ME.userId;
-    const rest = members
-        .filter(item => item.userId !== ME.userId)
-        .sort((a, b) => new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime());
+/* ───────────────── 방 나가기·승계·삭제 (#53) ───────────────── */
 
-    if (rest.length === 0) {
-        membersByRoom.delete(roomId);
-        proposalsByRoom.delete(roomId);
-        return { roomDeleted: true, newOwnerId: null };
+const leaveFailureUsed = new Set<string>();
+const membershipRowIds = new Map<string, Map<string, string>>();
+
+let membershipRowSequence = 1;
+
+/**
+ * mock 서버 내부의 멤버 행 ID예요. userId와 구분해요.
+ * TODO: 명세 7.8의 동률 기준 id 필드는 백엔드와 확인해요.
+ * 실제 승계 결과는 서버 응답 newOwnerId를 기준으로 반영해요.
+ */
+function ensureMembershipIds(roomId: string, members: RoomMember[]) {
+    const ids =
+        membershipRowIds.get(roomId) ?? new Map<string, string>();
+
+    for (const member of members) {
+        if (!ids.has(member.userId)) {
+            ids.set(
+                member.userId,
+                `mock-membership-${String(
+                    membershipRowSequence++,
+                ).padStart(12, '0')}`,
+            );
+        }
     }
-    let newOwnerId: string | null = null;
-    if (wasOwner) {
-        newOwnerId = rest[0].userId;
-        rest[0] = { ...rest[0], role: 'OWNER' };
-    }
-    membersByRoom.set(roomId, rest);
-    // 나간 멤버의 투표는 함께 삭제돼요 (7.17 cascade). 내가 제안한 후보는 그대로 남아요 (7.14)
-    for (const item of proposalsByRoom.get(roomId) ?? []) item.voterIds = item.voterIds.filter(id => id !== ME.userId);
-    return { roomDeleted: false, newOwnerId };
+
+    membershipRowIds.set(roomId, ids);
+    return ids;
 }
 
-/** 나가기 확인 문구용: 내가 나가면 누가 방장이 되는지, 방이 삭제되는지 */
-export function previewLeave(detail: RoomDetail) {
-    const rest = detail.members
-        .filter(item => item.userId !== ME.userId)
-        .sort((a, b) => new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime());
-    return {
-        willDelete: rest.length === 0,
-        nextOwner: detail.myRole === 'OWNER' ? rest[0]?.nickname ?? null : null,
+for (const [roomId, members] of membersByRoom) {
+    ensureMembershipIds(roomId, members);
+}
+
+function sortLeaveMembers(roomId: string, members: RoomMember[]) {
+    const ids = ensureMembershipIds(roomId, members);
+
+    return [...members].sort((a, b) => {
+        const time =
+            Date.parse(a.joinedAt) - Date.parse(b.joinedAt);
+
+        if (time) return time;
+
+        const left = ids.get(a.userId)!;
+        const right = ids.get(b.userId)!;
+
+        return left < right ? -1 : left > right ? 1 : 0;
+    });
+}
+
+function leaveTarget(roomId: string, userId: string) {
+    const invited = Object.values(INVITE_ONLY).find(
+        item => item.room.id === roomId,
+    );
+    const room = getMockRoom(roomId) ?? invited?.room;
+
+    if (!room) {
+        throw new RoomError(
+            'ROOM_NOT_FOUND',
+            '약속방을 찾을 수 없어요.',
+        );
+    }
+
+    const members =
+        membersByRoom.get(roomId) ?? invited?.members ?? [];
+    const member = members.find(item => item.userId === userId);
+
+    if (!member) {
+        throw new RoomError(
+            'NOT_ROOM_MEMBER',
+            '이미 나갔거나 참여하지 않은 약속방이에요.',
+        );
+    }
+
+    return { room, members, member };
+}
+
+/** 검증이 끝난 뒤 한 번에 mock 상태를 반영해요. 중간에 await하지 않아요. */
+function applyRoomLeave(
+    roomId: string,
+    userId: string,
+): LeaveRoomResult {
+    const { room, members, member } = leaveTarget(roomId, userId);
+
+    const rest = sortLeaveMembers(roomId, members).filter(
+        item => item.userId !== userId,
+    );
+
+    const newOwnerId =
+        member.role === 'OWNER' && rest.length > 0
+            ? rest[0].userId
+            : null;
+
+    const result: LeaveRoomResult = {
+        roomDeleted: rest.length === 0,
+        newOwnerId,
     };
+
+    if (result.roomDeleted) {
+        rooms = rooms.filter(item => item.id !== roomId);
+
+        membersByRoom.delete(roomId);
+        proposalsByRoom.delete(roomId);
+        confirmedAtByRoom.delete(roomId);
+        inviteCodes.delete(roomId);
+        inviteFailOnce.delete(roomId);
+        departureFailOnce.delete(roomId);
+        updateFailOnce.delete(roomId);
+        membershipRowIds.delete(roomId);
+
+        for (const [code, id] of codeToRoomId) {
+            if (id === roomId) {
+                codeToRoomId.delete(code);
+                BUSY_ONCE.delete(code);
+            }
+        }
+
+        for (const [code, target] of Object.entries(INVITE_ONLY)) {
+            if (target.room.id === roomId) {
+                delete INVITE_ONLY[code];
+                BUSY_ONCE.delete(code);
+            }
+        }
+
+        for (const key of leaveFailureUsed) {
+            if (key.startsWith(`${roomId}:`)) {
+                leaveFailureUsed.delete(key);
+            }
+        }
+    } else {
+        // 내 목록에서 없어져도 다른 멤버의 방과 기록은 유지해요.
+        const nextMembers = rest.map(item =>
+            newOwnerId
+                ? {
+                    ...item,
+                    role:
+                        item.userId === newOwnerId
+                            ? ('OWNER' as const)
+                            : ('MEMBER' as const),
+                }
+                : { ...item },
+        );
+
+        const me = nextMembers.find(
+            item => item.userId === ME.userId,
+        );
+
+        const nextRoom: RoomSummary = {
+            ...room,
+            memberCount: nextMembers.length,
+            myRole: me?.role ?? 'MEMBER',
+        };
+
+        const code =
+            inviteCodes.get(roomId) ??
+            [...codeToRoomId].find(
+                ([, id]) => id === roomId,
+            )?.[0] ??
+            Object.entries(INVITE_ONLY).find(
+                ([, item]) => item.room.id === roomId,
+            )?.[0] ??
+            issueRoomCode();
+
+        membersByRoom.set(roomId, nextMembers);
+        membershipRowIds.get(roomId)?.delete(userId);
+
+        // 나간 사람의 투표만 제거하고, 그 사람이 제안한 후보는 유지해요.
+        for (const proposal of proposalsByRoom.get(roomId) ?? []) {
+            proposal.voterIds = proposal.voterIds.filter(
+                id => id !== userId,
+            );
+        }
+
+        inviteCodes.set(roomId, code);
+        codeToRoomId.set(code, roomId);
+
+        // 나간 뒤에도 기존 초대 코드로 다시 참여할 수 있어요.
+        INVITE_ONLY[code] = {
+            room: nextRoom,
+            members: nextMembers,
+        };
+
+        rooms = rooms.filter(item => item.id !== roomId);
+
+        if (me) {
+            rooms = [...rooms, nextRoom];
+        }
+    }
+
+    // 채팅·추천 메모리 정리와 남은 멤버 화면 재조회에 사용해요.
+    // 실제 WebSocket 이벤트는 아니에요.
+    emitRoomMockChange({
+        roomId,
+        leftUserId: userId,
+        ...result,
+    });
+
+    return result;
+}
+
+/**
+ * TODO: API v1.12 7.8
+ * DELETE /api/v1/rooms/{roomId}/members/me
+ *
+ * 응답 { roomDeleted, newOwnerId }와
+ * 기존 Promise<LeaveRoomResult>를 유지해요.
+ *
+ * DB 트랜잭션·실제 SYSTEM 메시지·WebSocket 처리는 이번 범위 밖이에요.
+ * 실패 주입은 방별 첫 요청에만 적용해요.
+ * 실패 전에 방 상태를 바꾸지 않아요.
+ */
+export async function leaveRoom(
+    roomId: string,
+    mock?: LeaveRoomMock,
+): Promise<LeaveRoomResult> {
+    if (selectedStationInFlight.has(roomId)) {
+        throw new RoomError(
+            'ROOM_BUSY',
+            '다른 요청을 처리하는 중이에요. 잠시 후 다시 시도해 주세요.',
+        );
+    }
+
+    selectedStationInFlight.add(roomId);
+
+    try {
+        await wait(MOCK_DELAY_MS);
+
+        leaveTarget(roomId, ME.userId);
+
+        const key = `${roomId}:${mock ?? ''}`;
+
+        if (mock && !leaveFailureUsed.has(key)) {
+            leaveFailureUsed.add(key);
+
+            throw new RoomError(
+                mock === 'leave-busy' ? 'ROOM_BUSY' : 'NETWORK_ERROR',
+                '나가기를 완료하지 못했어요. 잠시 후 다시 시도해 주세요.',
+            );
+        }
+
+        return applyRoomLeave(roomId, ME.userId);
+    } finally {
+        selectedStationInFlight.delete(roomId);
+    }
+}
+
+/** 나가기 확인 문구와 실제 승계에 같은 정렬 기준을 사용해요. */
+export function previewLeave(detail: RoomDetail) {
+    const me = detail.members.find(
+        item => item.userId === ME.userId,
+    );
+
+    const rest = sortLeaveMembers(
+        detail.id,
+        detail.members,
+    ).filter(item => item.userId !== ME.userId);
+
+    const next =
+        me?.role === 'OWNER' ? rest[0] : undefined;
+
+    return {
+        willDelete: !!me && rest.length === 0,
+        nextOwner: next?.nickname ?? null,
+        nextOwnerId: next?.userId ?? null,
+    };
+}
+
+/** 확인용 방은 한 번만 준비하고, 삭제 후 다시 만들지 않아요. */
+const preparedLeaveRooms = new Set<string>();
+
+export function parseLeaveRoomScenario(
+    value?: string,
+): LeaveRoomScenario | undefined {
+    switch (value) {
+        case 'leave-error':
+        case 'leave-busy':
+        case 'leave-last':
+        case 'leave-tie':
+        case 'leave-successor':
+            return value;
+    }
+}
+
+/** 확인용 방을 원래 방과 분리해 기존 데이터를 변경하지 않아요. */
+export function getLeaveMockRoomId(
+    roomId: string,
+    scenario?: LeaveRoomScenario,
+) {
+    switch (scenario) {
+        case 'leave-last':
+            return 'room-leave-last';
+        case 'leave-tie':
+            return 'room-leave-tie';
+        case 'leave-successor':
+            return 'room-leave-successor';
+        default:
+            return roomId;
+    }
+}
+
+/** 명시한 mock 쿼리에서만 확인용 방을 준비해요. */
+export function prepareLeaveMock(
+    roomId: string,
+    scenario?: LeaveRoomScenario,
+) {
+    const names = {
+        'leave-last': '마지막 멤버 확인',
+        'leave-tie': '같은 입장 시각 승계 확인',
+        'leave-successor': '남은 멤버 권한 확인',
+    };
+
+    if (
+        !scenario ||
+        !(scenario in names) ||
+        roomId !== getLeaveMockRoomId('', scenario)
+    ) {
+        return;
+    }
+
+    if (preparedLeaveRooms.has(roomId)) return;
+
+    preparedLeaveRooms.add(roomId);
+
+    const joinedAt = new Date(
+        Date.now() - 86_400_000,
+    ).toISOString();
+
+    const earlier = new Date(
+        Date.now() - 172_800_000,
+    ).toISOString();
+
+    const me: RoomMember = {
+        ...ME,
+        role: scenario === 'leave-successor' ? 'MEMBER' : 'OWNER',
+        joinedAt: earlier,
+        departureStation: STATION.gangnam,
+    };
+
+    let members: RoomMember[] = [me];
+
+    if (scenario === 'leave-tie') {
+        members = [
+            me,
+            {
+                userId: 'leave-user-a',
+                nickname: '준호',
+                role: 'MEMBER',
+                joinedAt,
+                departureStation: STATION.hongdae,
+            },
+            {
+                userId: 'leave-user-z',
+                nickname: '유나',
+                role: 'MEMBER',
+                joinedAt,
+                departureStation: STATION.jamsil,
+            },
+        ];
+    } else if (scenario === 'leave-successor') {
+        members = [
+            {
+                userId: 'leave-owner',
+                nickname: '선호',
+                role: 'OWNER',
+                joinedAt: new Date(
+                    Date.now() - 259_200_000,
+                ).toISOString(),
+                departureStation: STATION.hongdae,
+            },
+            me,
+            {
+                userId: 'leave-member',
+                nickname: '준호',
+                role: 'MEMBER',
+                joinedAt,
+                departureStation: STATION.jamsil,
+            },
+        ];
+    }
+
+    const room: RoomSummary = {
+        id: roomId,
+        name: names[scenario as keyof typeof names],
+        status: 'OPEN',
+        myRole: me.role,
+        memberCount: members.length,
+        maxMembers: MAX_MEMBERS,
+        appointmentAt: daysFromToday(2, 19),
+        selectedStation: null,
+    };
+
+    membersByRoom.set(roomId, members);
+    ensureMembershipIds(roomId, members);
+
+    if (scenario === 'leave-tie') {
+        // userId 순서와 반대로 설정해서 멤버 행 ID 기준인지 확인해요.
+        membershipRowIds
+            .get(roomId)!
+            .set('leave-user-a', 'mock-tie-row-0002');
+
+        membershipRowIds
+            .get(roomId)!
+            .set('leave-user-z', 'mock-tie-row-0001');
+    }
+
+    const code = issueRoomCode();
+
+    inviteCodes.set(roomId, code);
+    codeToRoomId.set(code, roomId);
+
+    rooms = [...rooms, room];
+
+    const owner = ownerOf(members)!;
+
+    proposalsByRoom.set(roomId, [
+        seedProposal(
+            roomId,
+            105,
+            owner.nickname,
+            [owner.nickname],
+            30,
+        ),
+    ]);
+}
+
+/**
+ * 남은 내 화면에서 다른 멤버의 퇴장을 재현하는 mock 전용 함수예요.
+ * 실제 API가 아니에요.
+ */
+export function mockLeaveRoomMember(
+    roomId: string,
+    userId: string,
+): LeaveRoomResult {
+    if (userId === ME.userId) {
+        throw new RoomError(
+            'VALIDATION_ERROR',
+            '내 나가기는 확인창에서 진행해 주세요.',
+        );
+    }
+
+    leaveTarget(roomId, ME.userId);
+
+    if (selectedStationInFlight.has(roomId)) {
+        throw new RoomError(
+            'ROOM_BUSY',
+            '다른 요청을 처리하고 있어요.',
+        );
+    }
+
+    selectedStationInFlight.add(roomId);
+
+    try {
+        return applyRoomLeave(roomId, userId);
+    } finally {
+        selectedStationInFlight.delete(roomId);
+    }
 }
