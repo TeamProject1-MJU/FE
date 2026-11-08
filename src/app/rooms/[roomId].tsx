@@ -2,12 +2,13 @@ import { useCallback, useRef, useState, type ReactNode } from 'react';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import {
     ActivityIndicator,
+    KeyboardAvoidingView,
     Modal,
+    Platform,
     Pressable,
     ScrollView,
     StyleSheet,
     Text,
-    TextInput,
     View,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -18,6 +19,8 @@ import InviteCodeSheet from '@/components/rooms/invite-code-sheet';
 import ProposalPanel, { type ProposalState } from '@/components/rooms/proposal-panel';
 import SelectedStationControls from '@/components/rooms/selected-station-controls';
 import { useSelectedStation } from '@/hooks/use-selected-station';
+import RoomChatPanel from '@/components/rooms/chat-panel';
+import { useRoomChat } from '@/hooks/use-room-chat';
 import { openStationPicker, type Station } from '@/app/station-search';
 import { formatDday, formatMonthDay, formatTime } from '@/constants/home-mock';
 import {
@@ -45,7 +48,6 @@ const ORANGE = '#c77a00';
 const GOLD = '#f2b705';
 
 type Tab = 'chat' | 'vote';
-type ChatMessage = { id: string; mine: boolean; sender: string; text: string };
 type Sheet = 'leave' | 'invite' | null;
 type LoadError = 'ROOM_NOT_FOUND' | 'NOT_ROOM_MEMBER' | 'UNKNOWN';
 
@@ -104,9 +106,6 @@ export default function RoomDetailScreen() {
     const [tab, setTab] = useState<Tab>(params.tab === 'vote' ? 'vote' : 'chat');
     const [sheet, setSheet] = useState<Sheet>(null);
     const [notice, setNotice] = useState('');
-    const [messages, setMessages] = useState<ChatMessage[]>([]);
-    const [messageInput, setMessageInput] = useState('');
-
 
     /** 7.15 후보 목록 재조회 (제안·삭제·투표·확정 후, 화면 복귀 시) */
     const loadProposals = useCallback(async () => {
@@ -174,6 +173,9 @@ export default function RoomDetailScreen() {
         onChanged: load,
     });
 
+    const chat = useRoomChat(roomId, params.mock);
+    const roomScroll = useRef<ScrollView>(null);
+
     /** 추천받기·내 출발역 설정: 출발역·조건 입력 화면 (그림 30) */
     const openRecommendations = () => {
         if (!detail) return;
@@ -220,15 +222,6 @@ export default function RoomDetailScreen() {
         );
     };
 
-    const sendMessage = () => {
-        const value = messageInput.trim();
-        if (!value) return;
-        const me = detail?.members.find(item => item.userId === myUserId);
-        setMessages(prev => [...prev, { id: `m-${Date.now()}`, mine: true, sender: me?.nickname ?? '나', text: value }]);
-        setMessageInput('');
-        if (value.toLowerCase().includes('@linkro')) setNotice('@LinkRo AI 응답은 채팅·AI API 연동 후 받을 수 있어요.');
-    };
-
     if (!detail) {
         return (
             <View style={styles.root}>
@@ -253,7 +246,11 @@ export default function RoomDetailScreen() {
     const leaders = topVotes > 0 ? proposalItems.filter(item => item.voteCount === topVotes) : [];
 
     return (
-        <View style={styles.root}>
+        <KeyboardAvoidingView
+            style={styles.root}
+            behavior="padding"
+            enabled={Platform.OS === 'ios'}
+        >
             <StatusBar style="dark" />
             <Header
                 topInset={insets.top}
@@ -280,7 +277,15 @@ export default function RoomDetailScreen() {
                 }
             />
 
-            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}>
+            <ScrollView
+                ref={roomScroll}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="interactive"
+                contentContainerStyle={[
+                    styles.content,
+                    { paddingBottom: insets.bottom + 32 },
+                ]}
+            >
                 {/* 방 정보 카드 */}
                 <View style={styles.roomCard}>
                     <View style={styles.rowBetween}>
@@ -435,42 +440,18 @@ export default function RoomDetailScreen() {
                 </View>
 
                 {tab === 'chat' ? (
-                    <View style={styles.panel}>
-                        {messages.length === 0 ? (
-                            <View style={styles.chatEmpty}>
-                                <Ionicons name="chatbubbles-outline" size={30} color="#b9c0cc" />
-                                <Text style={styles.chatEmptyTitle}>대화를 시작해보세요</Text>
-                                <Text style={styles.caption}>@LinkRo 를 부르면 AI가 약속 정하는 걸 도와줘요</Text>
-                            </View>
-                        ) : (
-                            <View style={styles.chatList}>
-                                {messages.map(message => (
-                                    <View key={message.id} style={[styles.messageRow, message.mine && styles.messageRowMine]}>
-                                        <View style={[styles.bubble, message.mine && styles.bubbleMine]}>
-                                            <Text style={[styles.bubbleText, message.mine && styles.bubbleTextMine]}>{message.text}</Text>
-                                        </View>
-                                    </View>
-                                ))}
-                            </View>
-                        )}
-                        <View style={styles.composer}>
-                            <TextInput
-                                style={styles.chatInput}
-                                placeholder="메시지 입력 · @LinkRo"
-                                placeholderTextColor="#a1a8b8"
-                                value={messageInput}
-                                onChangeText={setMessageInput}
-                                maxLength={500}
-                                onSubmitEditing={sendMessage}
-                            />
-                            <Pressable style={styles.sendButton} onPress={sendMessage} accessibilityLabel="보내기">
-                                <Ionicons name="arrow-up" size={20} color={WHITE} />
-                            </Pressable>
-                        </View>
-                        <Text style={styles.mockNote}>채팅은 화면 미리보기예요. 실시간 채팅은 연동 후 제공돼요.</Text>
-                    </View>
+                    <RoomChatPanel
+                        key={chat.scope}
+                        controller={chat}
+                        myUserId={myUserId}
+                        members={detail.members}
+                        onInputFocus={() => {
+                            roomScroll.current?.scrollToEnd({
+                                animated: true,
+                            });
+                        }}
+                    />
                 ) : (
-                    /* 약속역 후보·투표 (#50, 그림 35·38·39) */
                     <ProposalPanel
                         roomId={detail.id}
                         roomName={detail.name}
@@ -478,7 +459,11 @@ export default function RoomDetailScreen() {
                         myUserId={myUserId}
                         memberCount={detail.memberCount}
                         state={proposals}
-                        onReload={proposals.status === 'error' ? retryProposals : loadProposals}
+                        onReload={
+                            proposals.status === 'error'
+                                ? retryProposals
+                                : loadProposals
+                        }
                         onConfirm={stationManager.choose}
                         confirmBusy={stationManager.busy}
                         onOpenRecommendations={openRecommendations}
@@ -518,7 +503,7 @@ export default function RoomDetailScreen() {
                     }}
                 />
             )}
-        </View>
+        </KeyboardAvoidingView>
     );
 }
 
