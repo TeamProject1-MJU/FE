@@ -5,6 +5,12 @@
 /** 방 상태: 약속역(selectedStation)이 있으면 CONFIRMED, 없으면 OPEN (명세 7장) */
 export type RoomStatus = 'OPEN' | 'CONFIRMED';
 export type RoomRole = 'OWNER' | 'MEMBER';
+/** #51 약속역 확정·변경·해제 화면 검증용 */
+export type SelectedStationMock =
+    | 'busy'
+    | 'unsupported'
+    | 'missing'
+    | 'owner-lost';
 
 /**
  * 확정된 약속역

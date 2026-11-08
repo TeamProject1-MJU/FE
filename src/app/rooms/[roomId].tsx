@@ -16,6 +16,8 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import InviteCodeSheet from '@/components/rooms/invite-code-sheet';
 import ProposalPanel, { type ProposalState } from '@/components/rooms/proposal-panel';
+import SelectedStationControls from '@/components/rooms/selected-station-controls';
+import { useSelectedStation } from '@/hooks/use-selected-station';
 import { openStationPicker, type Station } from '@/app/station-search';
 import { formatDday, formatMonthDay, formatTime } from '@/constants/home-mock';
 import {
@@ -27,7 +29,6 @@ import {
     mockFillProposals,
     mockTransferOwner,
     previewLeave,
-    setSelectedStation,
     updateMyDeparture,
 } from '@/services/room';
 import { RoomError, type RoomDetail } from '@/types/room';
@@ -45,7 +46,7 @@ const GOLD = '#f2b705';
 
 type Tab = 'chat' | 'vote';
 type ChatMessage = { id: string; mine: boolean; sender: string; text: string };
-type Sheet = 'leave' | 'station' | 'invite' | null;
+type Sheet = 'leave' | 'invite' | null;
 type LoadError = 'ROOM_NOT_FOUND' | 'NOT_ROOM_MEMBER' | 'UNKNOWN';
 
 /**
@@ -105,7 +106,7 @@ export default function RoomDetailScreen() {
     const [notice, setNotice] = useState('');
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [messageInput, setMessageInput] = useState('');
-    const [busy, setBusy] = useState(false);
+
 
     /** 7.15 후보 목록 재조회 (제안·삭제·투표·확정 후, 화면 복귀 시) */
     const loadProposals = useCallback(async () => {
@@ -167,20 +168,11 @@ export default function RoomDetailScreen() {
     const back = () => (router.canGoBack() ? router.back() : router.replace('/rooms'));
     const isOwner = detail?.myRole === 'OWNER';
 
-    const run = async (task: () => Promise<void>, success?: string) => {
-        setBusy(true);
-        setNotice('');
-        try {
-            await task();
-            await load();
-            if (success) setNotice(success);
-        } catch (error) {
-            setNotice(error instanceof RoomError ? error.message : '요청을 처리하지 못했어요. 다시 시도해 주세요.');
-        } finally {
-            setBusy(false);
-        }
-    };
-
+    const stationManager = useSelectedStation({
+        detail,
+        mock: params.mock,
+        onChanged: load,
+    });
 
     /** 추천받기·내 출발역 설정: 출발역·조건 입력 화면 (그림 30) */
     const openRecommendations = () => {
@@ -336,11 +328,6 @@ export default function RoomDetailScreen() {
                                         <Text style={styles.stationName}>{station.name}</Text>
                                     </View>
                                 </View>
-                                {isOwner && (
-                                    <Pressable style={styles.stripButton} onPress={() => setSheet('station')}>
-                                        <Text style={styles.stripButtonText}>관리</Text>
-                                    </Pressable>
-                                )}
                             </>
                         ) : (
                             <>
@@ -361,6 +348,11 @@ export default function RoomDetailScreen() {
                         )}
                     </View>
                 </View>
+                <SelectedStationControls
+                    detail={detail}
+                    controller={stationManager}
+                    bottomInset={insets.bottom}
+                />
 
                 {/* 멤버 · 출발역 (그림 28 ❼) */}
                 <View style={styles.panel}>
@@ -487,8 +479,8 @@ export default function RoomDetailScreen() {
                         memberCount={detail.memberCount}
                         state={proposals}
                         onReload={proposals.status === 'error' ? retryProposals : loadProposals}
-                        onConfirm={target => run(() => setSelectedStation(detail.id, target), `${target.name}역으로 약속역을 확정했어요.`)}
-                        confirmBusy={busy}
+                        onConfirm={stationManager.choose}
+                        confirmBusy={stationManager.busy}
                         onOpenRecommendations={openRecommendations}
                         mockProposeError={params.mock === 'propose-error'}
                         mockVoteError={params.mock === 'vote-error'}
@@ -525,26 +517,6 @@ export default function RoomDetailScreen() {
                         router.replace('/rooms');
                     }}
                 />
-            )}
-            {sheet === 'station' && station && (
-                <BottomSheet bottomInset={insets.bottom} onClose={() => setSheet(null)}>
-                    <Text style={styles.sheetTitle}>약속역 관리</Text>
-                    <Text style={styles.sheetBody}>
-                        지금 약속역은 {station.name}이에요. 다른 역으로 바꾸려면 후보에서 '약속역으로 확정'을 누르세요.
-                    </Text>
-                    <Text style={styles.sheetHint}>해제해도 약속역 후보와 투표는 그대로 남아요.</Text>
-                    <SheetButtons
-                        cancel="닫기"
-                        confirm="약속역 해제"
-                        danger
-                        busy={busy}
-                        onCancel={() => setSheet(null)}
-                        onConfirm={async () => {
-                            await run(() => setSelectedStation(detail.id, null), '약속역을 해제했어요.');
-                            setSheet(null);
-                        }}
-                    />
-                </BottomSheet>
             )}
         </View>
     );
