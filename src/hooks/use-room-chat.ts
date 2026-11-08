@@ -1,0 +1,455 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useFocusEffect } from 'expo-router';
+
+import {
+    chatContentLength,
+    fetchChatMessages,
+    getPendingChatAiCount,
+    sendChatMessage,
+    subscribeChat,
+} from '@/services/chat';
+import type {
+    ChatMessage,
+    ChatMockScenario,
+    PendingChatMessage,
+} from '@/types/chat';
+import { RoomError } from '@/types/room';
+
+type State = {
+    scope: string;
+    status: 'loading' | 'ready' | 'error';
+    messages: ChatMessage[];
+    pending: PendingChatMessage[];
+    draft: string;
+    error: string | null;
+    inputError: string | null;
+    historyError: string | null;
+    historyLoading: boolean;
+    refreshing: boolean;
+    hasMore: boolean;
+    blocked: boolean;
+    aiPending: number;
+};
+
+type Context = {
+    scope: string;
+    active: boolean;
+    loaded: boolean;
+    blocked: boolean;
+    refreshing: boolean;
+    refreshAgain: boolean;
+    historyLoading: boolean;
+    hasMore: boolean;
+    cursor: string | null;
+    sending: Set<string>;
+};
+
+const initial = (scope: string): State => ({
+    scope,
+    status: 'loading',
+    messages: [],
+    pending: [],
+    draft: '',
+    error: null,
+    inputError: null,
+    historyError: null,
+    historyLoading: false,
+    refreshing: false,
+    hasMore: false,
+    blocked: false,
+    aiPending: 0,
+});
+
+function parseMock(value?: string): ChatMockScenario | undefined {
+    switch (value) {
+        case 'chat-empty':
+        case 'chat-error':
+        case 'chat-send-error':
+        case 'chat-ai-error':
+        case 'chat-history-error':
+            return value;
+    }
+}
+
+/** 화면에서는 시간순으로 표시하고, ID는 중복 제거에만 사용해요. */
+export function mergeChatMessages(
+    current: ChatMessage[],
+    incoming: ChatMessage[],
+) {
+    const unique = new Map(
+        current.map(message => [message.id, message]),
+    );
+
+    incoming.forEach(message => unique.set(message.id, message));
+
+    return [...unique.values()].sort(
+        (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt),
+    );
+}
+
+const errorText = (error: unknown) =>
+    error instanceof RoomError
+        ? error.message
+        : '요청을 완료하지 못했어요. 다시 시도해 주세요.';
+
+const denied = (error: unknown) =>
+    error instanceof RoomError &&
+    (error.code === 'NOT_ROOM_MEMBER' || error.code === 'ROOM_NOT_FOUND');
+
+let clientSequence = 1;
+
+export function useRoomChat(roomId: string, mock?: string) {
+    const scenario = parseMock(mock);
+    const scope = `${roomId}:${scenario ?? 'normal'}`;
+
+    const [state, setState] = useState<State>(() => initial(scope));
+    const context = useRef<Context | null>(null);
+    const draftRef = useRef('');
+
+    const update = useCallback(
+        (ctx: Context, change: (previous: State) => State) => {
+            if (!ctx.active) return;
+
+            setState(previous =>
+                ctx.active
+                    ? change(
+                        previous.scope === ctx.scope
+                            ? previous
+                            : initial(ctx.scope),
+                    )
+                    : previous,
+            );
+        },
+        [],
+    );
+
+    const refresh = useCallback(async () => {
+        const ctx = context.current;
+
+        if (!ctx?.active || ctx.scope !== scope) return;
+
+        if (ctx.refreshing) {
+            ctx.refreshAgain = true;
+            return;
+        }
+
+        ctx.refreshing = true;
+
+        update(ctx, previous => ({
+            ...previous,
+            refreshing: true,
+            error: null,
+            status: ctx.loaded ? previous.status : 'loading',
+        }));
+
+        try {
+            do {
+                ctx.refreshAgain = false;
+
+                const page = await fetchChatMessages(roomId, {
+                    mock: scenario,
+                });
+
+                if (!ctx.active) return;
+
+                if (!ctx.loaded) {
+                    ctx.cursor = page.nextCursor;
+                    ctx.hasMore = page.hasMore;
+                }
+
+                ctx.loaded = true;
+                ctx.blocked = false;
+
+                update(ctx, previous => ({
+                    ...previous,
+                    status: 'ready',
+                    error: null,
+                    blocked: false,
+                    hasMore: ctx.hasMore,
+                    messages: mergeChatMessages(
+                        previous.messages,
+                        [...page.items].reverse(),
+                    ),
+                    aiPending: getPendingChatAiCount(roomId, scenario),
+                }));
+            } while (ctx.refreshAgain && ctx.active);
+        } catch (error) {
+            if (denied(error)) ctx.blocked = true;
+
+            update(ctx, previous => ({
+                ...previous,
+                status: ctx.loaded && !ctx.blocked ? 'ready' : 'error',
+                error: errorText(error),
+                blocked: ctx.blocked,
+                messages: ctx.blocked ? [] : previous.messages,
+                pending: ctx.blocked ? [] : previous.pending,
+                aiPending: ctx.blocked ? 0 : previous.aiPending,
+            }));
+        } finally {
+            ctx.refreshing = false;
+
+            update(ctx, previous => ({
+                ...previous,
+                refreshing: false,
+            }));
+        }
+    }, [roomId, scenario, scope, update]);
+
+    useEffect(() => {
+        const ctx: Context = {
+            scope,
+            active: true,
+            loaded: false,
+            blocked: false,
+            refreshing: false,
+            refreshAgain: false,
+            historyLoading: false,
+            hasMore: false,
+            cursor: null,
+            sending: new Set(),
+        };
+
+        context.current = ctx;
+        draftRef.current = '';
+
+        const unsubscribe = subscribeChat(roomId, () => {
+            update(ctx, previous => ({
+                ...previous,
+                aiPending: getPendingChatAiCount(roomId, scenario),
+            }));
+
+            void refresh();
+        });
+
+        return () => {
+            ctx.active = false;
+            unsubscribe();
+        };
+    }, [roomId, scenario, scope, refresh, update]);
+
+    useFocusEffect(
+        useCallback(() => {
+            void refresh();
+        }, [refresh]),
+    );
+
+    const loadOlder = async () => {
+        const ctx = context.current;
+
+        if (
+            !ctx?.active ||
+            ctx.scope !== scope ||
+            !ctx.loaded ||
+            ctx.blocked ||
+            ctx.historyLoading ||
+            !ctx.hasMore ||
+            !ctx.cursor
+        ) {
+            return;
+        }
+
+        ctx.historyLoading = true;
+
+        update(ctx, previous => ({
+            ...previous,
+            historyLoading: true,
+            historyError: null,
+        }));
+
+        try {
+            const page = await fetchChatMessages(roomId, {
+                cursor: ctx.cursor,
+                mock: scenario,
+            });
+
+            if (!ctx.active) return;
+
+            ctx.cursor = page.nextCursor;
+            ctx.hasMore = page.hasMore;
+
+            update(ctx, previous => ({
+                ...previous,
+                hasMore: page.hasMore,
+                messages: mergeChatMessages(
+                    previous.messages,
+                    [...page.items].reverse(),
+                ),
+            }));
+        } catch (error) {
+            if (denied(error)) {
+                void refresh();
+                return;
+            }
+
+            update(ctx, previous => ({
+                ...previous,
+                historyError: errorText(error),
+            }));
+        } finally {
+            ctx.historyLoading = false;
+
+            update(ctx, previous => ({
+                ...previous,
+                historyLoading: false,
+            }));
+        }
+    };
+
+    const deliver = async (entry: PendingChatMessage) => {
+        const ctx = context.current;
+
+        if (
+            !ctx?.active ||
+            ctx.scope !== scope ||
+            !ctx.loaded ||
+            ctx.blocked ||
+            ctx.sending.has(entry.clientId)
+        ) {
+            return;
+        }
+
+        ctx.sending.add(entry.clientId);
+
+        const queued = {
+            ...entry,
+            status: 'sending' as const,
+            errorMessage: undefined,
+        };
+
+        update(ctx, previous => ({
+            ...previous,
+            inputError: null,
+            pending: [
+                ...previous.pending.filter(
+                    item => item.clientId !== entry.clientId,
+                ),
+                queued,
+            ],
+        }));
+
+        try {
+            const result = await sendChatMessage(
+                roomId,
+                { content: entry.content },
+                { clientId: entry.clientId, mock: scenario },
+            );
+
+            update(ctx, previous => ({
+                ...previous,
+                messages: mergeChatMessages(
+                    previous.messages,
+                    [result.message],
+                ),
+                pending: previous.pending.filter(
+                    item => item.clientId !== entry.clientId,
+                ),
+                aiPending: getPendingChatAiCount(roomId, scenario),
+            }));
+        } catch (error) {
+            if (denied(error)) ctx.blocked = true;
+
+            update(ctx, previous =>
+                ctx.blocked
+                    ? {
+                        ...previous,
+                        status: 'error',
+                        blocked: true,
+                        error: errorText(error),
+                        messages: [],
+                        pending: [],
+                        aiPending: 0,
+                    }
+                    : {
+                        ...previous,
+                        pending: previous.pending.map(item =>
+                            item.clientId === entry.clientId
+                                ? {
+                                    ...item,
+                                    status: 'failed',
+                                    errorMessage: errorText(error),
+                                }
+                                : item,
+                        ),
+                    },
+            );
+        } finally {
+            ctx.sending.delete(entry.clientId);
+        }
+    };
+
+    const setDraft = (value: string) => {
+        const ctx = context.current;
+
+        if (!ctx?.active || ctx.scope !== scope) return;
+
+        draftRef.current = value;
+
+        update(ctx, previous => ({
+            ...previous,
+            draft: value,
+            inputError: null,
+        }));
+    };
+
+    const send = () => {
+        const ctx = context.current;
+
+        if (
+            !ctx?.active ||
+            ctx.scope !== scope ||
+            !ctx.loaded ||
+            ctx.blocked
+        ) {
+            return;
+        }
+
+        const content = draftRef.current.trim();
+
+        if (!content || chatContentLength(content) > 1000) {
+            update(ctx, previous => ({
+                ...previous,
+                inputError: '메시지는 1,000자까지 입력해 주세요.',
+            }));
+            return;
+        }
+
+        draftRef.current = '';
+
+        update(ctx, previous => ({
+            ...previous,
+            draft: '',
+            inputError: null,
+        }));
+
+        void deliver({
+            clientId: `chat-client-${Date.now()}-${clientSequence++}`,
+            content,
+            createdAt: new Date().toISOString(),
+            status: 'sending',
+        });
+    };
+
+    const retrySend = (entry: PendingChatMessage) => {
+        if (entry.status === 'failed') {
+            void deliver(entry);
+        }
+    };
+
+    const current = state.scope === scope ? state : initial(scope);
+    const length = chatContentLength(current.draft);
+
+    return {
+        ...current,
+        length,
+        setDraft,
+        send,
+        retrySend,
+        loadOlder,
+        reload: refresh,
+        canSend:
+            current.status === 'ready' &&
+            !current.blocked &&
+            length > 0 &&
+            length <= 1000,
+    };
+}
