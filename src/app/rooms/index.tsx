@@ -34,7 +34,21 @@ export default function RoomsScreen() {
     const insets = useSafeAreaInsets();
     const tabBarHeight = useTabBarHeight();
     // 테스트용: /rooms?mock=empty → 빈 목록, /rooms?mock=error → 조회 실패
-    const { mock } = useLocalSearchParams<{ mock?: string }>();
+    const { mock, leaveResult, nextOwnerName } =
+        useLocalSearchParams<{
+            mock?: string;
+            leaveResult?: string;
+            nextOwnerName?: string;
+        }>();
+
+    const leaveNotice =
+        leaveResult === 'deleted'
+            ? '마지막 멤버가 나가서 방과 기록이 삭제됐어요.'
+            : leaveResult === 'transferred'
+                ? `${nextOwnerName || '다른 참여자'}님에게 방장을 넘기고 나왔어요.`
+                : leaveResult === 'left'
+                    ? '약속방에서 나왔어요.'
+                    : '';
     // useFocusEffect 안에서도 최신 값을 읽도록 ref 로 둡니다.
     const failNext = useRef(mock === 'error');
     const [load, setLoad] = useState<Load>({ kind: 'loading' });
@@ -95,6 +109,34 @@ export default function RoomsScreen() {
             </View>
 
             <ScrollView contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + 96 }]}>
+                {!!leaveNotice && (
+                    <View
+                        style={styles.leaveNotice}
+                        accessibilityLiveRegion="polite"
+                    >
+                        <Text style={styles.leaveNoticeText}>
+                            {leaveNotice}
+                        </Text>
+
+                        <Pressable
+                            style={styles.noticeClose}
+                            accessibilityRole="button"
+                            accessibilityLabel="나가기 완료 안내 닫기"
+                            onPress={() =>
+                                router.setParams({
+                                    leaveResult: '',
+                                    nextOwnerName: '',
+                                })
+                            }
+                        >
+                            <Ionicons
+                                name="close"
+                                size={18}
+                                color={MINT_DEEP}
+                            />
+                        </Pressable>
+                    </View>
+                )}
                 {load.kind === 'loading' &&
                     [0, 1].map(key => (
                         <View key={key} style={[styles.card, styles.skeletonCard]}>
@@ -239,6 +281,28 @@ function RoomCard({ room, onPress }: { room: RoomSummary; onPress: () => void })
 }
 
 const styles = StyleSheet.create({
+    leaveNotice: {
+        padding: 12,
+        borderRadius: 14,
+        backgroundColor: MINT_SOFT,
+        borderLeftWidth: 3,
+        borderLeftColor: MINT,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    leaveNoticeText: {
+        flex: 1,
+        color: '#15664e',
+        fontSize: 13,
+        lineHeight: 22,
+    },
+    noticeClose: {
+        width: 44,
+        minHeight: 44,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
     flex: {
         flex: 1,
     },

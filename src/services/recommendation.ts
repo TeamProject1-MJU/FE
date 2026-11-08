@@ -15,6 +15,7 @@
 
 import { MOCK_STATIONS, type Station } from '@/app/station-search';
 import { getMockMembers, getMockRoom } from '@/services/room';
+import { subscribeRoomMockChanges } from '@/stores/room-mock-events';
 import {
     RecommendationError,
     type AppliedConstraints,
@@ -51,6 +52,14 @@ let runSeq = 1;
 /** 실패를 흉내 내는 방 (화면 확인용). 한 번 실패한 뒤 다시 시도하면 성공 */
 const createFailOnce = new Set<string>();
 const latestFailOnce = new Set<string>();
+
+subscribeRoomMockChanges(({ roomId, roomDeleted }) => {
+    if (!roomDeleted) return;
+
+    runsByRoom.delete(roomId);
+    createFailOnce.delete(roomId);
+    latestFailOnce.delete(roomId);
+});
 
 /* ───────────── isStale 판정 (명세 8.1 비교 규칙) ───────────── */
 
@@ -90,33 +99,83 @@ function buildMessage(criteria: StoredRun['criteria']) {
 }
 
 /* ───────────── 8.2 / 8.3 조회 ───────────── */
-
-/** 8.2 최근 실행. 실행 기록이 없으면 null. mock: 'error' 면 한 번 실패 */
-export async function fetchLatestRecommendation(roomId: string, mock?: 'error'): Promise<RecommendationRun | null> {
+/** 8.2 최근 실행. 실행 기록이 없으면 null이에요. */
+export async function fetchLatestRecommendation(
+    roomId: string,
+    mock?: 'error',
+): Promise<RecommendationRun | null> {
     await wait(MOCK_DELAY_MS * 0.6);
+
+    if (!getMockRoom(roomId)) {
+        throw new RecommendationError(
+            'ROOM_NOT_FOUND',
+            '약속방을 찾을 수 없어요.',
+        );
+    }
+
     if (mock) latestFailOnce.add(roomId);
+
     if (latestFailOnce.has(roomId)) {
         latestFailOnce.delete(roomId);
-        throw new RecommendationError('NETWORK_ERROR', '추천 결과를 불러오지 못했어요.');
+
+        throw new RecommendationError(
+            'NETWORK_ERROR',
+            '추천 결과를 불러오지 못했어요.',
+        );
     }
-    if (!getMockRoom(roomId)) throw new RecommendationError('ROOM_NOT_FOUND', '약속방을 찾을 수 없어요.');
+
     const runs = runsByRoom.get(roomId) ?? [];
+
     if (runs.length === 0) return null;
+
     return withStale(roomId, runs[runs.length - 1], true);
 }
 
-/** 8.3 특정 실행. 최근 실행이 아니면 isStale·staleReasons 가 null (판정 안 함). 다른 방의 runId 는 RUN_NOT_FOUND */
-export async function fetchRecommendation(roomId: string, runId: string): Promise<RecommendationRun> {
+/** 8.3 특정 실행. 최근 실행이 아니면 최신 여부를 판정하지 않아요. */
+export async function fetchRecommendation(
+    roomId: string,
+    runId: string,
+): Promise<RecommendationRun> {
     await wait(MOCK_DELAY_MS * 0.6);
+
+    if (!getMockRoom(roomId)) {
+        throw new RecommendationError(
+            'ROOM_NOT_FOUND',
+            '약속방을 찾을 수 없어요.',
+        );
+    }
+
     const runs = runsByRoom.get(roomId) ?? [];
-    const index = runs.findIndex(item => item.run.runId === runId);
-    if (index < 0) throw new RecommendationError('RUN_NOT_FOUND', '추천 결과를 찾을 수 없어요.');
-    return withStale(roomId, runs[index], index === runs.length - 1);
+    const index = runs.findIndex(
+        item => item.run.runId === runId,
+    );
+
+    if (index < 0) {
+        throw new RecommendationError(
+            'RUN_NOT_FOUND',
+            '추천 결과를 찾을 수 없어요.',
+        );
+    }
+
+    return withStale(
+        roomId,
+        runs[index],
+        index === runs.length - 1,
+    );
 }
 
-/** 이 방의 실행 목록 (최근 순). 이전 실행 화면 진입용 mock 보조 */
-export function listRecommendationRuns(roomId: string): { runId: string; createdAt: string }[] {
-    return [...(runsByRoom.get(roomId) ?? [])].reverse().map(item => ({ runId: item.run.runId, createdAt: item.run.createdAt }));
+/** 이 방의 실행 목록을 최근 순으로 반환해요. */
+export function listRecommendationRuns(
+    roomId: string,
+): { runId: string; createdAt: string }[] {
+    if (!getMockRoom(roomId)) return [];
+
+    return [...(runsByRoom.get(roomId) ?? [])]
+        .reverse()
+        .map(item => ({
+            runId: item.run.runId,
+            createdAt: item.run.createdAt,
+        }));
 }
 
 /* ───────────── 8.1 실행 ───────────── */

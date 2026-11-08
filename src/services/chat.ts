@@ -1,5 +1,6 @@
 import { fetchRoomDetail, getMyUserId } from '@/services/room';
 import { RoomError, type RoomDetail } from '@/types/room';
+import { subscribeRoomMockChanges } from '@/stores/room-mock-events';
 import type {
     ChatMessage,
     ChatMessagePage,
@@ -18,6 +19,31 @@ const listeners = new Map<string, Set<() => void>>();
 const failedOnce = new Set<string>();
 
 let sequence = 1;
+
+subscribeRoomMockChanges(({ roomId, roomDeleted }) => {
+    if (roomDeleted) {
+        // 마지막 멤버가 나가 방이 삭제됐을 때만 기록을 지워요.
+        for (const key of [roomId, `${roomId}:empty`]) {
+            messagesByRoom.delete(key);
+            pendingAiByRoom.delete(key);
+        }
+
+        for (const key of completedRequests.keys()) {
+            if (key.startsWith(`${roomId}:`)) {
+                completedRequests.delete(key);
+            }
+        }
+
+        for (const key of failedOnce) {
+            if (key.startsWith(`${roomId}:`)) {
+                failedOnce.delete(key);
+            }
+        }
+    }
+
+    // 일반 나가기에서는 기록을 유지하고 조회 상태만 갱신해요.
+    notify(roomId);
+});
 
 /** 화면 표시 이름과 API 호출 키워드를 분리해요. */
 export function toChatApiContent(content: string) {
@@ -272,7 +298,11 @@ async function finishMockAi(
     try {
         await wait(1800);
 
+        if (messagesByRoom.get(key) !== messages) return;
+
         const detail = await requireChatMember(roomId);
+
+        if (messagesByRoom.get(key) !== messages) return;
 
         if (fail) {
             messages.push(
@@ -301,11 +331,14 @@ async function finishMockAi(
     } catch {
         // 나갔거나 삭제된 방에는 뒤늦은 mock AI 메시지를 추가하지 않아요.
     } finally {
-        pendingAiByRoom.set(
-            key,
-            Math.max(0, (pendingAiByRoom.get(key) ?? 1) - 1),
-        );
-        notify(roomId);
+        // 삭제된 방의 대기 상태를 다시 만들지 않아요.
+        if (messagesByRoom.get(key) === messages) {
+            pendingAiByRoom.set(
+                key,
+                Math.max(0, (pendingAiByRoom.get(key) ?? 1) - 1),
+            );
+            notify(roomId);
+        }
     }
 }
 
