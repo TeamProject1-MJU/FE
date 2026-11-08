@@ -207,7 +207,12 @@ export function findNearbySupported(origin: Station, count = 2): NearbyStation[]
  * 네 경우 모두 서버가 isSupported=true만 받는다(STATION_UNSUPPORTED 422).
  * 따라서 선택 규칙은 동일하고, purpose는 화면 문구에만 쓰인다.
  */
-export type StationPickerPurpose = 'origin' | 'destination' | 'departure' | 'proposal';
+export type StationPickerPurpose =
+    | 'origin'
+    | 'destination'
+    | 'departure'
+    | 'proposal'
+    | 'selected-station';
 
 export type StationPickerOptions = {
     purpose: StationPickerPurpose;
@@ -267,6 +272,11 @@ export function pickerCopy(purpose: StationPickerPurpose, contextLabel?: string)
             return {
                 chip: '약속방 · 약속역 후보 제안',
                 title: '어느 역에서\n만나면 좋을까요?',
+            };
+        case 'selected-station':
+            return {
+                chip: '약속방 · 최종 약속역',
+                title: '어느 역에서\n만날까요?',
             };
     }
 }

@@ -31,6 +31,7 @@ import {
     type RoomMember,
     type RoomStation,
     type RoomSummary,
+    type SelectedStationMock,
     type StationProposal,
     type StationProposalList,
 } from '@/types/room';
@@ -538,8 +539,16 @@ export async function fetchRoomDetail(roomId: string, mock?: 'error'): Promise<R
         throw new RoomError('ROOM_NOT_FOUND', '약속방을 찾을 수 없어요.');
     }
     const members = membersByRoom.get(roomId) ?? [];
+    // 초기 확정 시각은 한 번만 저장하고, 이후 조회에서도 유지해요.
+    if (room.selectedStation && !confirmedAtByRoom.has(roomId)) {
+        confirmedAtByRoom.set(
+            roomId,
+            new Date(Date.now() - 86_400_000).toISOString(),
+        );
+    }
+
     const confirmedAt = room.selectedStation
-        ? confirmedAtByRoom.get(roomId) ?? new Date(Date.now() - 86_400_000).toISOString()
+        ? confirmedAtByRoom.get(roomId)!
         : null;
     return {
         ...room,
@@ -618,19 +627,132 @@ export async function updateRoom(
     return updated;
 }
 
-/** 7.10 약속역 확정 / 7.11 해제 (OWNER). 해제해도 후보 목록은 그대로 둡니다. */
-export async function setSelectedStation(roomId: string, station: RoomStation | null): Promise<void> {
-    await wait(MOCK_DELAY_MS);
-    requireOwner(roomId);
-    if (station) confirmedAtByRoom.set(roomId, new Date().toISOString());
-    else confirmedAtByRoom.delete(roomId);
-    rooms = rooms.map(room =>
-        room.id === roomId
-            ? { ...room, selectedStation: station, status: station ? 'CONFIRMED' : 'OPEN' }
-            : room,
-    );
-}
+/** 같은 방에서 약속역을 동시에 변경하지 않도록 막아요. */
+const selectedStationInFlight = new Set<string>();
 
+/**
+ * #51 / API v1.12
+ * 7.10 PUT /api/v1/rooms/{roomId}/selected-station { stationId }
+ * 7.11 DELETE /api/v1/rooms/{roomId}/selected-station
+ *
+ * TODO: 실제 API로 교체해요. 기존 Promise<void> 반환 형태를 유지해요.
+ * TODO: SELECTED_STATION_CHANGED·SYSTEM 메시지 연동은 이번 범위 밖이에요.
+ *
+ * 현재 OWNER 권한과 역의 지원 여부를 저장 직전에 확인해요.
+ * 후보와 투표는 변경하지 않아요.
+ * mock은 첫 요청에만 전달하고 재시도할 때는 생략해요.
+ */
+export async function setSelectedStation(
+    roomId: string,
+    station: RoomStation | null,
+    mock?: SelectedStationMock,
+): Promise<void> {
+    if (selectedStationInFlight.has(roomId)) {
+        throw new RoomError(
+            'ROOM_BUSY',
+            '다른 요청을 처리하는 중이에요. 잠시 후 다시 시도해 주세요.',
+        );
+    }
+
+    selectedStationInFlight.add(roomId);
+
+    try {
+        await wait(MOCK_DELAY_MS);
+
+        const room = getMockRoom(roomId);
+
+        if (!room) {
+            const invited = Object.values(INVITE_ONLY).some(
+                item => item.room.id === roomId,
+            );
+
+            throw new RoomError(
+                invited ? 'NOT_ROOM_MEMBER' : 'ROOM_NOT_FOUND',
+                invited
+                    ? '참여하지 않은 약속방이에요.'
+                    : '약속방을 찾을 수 없어요.',
+            );
+        }
+
+        if (mock === 'owner-lost') {
+            mockTransferOwner(roomId, 'give');
+        }
+
+        const me = membersByRoom
+            .get(roomId)
+            ?.find(item => item.userId === ME.userId);
+
+        if (!me) {
+            throw new RoomError(
+                'NOT_ROOM_MEMBER',
+                '참여하지 않은 약속방이에요.',
+            );
+        }
+
+        if (me.role !== 'OWNER') {
+            throw new RoomError(
+                'NOT_ROOM_OWNER',
+                '방장만 약속역을 정하거나 해제할 수 있어요.',
+            );
+        }
+
+        let selected: RoomStation | null = null;
+
+        if (station !== null) {
+            const found = MOCK_STATIONS.find(item => item.id === station.id);
+
+            if (!found || mock === 'missing') {
+                throw new RoomError(
+                    'STATION_NOT_FOUND',
+                    '선택한 역을 찾을 수 없어요. 역을 다시 선택해 주세요.',
+                );
+            }
+
+            if (!found.isSupported || mock === 'unsupported') {
+                throw new RoomError(
+                    'STATION_UNSUPPORTED',
+                    '이 역은 아직 약속역으로 정할 수 없어요. 다른 지원 역을 선택해 주세요.',
+                );
+            }
+
+            // 이름과 노선은 공통 역 데이터를 기준으로 저장해요.
+            selected = {
+                id: found.id,
+                name: found.name,
+                lines: found.lines.map(line => ({
+                    lineId: line.lineId,
+                    lineName: line.lineName,
+                    color: line.color,
+                })),
+            };
+        }
+
+        if (mock === 'busy') {
+            throw new RoomError(
+                'ROOM_BUSY',
+                '다른 요청을 처리하는 중이에요. 잠시 후 다시 시도해 주세요.',
+            );
+        }
+
+        if (selected) {
+            confirmedAtByRoom.set(roomId, new Date().toISOString());
+        } else {
+            confirmedAtByRoom.delete(roomId);
+        }
+
+        rooms = rooms.map(item =>
+            item.id === roomId
+                ? {
+                    ...item,
+                    selectedStation: selected,
+                    status: selected ? 'CONFIRMED' : 'OPEN',
+                }
+                : item,
+        );
+    } finally {
+        selectedStationInFlight.delete(roomId);
+    }
+}
 /* ───────────────── 약속역 후보 · 투표 (7.14~7.17, #50) ───────────────── */
 
 function requireMember(roomId: string) {
