@@ -122,11 +122,12 @@ export default function RoomEditScreen() {
         }
     }, [roomId]);
 
-    // 다른 화면에서 돌아왔을 때 최신 방 정보로 폼을 채웁니다 (저장 중이거나 저장 직후엔 유지)
+    // 화면에 들어올 때만 최신 방 정보로 폼을 채웁니다.
+    // saving·saved 를 의존성에 넣으면 저장 요청이 끝날 때마다 다시 조회되어 입력값·오류가 사라져요.
     useFocusEffect(
         useCallback(() => {
-            if (!saving && !saved) load();
-        }, [load, saving, saved]),
+            load();
+        }, [load]),
     );
 
     /* ───────── 변경 여부 계산 ───────── */

@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import {
     ActivityIndicator,
     Keyboard,
+    Platform,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -469,9 +470,23 @@ export default function RoomChatPanel({
                         value={controller.draft}
                         onChangeText={controller.setDraft}
                         onFocus={() => onInputFocus?.()}
+                        onKeyPress={event => {
+                            // 웹: Enter 전송, Shift+Enter 줄바꿈 (한글 조합 중 Enter는 전송하지 않음)
+                            // 모바일은 키보드 Enter가 줄바꿈이고 [전송] 버튼으로 보내요.
+                            if (Platform.OS !== 'web') return;
+                            const key = event as unknown as {
+                                key?: string;
+                                shiftKey?: boolean;
+                                preventDefault?: () => void;
+                                nativeEvent: { isComposing?: boolean; keyCode?: number };
+                            };
+                            if (key.key !== 'Enter' || key.shiftKey) return;
+                            if (key.nativeEvent.isComposing || key.nativeEvent.keyCode === 229) return;
+                            key.preventDefault?.();
+                            if (controller.canSend) controller.send();
+                        }}
                         editable={!controller.blocked}
                     />
-
                     <Action
                         label="전송"
                         onPress={controller.send}
