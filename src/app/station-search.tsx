@@ -1,7 +1,8 @@
 /**
  * 역 검색·선택 화면 (이슈 #33)
  *
- * mock 데이터와 검색 함수는 mocks/stations.ts에서 가져온다.
+ * 검색은 services/station.ts 를 거친다. mock 모드에서만 mocks/stations.ts 의
+ * 대안역·검색어 제안을 쓰고, 서버 모드에서는 서버 역만 보여주고 돌려준다.
  * 다른 화면에서는 아래처럼 쓴다:
  *
  *   import { openStationPicker, type Station } from '@/app/station-search';
@@ -30,10 +31,10 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { searchStations as fetchStationSearch } from '@/services/station';
+import { searchStations as fetchStationSearch, STATION_KEYWORD_MAX_LENGTH } from '@/services/station';
 import { useMock as isMockMode } from '@/services/api/config';
 import { MOCK_STATIONS, normalizeStationName, searchStations } from '@/mocks/stations';
-import { ApiError } from '@/services/api/errors';
+import { ApiError, isAuthError } from '@/services/api/errors';
 import type { Station, StationLine } from '@/types/station';
 
 export type { Station, StationLine } from '@/types/station';
@@ -65,6 +66,31 @@ export function findNearbySupported(origin: Station, count = 2): NearbyStation[]
         .sort((a, b) => a.meters - b.meters)
         .slice(0, count)
         .map(({ station, meters }) => ({ station, walkMinutes: Math.max(1, Math.round(meters / 67)) }));
+}
+
+/** 검색 실패 종류. 화면 문구와 '다시 시도' 버튼 표시를 정해요. */
+export type SearchFailure = {
+    kind: 'auth' | 'network' | 'invalid' | 'server';
+    title: string;
+    description: string;
+    retry: boolean;
+};
+
+/**
+ * 401 은 안내만 해요. 토큰 갱신·로그인 이동은 A-1(로그인) 범위예요.
+ * 4xx 는 다시 시도해도 같으므로 버튼을 두지 않고, 네트워크·5xx 만 다시 시도할 수 있어요.
+ */
+export function describeSearchError(error: unknown): SearchFailure {
+    if (isAuthError(error)) {
+        return { kind: 'auth', title: '로그인이 필요해요', description: '로그인한 뒤에 역을 검색할 수 있어요.', retry: false };
+    }
+    if (error instanceof ApiError && error.code === 'NETWORK_ERROR') {
+        return { kind: 'network', title: '서버에 연결하지 못했어요', description: '인터넷 연결을 확인하고 다시 시도해 주세요.', retry: true };
+    }
+    if (error instanceof ApiError && error.status !== null && error.status >= 400 && error.status < 500) {
+        return { kind: 'invalid', title: '검색어를 확인해 주세요', description: error.message, retry: false };
+    }
+    return { kind: 'server', title: '역 정보를 불러오지 못했어요', description: '잠시 후 다시 시도해 주세요.', retry: true };
 }
 
 /* ═══════════════ 2. 호출 헬퍼 · 최근 검색 ═══════════════ */
@@ -283,14 +309,17 @@ export default function StationSearchScreen() {
     const [search, setSearch] = useState<{
         keyword: string;
         items: Station[];
+        totalElements: number;
         loading: boolean;
-        error: string | null;
-    }>({ keyword: '', items: [], loading: false, error: null });
+        error: SearchFailure | null;
+    }>({ keyword: '', items: [], totalElements: 0, loading: false, error: null });
 
     const trimmed = query.trim();
     const results = search.keyword === trimmed ? search.items : [];
     const searching = search.keyword !== trimmed || search.loading;
     const searchError = search.keyword === trimmed ? search.error : null;
+    // 첫 페이지(최대 50개)만 보여주고, 더 있으면 검색어를 좁히도록 안내해요.
+    const hiddenCount = search.keyword === trimmed ? Math.max(0, search.totalElements - results.length) : 0;
     const unsupportedCount = results.filter((station) => !station.isSupported).length;
     const nearby: NearbyStation[] = useMemo(
         () => (unsupported ? findNearbySupported(unsupported) : []),
@@ -304,19 +333,14 @@ export default function StationSearchScreen() {
 
     useEffect(() => {
         let active = true;
-        setSearch({ keyword: trimmed, items: [], loading: !!trimmed, error: null });
+        setSearch({ keyword: trimmed, items: [], totalElements: 0, loading: !!trimmed, error: null });
         if (!trimmed) return () => { active = false; };
 
         const timer = setTimeout(() => {
             fetchStationSearch(trimmed).then(result => {
-                if (active) setSearch({ keyword: trimmed, items: result.items, loading: false, error: null });
+                if (active) setSearch({ keyword: trimmed, items: result.items, totalElements: result.totalElements, loading: false, error: null });
             }).catch(error => {
-                if (active) setSearch({
-                    keyword: trimmed,
-                    items: [],
-                    loading: false,
-                    error: error instanceof ApiError ? error.message : '역 정보를 불러오지 못했어요. 다시 시도해 주세요.',
-                });
+                if (active) setSearch({ keyword: trimmed, items: [], totalElements: 0, loading: false, error: describeSearchError(error) });
             });
         }, SEARCH_DEBOUNCE_MS);
         // 이전 검색이나 닫힌 화면의 응답이 현재 결과를 덮어쓰지 않도록 합니다.
@@ -413,6 +437,7 @@ export default function StationSearchScreen() {
                         placeholder="역 이름을 입력하세요"
                         placeholderTextColor="#a2a9b5"
                         returnKeyType="search"
+                        maxLength={STATION_KEYWORD_MAX_LENGTH}
                         autoCorrect={false}
                         autoCapitalize="none"
                         selectionColor={MINT}
@@ -438,9 +463,10 @@ export default function StationSearchScreen() {
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             >
                 {!showRecent && (searching || searchError) ? (
-                    <View style={styles.noResults}>
-                        <Text style={styles.emptyDescription}>{searchError ?? '역을 검색하고 있어요'}</Text>
-                        {searchError && (
+                    <View style={styles.noResults} accessibilityLiveRegion="polite">
+                        {searchError && <Text style={styles.emptyTitle}>{searchError.title}</Text>}
+                        <Text style={styles.emptyDescription}>{searchError ? searchError.description : '역을 검색하고 있어요'}</Text>
+                        {searchError?.retry && (
                             <Pressable style={styles.suggestChip} onPress={() => setRetryKey(value => value + 1)} accessibilityRole="button">
                                 <Text style={styles.suggestText}>다시 시도</Text>
                             </Pressable>
@@ -481,7 +507,11 @@ export default function StationSearchScreen() {
                             showRecent ? <RecentEmpty /> : null
                         }
                         ListFooterComponent={
-                            showRecent ? <SupportNotice /> : null
+                            showRecent ? <SupportNotice /> : hiddenCount > 0 ? (
+                                <Text style={styles.moreNotice}>
+                                    검색 결과 {search.totalElements}개 중 {results.length}개만 보여드려요.{'\n'}역 이름을 더 입력해 보세요.
+                                </Text>
+                            ) : null
                         }
                         renderItem={({ item, index }) => (
                             <View style={[styles.card, index === 0 && styles.cardTop, index === data.length - 1 && styles.cardBottom]}>
@@ -770,6 +800,14 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: BG,
+    },
+
+    moreNotice: {
+        marginTop: 14,
+        color: SECONDARY,
+        fontSize: 13,
+        lineHeight: 19,
+        textAlign: 'center',
     },
 
     // 헤더

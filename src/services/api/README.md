@@ -2,7 +2,7 @@
 
 `.env.example`을 `.env`로 복사합니다. `EXPO_PUBLIC_USE_MOCK`은 생략하면 `true`이고, 정확히 `true`일 때만 mock입니다. 서버를 쓰려면 `false`와 `/api/v1`까지 포함한 `EXPO_PUBLIC_API_BASE_URL`을 설정하고 앱을 완전히 새로고침합니다. 환경변수는 빌드에 포함되므로 토큰은 넣지 않습니다.
 
-현재 전환이 적용된 서비스는 역 검색뿐입니다. 나머지 서비스는 기존 mock을 유지합니다.
+현재 전환이 적용된 서비스는 역 검색·역 상세·노선 목록(`services/station.ts`)뿐입니다. 나머지 서비스는 기존 mock을 유지합니다.
 
 ```ts
 import { get, post, delete as apiDelete } from '@/services/api/client';
@@ -62,5 +62,21 @@ const result = await searchStations(' 강남 ', { lineId: 2, page: 0, size: 50 }
 ```
 
 빈 검색어는 서버를 호출하지 않고 빈 결과를 반환합니다. 페이지는 0 이상, 크기는 1~50으로 제한합니다. mock에서도 기존 이름 정규화·정렬·미제공 역을 유지하며 노선과 페이지 옵션을 적용합니다.
+
+빈 검색어는 서버를 부르지 않고, 50자를 넘는 검색어는 서버를 부르지 않고 `VALIDATION_ERROR`(400)를 던집니다. 응답에 화면이 쓰는 필드가 빠져 있으면 `UNKNOWN_ERROR`입니다.
+
+## 역 상세·노선 목록
+
+```ts
+import { fetchLines, fetchStation } from '@/services/station';
+
+const station = await fetchStation(222); // 명세 5.3, 5.2 items 한 건과 같은 모양
+// 없는 역은 error.code === 'STATION_NOT_FOUND'(404). mock 모드에서는 mock 목록에서 찾습니다.
+
+const lines = await fetchLines(); // 명세 5.1 [{ id, lineCode, name, color }]
+// 서버 호출이 실패하면(401 포함) 오류 대신 기존 노선 값(mocks/stations.ts의 MOCK_LINES)을 돌려줍니다.
+```
+
+401(`AUTH_REQUIRED`·`TOKEN_EXPIRED`·`TOKEN_INVALID`)은 `isAuthError(error)`로 구분해 "로그인이 필요해요" 안내만 합니다. 갱신·재로그인은 A-1 범위입니다.
 
 실행 검사는 프로젝트 루트에서 `node --test scripts/verify-api-client.cjs`로 돌립니다. 실제 서버와 추가 패키지 없이 응답·오류·인증 헤더·시간 초과·mock 검색을 확인합니다.

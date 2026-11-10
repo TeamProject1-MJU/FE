@@ -105,6 +105,7 @@ export default function RouteSearchScreen() {
 
     // 홈 화면 등에서 넘겨받은 역 이름을 채우고, focus 가 있으면 역 검색 화면을 엽니다 (#32).
     useEffect(() => {
+        // TODO(B-3 경로 탐색 연동): 서버 모드에서도 mock 역 ID 를 이름으로 찾아요. 서버 역 검색으로 바꿔야 해요(#84 보고).
         const find = (name?: string) => {
             const station = MOCK_STATIONS.find(s => s.name === name?.trim());
             return station ? toStationSummary(station) : null;
