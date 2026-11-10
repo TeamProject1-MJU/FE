@@ -1,4 +1,4 @@
-// 실행: node --test scripts/verify-api-client.cjs
+// 실행: node scripts/verify-api-client.cjs
 // 설치된 TypeScript와 Node 기본 모듈로만 검사하며 실제 서버를 호출하지 않습니다.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -13,12 +13,13 @@ function createRuntime(env = {}, react = require('react')) {
     const cache = new Map();
     const timers = new Map();
     let timerId = 0;
+    let now = 0;
     const context = vm.createContext({
         process: { env },
         AbortController,
         console,
         fetch: async () => { throw new Error('검사에서 지정하지 않은 요청입니다.'); },
-        setTimeout: (callback, ms) => { const id = ++timerId; timers.set(id, { callback, ms }); return id; },
+        setTimeout: (callback, ms) => { const id = ++timerId; timers.set(id, { callback, ms, due: now + ms }); return id; },
         clearTimeout: id => timers.delete(id),
     });
     const native = {
@@ -55,7 +56,18 @@ function createRuntime(env = {}, react = require('react')) {
         }, module, module.exports);
         return module.exports;
     }
-    return { load, context, timers };
+    function advance(ms) {
+        const target = now + ms;
+        while (true) {
+            const next = [...timers.entries()].filter(([, timer]) => timer.due <= target).sort((a, b) => a[1].due - b[1].due)[0];
+            if (!next) break;
+            timers.delete(next[0]);
+            now = next[1].due;
+            next[1].callback();
+        }
+        now = target;
+    }
+    return { load, context, timers, advance };
 }
 
 const serverEnv = { EXPO_PUBLIC_API_BASE_URL: ' https://example.test/api/v1/// ', EXPO_PUBLIC_USE_MOCK: 'false' };
@@ -181,11 +193,11 @@ test('요청과 본문 읽기 모두 10초 후 중단하고 타이머 정리', a
 test('mock 역 검색의 정규화·정렬·미제공·노선·페이지와 서버 전환', async () => {
     const runtime = createRuntime();
     const { searchStations } = runtime.load('src/services/station.ts');
-    const screen = runtime.load('src/app/station-search.tsx');
-    for (const keyword of ['', ' ', '강남', ' 강남역 ', '홍대', '공항', '없는역', ...screen.MOCK_STATIONS.map(station => station.name)]) {
+    const mocks = runtime.load('src/mocks/stations.ts');
+    for (const keyword of ['', ' ', '강남', ' 강남역 ', '홍대', '공항', '없는역', ...mocks.MOCK_STATIONS.map(station => station.name)]) {
         const result = await searchStations(keyword);
-        assert.deepEqual(plain(result.items), plain(screen.searchStations(keyword)));
-        assert.equal(result.totalElements, screen.searchStations(keyword).length);
+        assert.deepEqual(plain(result.items), plain(mocks.searchStations(keyword)));
+        assert.equal(result.totalElements, mocks.searchStations(keyword).length);
     }
     assert.deepEqual(plain((await searchStations('강남')).items.map(station => station.id)), [105, 106]);
     assert.equal((await searchStations('판교')).items[0].isSupported, false);
@@ -197,7 +209,7 @@ test('mock 역 검색의 정규화·정렬·미제공·노선·페이지와 서�
     const server = createRuntime(serverEnv);
     const service = server.load('src/services/station.ts');
     const calls = [];
-    const data = { items: [plain(screen.MOCK_STATIONS[0])], page: 2, size: 50, totalElements: 101 };
+    const data = { items: [plain(mocks.MOCK_STATIONS[0])], page: 2, size: 50, totalElements: 101 };
     server.context.fetch = async (url, options) => { calls.push({ url, options }); return jsonResponse({ success: true, data }); };
     assert.deepEqual(plain(await service.searchStations('   ')), { items: [], page: 0, size: 50, totalElements: 0 });
     assert.equal(calls.length, 0);
@@ -242,7 +254,7 @@ function createScreenRuntime(env = {}) {
 
 function findElement(node, predicate) {
     if (!node || typeof node !== 'object') return null;
-    if (Array.isArray(node)) return node.map(child => findElement(child, predicate)).find(Boolean);
+    if (Array.isArray(node)) return node.map(child => findElement(child, predicate)).find(Boolean) ?? null;
     if (predicate(node)) return node;
     return findElement(node.props?.children, predicate);
 }
@@ -255,6 +267,7 @@ test('mock 화면의 최근 검색·검색 결과·미제공 표시와 선택 �
     assert.equal(findElement(view, element => element.type === 'FlatList').props.data.length, 0);
     findElement(view, element => element.type === 'TextInput').props.onChangeText('판교');
     runtime.render();
+    runtime.advance(300);
     await settle();
     view = runtime.render();
     const list = findElement(view, element => element.type === 'FlatList');
@@ -265,13 +278,14 @@ test('mock 화면의 최근 검색·검색 결과·미제공 표시와 선택 �
     assert.equal(findElement(row, element => element.type === 'Text' && element.props.children === '미제공').props.children, '미제공');
     row.props.onPress();
     view = runtime.render();
-    assert.ok(findElement(view, element => element.props?.station?.id === 903 && Array.isArray(element.props.nearby)));
+    const unsupported = findElement(view, element => element.props?.station?.id === 903 && Array.isArray(element.props.nearby));
+    assert.equal(unsupported.props.nearby.length, 2);
     assert.equal(runtime.screen.getRecentStations().length, 0);
 
     let picked;
     runtime.screen.openStationPicker({ purpose: 'origin' }, station => { picked = station; });
     findElement(view, element => element.type === 'TextInput').props.onChangeText('강남');
-    runtime.render(); await settle(); view = runtime.render();
+    runtime.render(); runtime.advance(300); await settle(); view = runtime.render();
     const supported = findElement(view, element => element.type === 'FlatList');
     assert.deepEqual(plain(supported.props.data.map(station => station.id)), [105, 106]);
     const item = supported.props.renderItem({ item: supported.props.data[0], index: 0 }).props.children;
@@ -288,19 +302,71 @@ test('서버 검색 화면이 늦은 이전 응답과 닫힌 화면의 응답을
     runtime.context.fetch = () => new Promise(resolve => pending.push(resolve));
     let view = runtime.render();
     findElement(view, element => element.type === 'TextInput').props.onChangeText('이전');
-    runtime.render(); await settle();
+    runtime.render(); runtime.advance(300); await settle();
     view = runtime.render();
     findElement(view, element => element.type === 'TextInput').props.onChangeText('현재');
-    runtime.render(); await settle();
-    const station = { ...plain(runtime.screen.MOCK_STATIONS[0]), name: '현재' };
+    runtime.render(); runtime.advance(300); await settle();
+    const station = { ...plain(runtime.load('src/mocks/stations.ts').MOCK_STATIONS[0]), name: '현재' };
     pending[1](jsonResponse({ success: true, data: { items: [station], page: 0, size: 50, totalElements: 1 } }));
     await settle();
     pending[0](jsonResponse({ success: true, data: { items: [], page: 0, size: 50, totalElements: 0 } }));
     await settle(); view = runtime.render();
     assert.equal(findElement(view, element => element.type === 'FlatList').props.data[0].name, '현재');
     findElement(view, element => element.type === 'TextInput').props.onChangeText('닫기 전');
-    runtime.render(); await settle(); runtime.unmount();
+    runtime.render(); runtime.advance(300); await settle(); runtime.unmount();
     pending[2](jsonResponse({ success: true, data: { items: [], page: 0, size: 50, totalElements: 0 } }));
     await settle();
+    assert.equal(runtime.timers.size, 0);
+});
+
+test('서버 모드의 미지원 역 안내에 mock 대안역과 선택 경로가 없음', async () => {
+    const runtime = createScreenRuntime(serverEnv);
+    // 서울역과 같은 위치에 두어 기존 계산이라면 mock ID 101이 추천되도록 합니다.
+    const station = { id: 88001, name: '서버 미지원역', latitude: 37.5547, longitude: 126.9707, isSupported: false, lines: [] };
+    runtime.context.fetch = async () => jsonResponse({ success: true, data: { items: [station], page: 0, size: 50, totalElements: 1 } });
+    assert.deepEqual(plain(runtime.screen.findNearbySupported(station)), []);
+    let picked;
+    runtime.screen.openStationPicker({ purpose: 'origin' }, value => { picked = value; });
+    let view = runtime.render();
+    findElement(view, element => element.type === 'TextInput').props.onChangeText('서버');
+    runtime.render(); runtime.advance(300); await settle(); view = runtime.render();
+    const list = findElement(view, element => element.type === 'FlatList');
+    const item = list.props.renderItem({ item: list.props.data[0], index: 0 }).props.children;
+    item.type(item.props).props.onPress();
+    view = runtime.render();
+    const sheet = findElement(view, element => element.props?.station?.id === station.id && Array.isArray(element.props.nearby));
+    assert.deepEqual(plain(sheet.props.nearby), []);
+    const renderedSheet = sheet.type(sheet.props);
+    assert.equal(findElement(renderedSheet, element => element.props?.children === '대신 이런 역은 어떠세요?'), null);
+    assert.equal(findElement(renderedSheet, element => element.props?.accessibilityLabel?.includes('선택, 도보')), null);
+    sheet.props.onPickNearby(runtime.load('src/mocks/stations.ts').MOCK_STATIONS[0]);
+    assert.equal(picked, undefined);
+    assert.equal(runtime.screen.getRecentStations().length, 0);
+    runtime.unmount();
+    assert.equal(runtime.timers.size, 0);
+});
+
+test('300ms 디바운스는 연속 입력을 한 요청으로 묶고 삭제·이탈 시 취소', async () => {
+    const runtime = createScreenRuntime(serverEnv);
+    const calls = [];
+    runtime.context.fetch = async url => { calls.push(url); return jsonResponse({ success: true, data: { items: [], page: 0, size: 50, totalElements: 0 } }); };
+    let view = runtime.render();
+    for (const text of ['강', '강남', '강남역']) {
+        findElement(view, element => element.type === 'TextInput').props.onChangeText(text);
+        view = runtime.render(); runtime.advance(100); await settle();
+        assert.equal(calls.length, 0);
+    }
+    runtime.advance(199); await settle(); assert.equal(calls.length, 0);
+    runtime.advance(1); await settle(); assert.equal(calls.length, 1);
+    assert.match(calls[0], /keyword=%EA%B0%95%EB%82%A8%EC%97%AD/);
+    view = runtime.render();
+    findElement(view, element => element.type === 'TextInput').props.onChangeText('사당');
+    view = runtime.render(); runtime.advance(100);
+    findElement(view, element => element.type === 'TextInput').props.onChangeText('');
+    view = runtime.render(); runtime.advance(300); await settle();
+    assert.equal(calls.length, 1);
+    findElement(view, element => element.type === 'TextInput').props.onChangeText('잠실');
+    runtime.render(); runtime.unmount(); runtime.advance(300); await settle();
+    assert.equal(calls.length, 1);
     assert.equal(runtime.timers.size, 0);
 });

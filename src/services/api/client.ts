@@ -37,6 +37,7 @@ async function request<T>(method: string, path: string, body: unknown, options: 
         Accept: 'application/json',
         'Content-Type': 'application/json; charset=utf-8',
     };
+    // TODO: 토큰 조회 실패·시간 제한 범위는 A-1(로그인)에서 확정합니다.
     const token = options.auth === false ? null : await accessTokenProvider?.();
     if (token) headers.Authorization = `Bearer ${token}`;
     const serializedBody = body === undefined ? undefined : JSON.stringify(body);

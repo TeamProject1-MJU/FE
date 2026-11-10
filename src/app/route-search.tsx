@@ -12,7 +12,8 @@ import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
-import { MOCK_STATIONS, openStationPicker, type Station } from '@/app/station-search';
+import { openStationPicker, type Station } from '@/app/station-search';
+import { MOCK_STATIONS } from '@/mocks/stations';
 import RouteCard from '@/components/route/RouteCard';
 import { searchRoute } from '@/services/route';
 import { setSelectedRoute } from '@/stores/route-store';
