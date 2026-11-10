@@ -457,6 +457,14 @@ test('역 검색: 50자 초과는 서버를 부르지 않고 VALIDATION_ERROR, �
     assert.equal(calls.length, 1);
     await assert.rejects(api.searchStations('가'.repeat(51)), error => error.code === 'VALIDATION_ERROR' && error.status === 400);
     assert.equal(calls.length, 1);
+    // 서버는 코드 포인트로 세요: 이모지 26개(코드 포인트 26, UTF-16 52)는 서버를 부르고, 51 코드 포인트는 거절해요.
+    const emoji = '🚇'.repeat(26);
+    assert.equal(Array.from(emoji).length, 26);
+    assert.equal(emoji.length, 52);
+    await api.searchStations(emoji);
+    assert.equal(calls.length, 2);
+    await assert.rejects(api.searchStations(`${'🚇'.repeat(26)}${'가'.repeat(25)}`), error => error.code === 'VALIDATION_ERROR' && error.status === 400);
+    assert.equal(calls.length, 2);
     server.context.fetch = async () => jsonResponse({ success: true, data: { items: [{ id: 1, name: '역' }], page: 0, size: 50, totalElements: 1 } });
     await assert.rejects(api.searchStations('역'), error => error.code === 'UNKNOWN_ERROR');
     const mock = createRuntime().load('src/services/station.ts');

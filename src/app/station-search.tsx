@@ -437,6 +437,7 @@ export default function StationSearchScreen() {
                         placeholder="역 이름을 입력하세요"
                         placeholderTextColor="#a2a9b5"
                         returnKeyType="search"
+                        // maxLength 는 UTF-16 기준이라 코드 포인트로 세는 서버보다 엄격해요(이모지는 2글자로 세요).
                         maxLength={STATION_KEYWORD_MAX_LENGTH}
                         autoCorrect={false}
                         autoCapitalize="none"

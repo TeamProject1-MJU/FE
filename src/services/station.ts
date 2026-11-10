@@ -4,7 +4,7 @@ import { ApiError } from '@/services/api/errors';
 import { MOCK_LINES, MOCK_STATIONS, searchStations as searchMockStations } from '@/mocks/stations';
 import type { Line, Station, StationDetail, StationSearchOptions, StationSearchResult } from '@/types/station';
 
-/** 명세 5.2: keyword 는 50자를 넘으면 서버가 400 VALIDATION_ERROR 로 거절해요. */
+/** 명세 5.2: keyword 는 50자를 넘으면 서버가 400 VALIDATION_ERROR 로 거절해요. 서버는 코드 포인트로 글자 수를 세요. */
 export const STATION_KEYWORD_MAX_LENGTH = 50;
 /** 명세 5.2: keyword 만 쓸 때 size 최대값 */
 export const STATION_PAGE_MAX_SIZE = 50;
@@ -65,7 +65,7 @@ export async function searchStations(keyword: string, options: StationSearchOpti
         : STATION_PAGE_MAX_SIZE;
     if (!query) return { items: [], page, size, totalElements: 0 };
     // 서버가 400 으로 거절할 요청은 보내지 않고 같은 코드로 알려요.
-    if (query.length > STATION_KEYWORD_MAX_LENGTH) {
+    if (Array.from(query).length > STATION_KEYWORD_MAX_LENGTH) {
         throw new ApiError('VALIDATION_ERROR', `역 이름은 ${STATION_KEYWORD_MAX_LENGTH}자까지 입력할 수 있어요.`, null, 400);
     }
 
@@ -98,6 +98,7 @@ export async function fetchStation(id: number): Promise<StationDetail> {
 /**
  * 명세 5.1 GET /lines.
  * 노선 색·이름은 화면 장식에 쓰이므로, 서버 호출이 실패하면(401 포함) 오류 대신 기존 노선 값을 돌려줘요.
+ * 이때 돌려주는 MOCK_LINES 는 표시용이며, 서버 요청의 ID(예: lineId 필터)로 쓰지 않아요.
  */
 export async function fetchLines(): Promise<Line[]> {
     if (isMockMode()) return MOCK_LINES.map(line => ({ ...line }));

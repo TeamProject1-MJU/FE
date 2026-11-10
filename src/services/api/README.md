@@ -75,6 +75,7 @@ const station = await fetchStation(222); // 명세 5.3, 5.2 items 한 건과 같
 
 const lines = await fetchLines(); // 명세 5.1 [{ id, lineCode, name, color }]
 // 서버 호출이 실패하면(401 포함) 오류 대신 기존 노선 값(mocks/stations.ts의 MOCK_LINES)을 돌려줍니다.
+// 이때 돌려주는 MOCK_LINES는 표시용이며, 서버 요청의 ID(예: lineId 필터)로 쓰지 않습니다.
 ```
 
 401(`AUTH_REQUIRED`·`TOKEN_EXPIRED`·`TOKEN_INVALID`)은 `isAuthError(error)`로 구분해 "로그인이 필요해요" 안내만 합니다. 갱신·재로그인은 A-1 범위입니다.
