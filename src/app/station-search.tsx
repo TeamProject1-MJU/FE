@@ -8,7 +8,7 @@
  *   openStationPicker({ purpose: 'origin' }, (station) => setOrigin(station));
  *
  * 구성 (위에서부터)
- *   1. 타입·mock 데이터·검색 함수   → API 연동 시 searchStations()만 fetch로 교체
+ *   1. 타입 재공개·mock 데이터·기존 mock 검색 함수
  *   2. 호출 헬퍼 (openStationPicker) + 최근 검색
  *   3. LineBadge 컴포넌트
  *   4. 화면 (default export)
@@ -30,35 +30,24 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { searchStations as fetchStationSearch } from '@/services/station';
+import { useMock } from '@/services/api/config';
+import { ApiError } from '@/services/api/errors';
+import type { Station, StationLine } from '@/types/station';
 
+export type { Station, StationLine } from '@/types/station';
 
 /* ═══════════════ 1. 타입 · mock 데이터 · 검색 ═══════════════ */
 
 /**
  * 역 검색 mock 데이터.
  * API 명세 5.2 `GET /stations?keyword=` 응답의 items[] 형태를 그대로 따른다.
- * → API 연동 시 이 파일의 `searchStations()`만 fetch 호출로 바꾸면 된다.
+ * 화면의 실제 검색은 services/station.ts를 거치고, mock 분기는 아래 검색 함수를 재사용한다.
  *
  * - id: 숫자 (명세: stationId, lineId는 숫자)
  * - isSupported: 서울교통공사 1~8호선 데이터 보유 역만 true. 코레일·신분당 등은 false ("미제공")
  * - lines[].color: 서버가 내려주는 값. 화면은 이 값을 그대로 쓴다.
  */
-
-export type StationLine = {
-    lineId: number;
-    lineName: string;
-    color: string;
-    stationCode: string;
-};
-
-export type Station = {
-    id: number;
-    name: string;
-    latitude: number;
-    longitude: number;
-    isSupported: boolean;
-    lines: StationLine[];
-};
 
 // 노선 마스터 (명세 5.1 GET /lines)
 const LINE = {
@@ -394,9 +383,18 @@ export default function StationSearchScreen() {
     const [focused, setFocused] = useState(true);
     const [recent, setRecent] = useState<Station[]>(() => getRecentStations());
     const [unsupported, setUnsupported] = useState<Station | null>(null);
+    const [retryKey, setRetryKey] = useState(0);
+    const [search, setSearch] = useState<{
+        keyword: string;
+        items: Station[];
+        loading: boolean;
+        error: string | null;
+    }>({ keyword: '', items: [], loading: false, error: null });
 
     const trimmed = query.trim();
-    const results = useMemo(() => searchStations(trimmed), [trimmed]);
+    const results = search.keyword === trimmed ? search.items : [];
+    const searching = search.keyword !== trimmed || search.loading;
+    const searchError = search.keyword === trimmed ? search.error : null;
     const unsupportedCount = results.filter((station) => !station.isSupported).length;
     const nearby: NearbyStation[] = useMemo(
         () => (unsupported ? findNearbySupported(unsupported) : []),
@@ -407,6 +405,25 @@ export default function StationSearchScreen() {
         const timer = setTimeout(() => inputRef.current?.focus(), 250);
         return () => clearTimeout(timer);
     }, []);
+
+    useEffect(() => {
+        let active = true;
+        setSearch({ keyword: trimmed, items: [], loading: !!trimmed, error: null });
+        if (trimmed) {
+            fetchStationSearch(trimmed).then(result => {
+                if (active) setSearch({ keyword: trimmed, items: result.items, loading: false, error: null });
+            }).catch(error => {
+                if (active) setSearch({
+                    keyword: trimmed,
+                    items: [],
+                    loading: false,
+                    error: error instanceof ApiError ? error.message : '역 정보를 불러오지 못했어요. 다시 시도해 주세요.',
+                });
+            });
+        }
+        // 이전 검색이나 닫힌 화면의 응답이 현재 결과를 덮어쓰지 않도록 합니다.
+        return () => { active = false; };
+    }, [trimmed, retryKey]);
 
     const goBack = useCallback(() => {
         cancelStationPicker();
@@ -518,7 +535,16 @@ export default function StationSearchScreen() {
                 style={styles.listArea}
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             >
-                {!showRecent && results.length === 0 ? (
+                {!showRecent && (searching || searchError) ? (
+                    <View style={styles.noResults}>
+                        <Text style={styles.emptyDescription}>{searchError ?? '역을 검색하고 있어요'}</Text>
+                        {searchError && (
+                            <Pressable style={styles.suggestChip} onPress={() => setRetryKey(value => value + 1)} accessibilityRole="button">
+                                <Text style={styles.suggestText}>다시 시도</Text>
+                            </Pressable>
+                        )}
+                    </View>
+                ) : !showRecent && results.length === 0 ? (
                     <NoResults keyword={trimmed} onRetry={retrySearch} />
                 ) : (
                     <FlatList
@@ -722,15 +748,17 @@ function SupportNotice() {
 }
 
 function NoResults({ keyword, onRetry }: { keyword: string; onRetry: (text: string) => void }) {
+    const mock = useMock();
     // 입력을 앞에서부터 줄여가며 결과가 나오는 가장 긴 접두어를 제안
     const suggestions = useMemo(() => {
+        if (!mock) return [];
         const found: string[] = [];
         for (let len = keyword.length - 1; len >= 2 && found.length < 2; len -= 1) {
             const prefix = keyword.slice(0, len);
             if (searchStations(prefix).length > 0 && !found.includes(prefix)) found.push(prefix);
         }
         return found;
-    }, [keyword]);
+    }, [keyword, mock]);
 
     return (
         <View style={styles.noResults}>
