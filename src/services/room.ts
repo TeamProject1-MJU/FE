@@ -20,7 +20,7 @@
  * 지금은 앱이 켜져 있는 동안만 유지되는 mock 목록으로 생성·참여·수정·나가기 결과를 반영합니다.
  */
 
-import { MOCK_STATIONS } from '@/app/station-search';
+import { MOCK_STATIONS } from '@/mocks/stations';
 import { emitRoomMockChange } from '@/stores/room-mock-events';
 import {
     RoomError,

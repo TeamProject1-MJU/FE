@@ -13,7 +13,8 @@
  * - TODO: WS RECOMMENDATION_CREATED / MEMBER_JOINED / MEMBER_LEFT / DEPARTURE_UPDATED / ROOM_UPDATED 수신 시 8.2 재조회 (11장)
  */
 
-import { MOCK_STATIONS, type Station } from '@/app/station-search';
+import { MOCK_STATIONS } from '@/mocks/stations';
+import type { Station } from '@/types/station';
 import { getMockMembers, getMockRoom } from '@/services/room';
 import { subscribeRoomMockChanges } from '@/stores/room-mock-events';
 import {

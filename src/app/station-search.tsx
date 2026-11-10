@@ -1,14 +1,14 @@
 /**
- * 역 검색·선택 화면 (이슈 #33) — 단일 파일 버전
+ * 역 검색·선택 화면 (이슈 #33)
  *
- * 이 파일 하나에 화면 + mock 데이터 + 호출 헬퍼 + 노선 배지가 모두 들어 있다.
+ * mock 데이터와 검색 함수는 mocks/stations.ts에서 가져온다.
  * 다른 화면에서는 아래처럼 쓴다:
  *
  *   import { openStationPicker, type Station } from '@/app/station-search';
  *   openStationPicker({ purpose: 'origin' }, (station) => setOrigin(station));
  *
  * 구성 (위에서부터)
- *   1. 타입·mock 데이터·검색 함수   → API 연동 시 searchStations()만 fetch로 교체
+ *   1. 타입 재공개·mock 대안역 계산
  *   2. 호출 헬퍼 (openStationPicker) + 최근 검색
  *   3. LineBadge 컴포넌트
  *   4. 화면 (default export)
@@ -30,133 +30,17 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { searchStations as fetchStationSearch } from '@/services/station';
+import { useMock as isMockMode } from '@/services/api/config';
+import { MOCK_STATIONS, normalizeStationName, searchStations } from '@/mocks/stations';
+import { ApiError } from '@/services/api/errors';
+import type { Station, StationLine } from '@/types/station';
 
+export type { Station, StationLine } from '@/types/station';
 
-/* ═══════════════ 1. 타입 · mock 데이터 · 검색 ═══════════════ */
+/* ═══════════════ 1. 타입 · mock 대안역 ═══════════════ */
 
-/**
- * 역 검색 mock 데이터.
- * API 명세 5.2 `GET /stations?keyword=` 응답의 items[] 형태를 그대로 따른다.
- * → API 연동 시 이 파일의 `searchStations()`만 fetch 호출로 바꾸면 된다.
- *
- * - id: 숫자 (명세: stationId, lineId는 숫자)
- * - isSupported: 서울교통공사 1~8호선 데이터 보유 역만 true. 코레일·신분당 등은 false ("미제공")
- * - lines[].color: 서버가 내려주는 값. 화면은 이 값을 그대로 쓴다.
- */
-
-export type StationLine = {
-    lineId: number;
-    lineName: string;
-    color: string;
-    stationCode: string;
-};
-
-export type Station = {
-    id: number;
-    name: string;
-    latitude: number;
-    longitude: number;
-    isSupported: boolean;
-    lines: StationLine[];
-};
-
-// 노선 마스터 (명세 5.1 GET /lines)
-const LINE = {
-    1: { lineId: 1, lineName: '1호선', color: '#0052A4' },
-    2: { lineId: 2, lineName: '2호선', color: '#00A84D' },
-    3: { lineId: 3, lineName: '3호선', color: '#EF7C1C' },
-    4: { lineId: 4, lineName: '4호선', color: '#00A5DE' },
-    5: { lineId: 5, lineName: '5호선', color: '#996CAC' },
-    6: { lineId: 6, lineName: '6호선', color: '#CD7C2F' },
-    7: { lineId: 7, lineName: '7호선', color: '#747F00' },
-    8: { lineId: 8, lineName: '8호선', color: '#E6186C' },
-    // 아래는 미제공 구간용 (코레일·민자)
-    9: { lineId: 9, lineName: '9호선', color: '#BDB092' },
-    101: { lineId: 101, lineName: '수인분당선', color: '#F5A200' },
-    102: { lineId: 102, lineName: '신분당선', color: '#D4003B' },
-    103: { lineId: 103, lineName: '경의중앙선', color: '#77C4A3' },
-    104: { lineId: 104, lineName: '공항철도', color: '#0090D2' },
-} as const;
-
-type LineKey = keyof typeof LINE;
-
-function line(key: LineKey, stationCode: string): StationLine {
-    return { ...LINE[key], stationCode };
-}
-
-export const MOCK_STATIONS: Station[] = [
-    { id: 101, name: '서울역', latitude: 37.5547, longitude: 126.9707, isSupported: true, lines: [line(1, '133'), line(4, '426')] },
-    { id: 102, name: '시청', latitude: 37.5657, longitude: 126.9769, isSupported: true, lines: [line(1, '132'), line(2, '201')] },
-    { id: 103, name: '종로3가', latitude: 37.5714, longitude: 126.9918, isSupported: true, lines: [line(1, '130'), line(3, '329'), line(5, '534')] },
-    { id: 104, name: '동대문역사문화공원', latitude: 37.5651, longitude: 127.0092, isSupported: true, lines: [line(2, '205'), line(4, '422'), line(5, '536')] },
-    { id: 105, name: '강남', latitude: 37.4979, longitude: 127.0276, isSupported: true, lines: [line(2, '222')] },
-    { id: 106, name: '강남구청', latitude: 37.5172, longitude: 127.0411, isSupported: true, lines: [line(7, '730')] },
-    { id: 107, name: '역삼', latitude: 37.5006, longitude: 127.0364, isSupported: true, lines: [line(2, '221')] },
-    { id: 108, name: '교대', latitude: 37.4934, longitude: 127.0142, isSupported: true, lines: [line(2, '223'), line(3, '340')] },
-    { id: 109, name: '사당', latitude: 37.4765, longitude: 126.9816, isSupported: true, lines: [line(2, '226'), line(4, '433')] },
-    { id: 110, name: '서울대입구', latitude: 37.4813, longitude: 126.9527, isSupported: true, lines: [line(2, '228')] },
-    { id: 111, name: '신림', latitude: 37.4842, longitude: 126.9296, isSupported: true, lines: [line(2, '230')] },
-    { id: 112, name: '홍대입구', latitude: 37.5574, longitude: 126.9245, isSupported: true, lines: [line(2, '239')] },
-    { id: 113, name: '신촌', latitude: 37.5551, longitude: 126.9368, isSupported: true, lines: [line(2, '240')] },
-    { id: 114, name: '건대입구', latitude: 37.5403, longitude: 127.0702, isSupported: true, lines: [line(2, '212'), line(7, '727')] },
-    { id: 115, name: '성수', latitude: 37.5446, longitude: 127.0559, isSupported: true, lines: [line(2, '211')] },
-    { id: 116, name: '뚝섬', latitude: 37.5473, longitude: 127.0474, isSupported: true, lines: [line(2, '210')] },
-    { id: 117, name: '강변', latitude: 37.5352, longitude: 127.0946, isSupported: true, lines: [line(2, '214')] },
-    { id: 118, name: '잠실', latitude: 37.5133, longitude: 127.1001, isSupported: true, lines: [line(2, '216'), line(8, '814')] },
-    { id: 119, name: '왕십리', latitude: 37.5614, longitude: 127.0375, isSupported: true, lines: [line(2, '208'), line(5, '540')] },
-    { id: 120, name: '노원', latitude: 37.6553, longitude: 127.0614, isSupported: true, lines: [line(4, '411'), line(7, '711')] },
-    { id: 121, name: '충무로', latitude: 37.5613, longitude: 126.9941, isSupported: true, lines: [line(3, '331'), line(4, '423')] },
-    { id: 122, name: '을지로입구', latitude: 37.5660, longitude: 126.9826, isSupported: true, lines: [line(2, '202')] },
-    { id: 123, name: '합정', latitude: 37.5498, longitude: 126.9139, isSupported: true, lines: [line(2, '238'), line(6, '622')] },
-    { id: 124, name: '고속터미널', latitude: 37.5049, longitude: 127.0049, isSupported: true, lines: [line(3, '339'), line(7, '734')] },
-    { id: 125, name: '천호', latitude: 37.5387, longitude: 127.1238, isSupported: true, lines: [line(5, '547'), line(8, '811')] },
-
-    // 미제공 (서울교통공사 데이터 범위 밖)
-    { id: 901, name: '서울숲', latitude: 37.5436, longitude: 127.0444, isSupported: false, lines: [line(101, 'K211')] },
-    { id: 902, name: '용산', latitude: 37.5299, longitude: 126.9648, isSupported: false, lines: [line(1, '135'), line(103, 'K110')] },
-    { id: 903, name: '판교', latitude: 37.3948, longitude: 127.1112, isSupported: false, lines: [line(102, 'D11')] },
-    { id: 904, name: '수원', latitude: 37.2659, longitude: 127.0001, isSupported: false, lines: [line(1, 'P155'), line(101, 'K245')] },
-    { id: 905, name: '홍대입구 (공항철도)', latitude: 37.5577, longitude: 126.9250, isSupported: false, lines: [line(104, 'A03')] },
-    { id: 906, name: '여의도', latitude: 37.5216, longitude: 126.9243, isSupported: false, lines: [line(5, '527'), line(9, '915')] },
-];
-
-/** 역명 정규화: 공백 제거, 끝의 '역' 제거, 괄호 부역명 분리 */
-export function normalizeStationName(value: string): string {
-    return value
-        .replace(/\s+/g, '')
-        .replace(/\(.*?\)/g, '')
-        .replace(/역$/, '')
-        .toLowerCase();
-}
-
-/**
- * mock 검색. 명세 5.2처럼 keyword 부분 일치, 최대 50건.
- * 괄호 안 부역명도 검색 대상에 포함한다 (예: "강변" → "동서울터미널(강변)" 형태 대응).
- */
-export function searchStations(keyword: string, limit = 50): Station[] {
-    const q = normalizeStationName(keyword);
-    if (!q) return [];
-
-    const scored = MOCK_STATIONS
-        .map((station) => {
-            const name = normalizeStationName(station.name);
-            const full = station.name.replace(/\s+/g, '').toLowerCase();
-            let score = -1;
-            if (name === q) score = 0;
-            else if (name.startsWith(q)) score = 1;
-            else if (name.includes(q)) score = 2;
-            else if (full.includes(q)) score = 3;
-            return { station, score };
-        })
-        .filter((item) => item.score >= 0)
-        .sort((a, b) => {
-            if (a.score !== b.score) return a.score - b.score;
-            if (a.station.isSupported !== b.station.isSupported) return a.station.isSupported ? -1 : 1;
-            return a.station.name.localeCompare(b.station.name, 'ko');
-        });
-
-    return scored.slice(0, limit).map((item) => item.station);
-}
+const SEARCH_DEBOUNCE_MS = 300;
 
 /** 두 좌표 사이 거리(m) — 가까운 지원 역 제안용 */
 function distanceMeters(a: Station, b: Station): number {
@@ -174,6 +58,7 @@ export type NearbyStation = { station: Station; walkMinutes: number };
 
 /** 미제공 역 근처의 지원 역 (도보 분 = 거리 / 67m·분) */
 export function findNearbySupported(origin: Station, count = 2): NearbyStation[] {
+    if (!isMockMode()) return [];
     return MOCK_STATIONS
         .filter((station) => station.isSupported && station.id !== origin.id)
         .map((station) => ({ station, meters: distanceMeters(origin, station) }))
@@ -394,9 +279,18 @@ export default function StationSearchScreen() {
     const [focused, setFocused] = useState(true);
     const [recent, setRecent] = useState<Station[]>(() => getRecentStations());
     const [unsupported, setUnsupported] = useState<Station | null>(null);
+    const [retryKey, setRetryKey] = useState(0);
+    const [search, setSearch] = useState<{
+        keyword: string;
+        items: Station[];
+        loading: boolean;
+        error: string | null;
+    }>({ keyword: '', items: [], loading: false, error: null });
 
     const trimmed = query.trim();
-    const results = useMemo(() => searchStations(trimmed), [trimmed]);
+    const results = search.keyword === trimmed ? search.items : [];
+    const searching = search.keyword !== trimmed || search.loading;
+    const searchError = search.keyword === trimmed ? search.error : null;
     const unsupportedCount = results.filter((station) => !station.isSupported).length;
     const nearby: NearbyStation[] = useMemo(
         () => (unsupported ? findNearbySupported(unsupported) : []),
@@ -407,6 +301,30 @@ export default function StationSearchScreen() {
         const timer = setTimeout(() => inputRef.current?.focus(), 250);
         return () => clearTimeout(timer);
     }, []);
+
+    useEffect(() => {
+        let active = true;
+        setSearch({ keyword: trimmed, items: [], loading: !!trimmed, error: null });
+        if (!trimmed) return () => { active = false; };
+
+        const timer = setTimeout(() => {
+            fetchStationSearch(trimmed).then(result => {
+                if (active) setSearch({ keyword: trimmed, items: result.items, loading: false, error: null });
+            }).catch(error => {
+                if (active) setSearch({
+                    keyword: trimmed,
+                    items: [],
+                    loading: false,
+                    error: error instanceof ApiError ? error.message : '역 정보를 불러오지 못했어요. 다시 시도해 주세요.',
+                });
+            });
+        }, SEARCH_DEBOUNCE_MS);
+        // 이전 검색이나 닫힌 화면의 응답이 현재 결과를 덮어쓰지 않도록 합니다.
+        return () => {
+            active = false;
+            clearTimeout(timer);
+        };
+    }, [trimmed, retryKey]);
 
     const goBack = useCallback(() => {
         cancelStationPicker();
@@ -433,6 +351,7 @@ export default function StationSearchScreen() {
     }, []);
 
     const chooseNearby = useCallback((station: Station) => {
+        if (!isMockMode()) return;
         setUnsupported(null);
         choose(station);
     }, [choose]);
@@ -518,7 +437,16 @@ export default function StationSearchScreen() {
                 style={styles.listArea}
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             >
-                {!showRecent && results.length === 0 ? (
+                {!showRecent && (searching || searchError) ? (
+                    <View style={styles.noResults}>
+                        <Text style={styles.emptyDescription}>{searchError ?? '역을 검색하고 있어요'}</Text>
+                        {searchError && (
+                            <Pressable style={styles.suggestChip} onPress={() => setRetryKey(value => value + 1)} accessibilityRole="button">
+                                <Text style={styles.suggestText}>다시 시도</Text>
+                            </Pressable>
+                        )}
+                    </View>
+                ) : !showRecent && results.length === 0 ? (
                     <NoResults keyword={trimmed} onRetry={retrySearch} />
                 ) : (
                     <FlatList
@@ -722,15 +650,17 @@ function SupportNotice() {
 }
 
 function NoResults({ keyword, onRetry }: { keyword: string; onRetry: (text: string) => void }) {
+    const mock = isMockMode();
     // 입력을 앞에서부터 줄여가며 결과가 나오는 가장 긴 접두어를 제안
     const suggestions = useMemo(() => {
+        if (!mock) return [];
         const found: string[] = [];
         for (let len = keyword.length - 1; len >= 2 && found.length < 2; len -= 1) {
             const prefix = keyword.slice(0, len);
             if (searchStations(prefix).length > 0 && !found.includes(prefix)) found.push(prefix);
         }
         return found;
-    }, [keyword]);
+    }, [keyword, mock]);
 
     return (
         <View style={styles.noResults}>
