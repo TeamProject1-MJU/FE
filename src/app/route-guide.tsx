@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import Congestion from '@/components/route/Congestion';
+import NextTrains from '@/components/route/NextTrains';
 import { formatFare } from '@/components/route/RouteCard';
 import RouteMapPreview from '@/components/route/RouteMapPreview';
 import RouteTimeline from '@/components/route/RouteTimeline';
@@ -34,8 +35,9 @@ const formatClock = (iso: string) => {
  */
 export default function RouteGuideScreen() {
     const insets = useSafeAreaInsets();
-    const { routeId } = useLocalSearchParams<{ routeId?: string }>();
+    const { routeId, arrivals } = useLocalSearchParams<{ routeId?: string; arrivals?: string }>();
     const selected = getSelectedRoute(routeId);
+    const firstSubway = selected?.route.steps.find(step => step.type === 'SUBWAY');
 
     const goBack = () => {
         if (router.canGoBack()) router.back();
@@ -140,7 +142,11 @@ export default function RouteGuideScreen() {
                         </Text>
                     </View>
 
-                    <RouteTimeline route={selected.route} onSignCheck={openSignCheck} />
+                    <RouteTimeline
+                        route={selected.route}
+                        onSignCheck={openSignCheck}
+                        nextTrains={firstSubway && <NextTrains step={firstSubway} mock={arrivals === 'none' || arrivals === 'fail' ? arrivals : undefined} />}
+                    />
                 </ScrollView>
             )}
         </View>
@@ -220,6 +226,7 @@ const styles = StyleSheet.create({
     timeRow: {
         marginTop: 8,
         flexDirection: 'row',
+        flexWrap: 'wrap',
         alignItems: 'center',
         gap: 8,
     },
