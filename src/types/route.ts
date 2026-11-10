@@ -20,13 +20,13 @@ export type CongestionLevel =
 
 export type Congestion = {
     supported: boolean;
-    kind: 'PREDICTED' | 'MOCK' | null;
+    kind: 'PREDICTED' | 'ESTIMATED' | 'MOCK' | null;
     pct: number | null;
     level: CongestionLevel | null;
     levelLabel: string | null;
 };
 
-export type RouteType = 'FASTEST' | 'FEWER_TRANSFERS' | 'CHEAPEST';
+export type RouteType = 'FASTEST' | 'FEWER_TRANSFERS' | 'CHEAPEST' | null;
 export type RouteSource = 'KAKAO' | 'INTERNAL';
 export type FareSource = 'KAKAO' | 'ESTIMATED';
 

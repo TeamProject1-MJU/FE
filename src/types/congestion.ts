@@ -6,7 +6,7 @@ import type { Congestion, CongestionLevel } from '@/types/route';
 
 export type DirectionCode = 'UP' | 'DOWN' | 'INNER' | 'OUTER' | 'LOOP';
 export type DayType = 'WEEKDAY' | 'SATURDAY' | 'SUNDAY';
-export type CongestionSource = 'PREDICTED' | 'MOCK';
+export type CongestionSource = 'PREDICTED' | 'ESTIMATED' | 'MOCK';
 
 export type CongestionQuery = {
     stationId: number;

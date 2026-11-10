@@ -1,3 +1,4 @@
+import { formatDirection } from '@/components/route/format';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -80,7 +81,7 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
         <View style={styles.card}>
             {/* 배지 + 경로 전체 혼잡도 */}
             <View style={styles.row}>
-                {!!badgeLabel && (
+                {route.routeType !== null && !!badgeLabel && (
                     <View style={styles.badge}>
                         <Text style={styles.badgeText}>{badgeLabel}</Text>
                     </View>
@@ -160,7 +161,7 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
                             <View style={[styles.row, styles.stepMeta]}>
                                 <LineBadge line={step.line} />
                                 <Text style={styles.stepText} numberOfLines={1}>
-                                    {step.direction ?? ''} · {Math.max(step.stops.length - 1, 0)}개역 {toMinutes(step.durationSec)}분
+                                    {formatDirection(step)} · {Math.max(step.stops.length - 1, 0)}개역 {toMinutes(step.durationSec)}분
                                 </Text>
                                 <View style={styles.flex} />
                                 <Congestion congestion={stepCongestion(step)} slot={step.stations?.[0]} compact />

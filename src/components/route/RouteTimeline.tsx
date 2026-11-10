@@ -1,3 +1,4 @@
+import { formatDirection } from '@/components/route/format';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -112,7 +113,7 @@ export default function RouteTimeline({ route, onSignCheck }: Props) {
                                 <View style={[styles.row, styles.meta]}>
                                     <LineBadge line={step.line} />
                                     <Text style={styles.metaText} numberOfLines={2}>
-                                        {step.line?.name ?? ''} {step.direction ?? ''} · {Math.max(step.stops.length - 1, 0)}개역{' '}
+                                        {step.line?.name ?? ''} {formatDirection(step)} · {Math.max(step.stops.length - 1, 0)}개역{' '}
                                         {toMinutes(step.durationSec)}분
                                     </Text>
                                 </View>

@@ -77,7 +77,7 @@ const congestion = (level: CongestionLevel | null): Congestion =>
         ? UNSUPPORTED
         : {
             supported: true,
-            kind: 'MOCK',
+            kind: 'ESTIMATED',
             pct: LEVEL_PCT[level],
             level,
             levelLabel: LEVEL_LABELS[level],
@@ -121,8 +121,8 @@ function subway(
         durationSec: minutes * 60,
         distanceM,
         line: { id: lineNo, name: `${lineNo}호선`, color: LINE_COLORS[lineNo] },
-        direction,
-        directionCode: null,
+        direction: null,
+        directionCode: lineNo === 2 ? 'INNER' : 'DOWN',
         stops: stopNames.map((name, index) => ({ id: stationId(name), name, order: index + 1 })),
         path: null,
         stations: stopNames.map((name, index) => ({
@@ -194,7 +194,7 @@ const GEONDAE_TO_SADANG: Route[] = [
         subway(2, '잠실 방면', LINE2_GEONDAE_TO_SADANG, 29, 17400, ['RELAXED', 'NORMAL']),
     ]),
     // 실제 분류(routeType)는 서버 응답 확인 후 맞춥니다.
-    route('r3', 'CHEAPEST', 34, 1650, [
+    route('r3', null, 34, 1650, [
         subway(7, '석남 방면', LINE7_GEONDAE_TO_ISU.slice(0, 8), 14, 9300, ['COMFORTABLE']),
         walk('고속터미널역 3호선 승강장으로 환승', 3, 250),
         // 혼잡도 데이터 없음(회색) 확인용
@@ -214,7 +214,7 @@ const SADANG_TO_GEONDAE: Route[] = [
     route('r2', 'FEWER_TRANSFERS', 31, 1750, [
         subway(2, '강남 방면', reverse(LINE2_GEONDAE_TO_SADANG), 29, 17400, ['NORMAL']),
     ]),
-    route('r3', 'CHEAPEST', 34, 1650, [
+    route('r3', null, 34, 1650, [
         subway(2, '강남 방면', ['사당', '방배', '서초', '교대'], 6, 3600, ['COMFORTABLE']),
         walk('교대역 3호선 승강장으로 환승', 2, 150),
         subway(3, '대화 방면', ['교대', '고속터미널'], 2, 1600, ['COMFORTABLE']),
