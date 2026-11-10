@@ -1,4 +1,4 @@
-import { formatDirection } from '@/components/route/format';
+import { formatDirection, formatWait } from '@/components/route/format';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -117,6 +117,10 @@ export default function RouteTimeline({ route, onSignCheck }: Props) {
                                         {toMinutes(step.durationSec)}분
                                     </Text>
                                 </View>
+
+                                {!!formatWait(step, route.steps.slice(0, index).some(previous => previous.type === 'SUBWAY')) && (
+                                    <Text style={styles.metaText}>{formatWait(step, route.steps.slice(0, index).some(previous => previous.type === 'SUBWAY'))}</Text>
+                                )}
 
                                 {middle.length > 0 && (
                                     <Pressable

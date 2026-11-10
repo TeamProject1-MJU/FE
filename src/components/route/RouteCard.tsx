@@ -1,4 +1,4 @@
-import { formatDirection } from '@/components/route/format';
+import { formatDirection, formatTotalTime, formatWait } from '@/components/route/format';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -58,9 +58,9 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
                 style={({ pressed }) => [styles.collapsed, pressed && styles.pressed]}
                 onPress={onPress}
                 accessibilityRole="button"
-                accessibilityLabel={`${toMinutes(summary.totalTimeSec)}분 경로 펼치기`}
+                accessibilityLabel={`${formatTotalTime(summary)} 경로 펼치기`}
             >
-                <Text style={styles.collapsedMinutes}>{toMinutes(summary.totalTimeSec)}분</Text>
+                <Text style={styles.collapsedMinutes}>{formatTotalTime(summary)}</Text>
                 <Text style={styles.collapsedMeta} numberOfLines={1}>
                     {estimated ? '예상 ' : ''}
                     {formatFare(route)} · 환승 {summary.transferCount}회
@@ -94,7 +94,7 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
             <View style={styles.headline}>
                 <View style={styles.timeBox}>
                     <Text style={styles.minutes}>
-                        {toMinutes(summary.totalTimeSec)}
+                        {formatTotalTime(summary)}
                         <Text style={styles.minutesUnit}> 분</Text>
                     </Text>
                     {!!arrival && <Text style={styles.arrival}>{arrival} 도착</Text>}
@@ -158,6 +158,7 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
                                 )}
                             </View>
 
+                            {!!formatWait(step, subwaySteps.indexOf(step) > 0) && <Text style={styles.stepText}>{formatWait(step, subwaySteps.indexOf(step) > 0)}</Text>}
                             <View style={[styles.row, styles.stepMeta]}>
                                 <LineBadge line={step.line} />
                                 <Text style={styles.stepText} numberOfLines={1}>
@@ -231,12 +232,12 @@ const styles = StyleSheet.create({
     },
 
     timeBox: {
-        width: 96,
+        width: 120,
     },
 
     minutes: {
         color: NAVY,
-        fontSize: 35,
+        fontSize: 24,
         fontWeight: '800',
         letterSpacing: -0.5,
     },
@@ -367,7 +368,9 @@ const styles = StyleSheet.create({
     },
 
     collapsed: {
-        height: 44,
+        minHeight: 44,
+        paddingVertical: 8,
+        flexWrap: 'wrap',
         marginTop: 8,
         paddingHorizontal: 12,
         flexDirection: 'row',
@@ -380,9 +383,9 @@ const styles = StyleSheet.create({
     },
 
     collapsedMinutes: {
-        width: 40,
+        maxWidth: 120,
         color: NAVY,
-        fontSize: 16,
+        fontSize: 13,
         fontWeight: '800',
     },
 

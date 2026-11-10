@@ -1,3 +1,4 @@
+import { formatTotalTime } from '@/components/route/format';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';

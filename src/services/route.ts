@@ -51,12 +51,35 @@ export async function searchRoute(
     return {
         ...result.data,
         routes: result.data.routes.map(route => ({
-            ...withStationSlots(route, now),
+            ...withMockWait(withStationSlots(route, now)),
             summary: {
-                ...route.summary,
+                ...withMockWait(route).summary,
                 arrivalAt: new Date(now + route.summary.totalTimeSec * 1000).toISOString(),
             },
         })),
+    };
+}
+
+/** 첫 경로에는 대기 필드를 넣고 나머지는 이전 응답 형태를 유지합니다. */
+function withMockWait(route: Route): Route {
+    if (route.routeId !== 'r1') return route;
+    let subwayIndex = 0;
+    const steps = route.steps.map(step => {
+        if (step.type !== 'SUBWAY') return step;
+        const first = subwayIndex++ === 0;
+        return { ...step, waitSec: first ? 182 : 120, waitKind: 'ESTIMATED' as const, nextTrains: [] };
+    });
+    const transferWaitSec = Math.max(0, subwayIndex - 1) * 120;
+    return {
+        ...route,
+        steps,
+        summary: {
+            ...route.summary,
+            waitSec: 182,
+            waitKind: 'ESTIMATED',
+            transferWaitSec,
+            totalWithWaitSec: route.summary.totalTimeSec + 182 + transferWaitSec,
+        },
     };
 }
 
