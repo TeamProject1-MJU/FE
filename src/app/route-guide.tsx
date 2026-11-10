@@ -100,7 +100,7 @@ export default function RouteGuideScreen() {
 
                         <View style={styles.timeRow}>
                             <Text style={styles.time}>
-                                {Math.round(selected.route.summary.totalTimeSec / 60)}분
+                                {formatTotalTime(selected.route.summary)}
                             </Text>
                             {!!formatClock(selected.route.summary.arrivalAt) && (
                                 <Text style={styles.arrival}>

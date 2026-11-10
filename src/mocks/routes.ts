@@ -185,16 +185,16 @@ const reverse = (names: string[]) => [...names].reverse();
 
 /** 건대입구 → 사당 */
 const GEONDAE_TO_SADANG: Route[] = [
-    route('r1', 'FASTEST', 27, 1650, [
+    route('r1', 'FASTEST', 23, 1650, [
         subway(7, '석남 방면', LINE7_GEONDAE_TO_ISU, 18, 11700, ['NORMAL', 'NORMAL', 'NORMAL', 'RELAXED']),
         walk('이수역 4호선 승강장으로 환승', 3, 210),
         subway(4, '오이도 방면', ['이수', '사당'], 2, 1000, ['CROWDED']),
     ]),
-    route('r2', 'FEWER_TRANSFERS', 31, 1750, [
+    route('r2', 'FEWER_TRANSFERS', 29, 1750, [
         subway(2, '잠실 방면', LINE2_GEONDAE_TO_SADANG, 29, 17400, ['RELAXED', 'NORMAL']),
     ]),
     // 실제 분류(routeType)는 서버 응답 확인 후 맞춥니다.
-    route('r3', null, 34, 1650, [
+    route('r3', null, 27, 1650, [
         subway(7, '석남 방면', LINE7_GEONDAE_TO_ISU.slice(0, 8), 14, 9300, ['COMFORTABLE']),
         walk('고속터미널역 3호선 승강장으로 환승', 3, 250),
         // 혼잡도 데이터 없음(회색) 확인용
@@ -206,15 +206,15 @@ const GEONDAE_TO_SADANG: Route[] = [
 
 /** 사당 → 건대입구 */
 const SADANG_TO_GEONDAE: Route[] = [
-    route('r1', 'FASTEST', 27, 1650, [
+    route('r1', 'FASTEST', 23, 1650, [
         subway(4, '진접 방면', ['사당', '이수'], 2, 1000, ['NORMAL']),
         walk('이수역 7호선 승강장으로 환승', 3, 210),
         subway(7, '장암 방면', reverse(LINE7_GEONDAE_TO_ISU), 18, 11700, ['RELAXED', 'NORMAL', 'CROWDED', 'NORMAL']),
     ]),
-    route('r2', 'FEWER_TRANSFERS', 31, 1750, [
+    route('r2', 'FEWER_TRANSFERS', 29, 1750, [
         subway(2, '강남 방면', reverse(LINE2_GEONDAE_TO_SADANG), 29, 17400, ['NORMAL']),
     ]),
-    route('r3', null, 34, 1650, [
+    route('r3', null, 27, 1650, [
         subway(2, '강남 방면', ['사당', '방배', '서초', '교대'], 6, 3600, ['COMFORTABLE']),
         walk('교대역 3호선 승강장으로 환승', 2, 150),
         subway(3, '대화 방면', ['교대', '고속터미널'], 2, 1600, ['COMFORTABLE']),
