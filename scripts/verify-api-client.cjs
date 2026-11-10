@@ -1,4 +1,4 @@
-// 실행: node scripts/verify-api-client.cjs
+// 실행: node --test scripts/verify-api-client.cjs (node scripts/verify-api-client.cjs 도 같은 검사를 돌려요)
 // 설치된 TypeScript와 Node 기본 모듈로만 검사하며 실제 서버를 호출하지 않습니다.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -369,4 +369,190 @@ test('300ms 디바운스는 연속 입력을 한 요청으로 묶고 삭제·이
     runtime.render(); runtime.unmount(); runtime.advance(300); await settle();
     assert.equal(calls.length, 1);
     assert.equal(runtime.timers.size, 0);
+});
+
+test('fetchStation: mock 반환·없는 역 STATION_NOT_FOUND·서버 파싱과 오류 코드 유지', async () => {
+    const mock = createRuntime();
+    const service = mock.load('src/services/station.ts');
+    const mocks = mock.load('src/mocks/stations.ts');
+    const { ApiError } = mock.load('src/services/api/errors.ts');
+    const detail = await service.fetchStation(105);
+    assert.deepEqual(plain(detail), plain(mocks.MOCK_STATIONS.find(station => station.id === 105)));
+    detail.lines[0].color = '#000000';
+    assert.notEqual(mocks.MOCK_STATIONS.find(station => station.id === 105).lines[0].color, '#000000');
+    for (const id of [999999, 0, -1, 1.5, Number.NaN]) {
+        await assert.rejects(service.fetchStation(id), error => error instanceof ApiError && error.code === 'STATION_NOT_FOUND' && error.status === 404);
+    }
+
+    const server = createRuntime(serverEnv);
+    const api = server.load('src/services/station.ts');
+    const calls = [];
+    const station = { id: 88001, name: '서버역', latitude: 37.5, longitude: 127, isSupported: false, lines: [{ lineId: 41, lineName: '수인분당선', color: '#F5A200', stationCode: 'K211' }] };
+    server.context.fetch = async url => { calls.push(url); return jsonResponse({ success: true, data: station }); };
+    assert.deepEqual(plain(await api.fetchStation(88001)), station);
+    assert.equal(calls[0], 'https://example.test/api/v1/stations/88001');
+    // 서버 모드에서는 mock 목록에 있는 ID 라도 mock 값을 돌려주지 않고 서버를 불러요.
+    await api.fetchStation(105);
+    assert.equal(calls[1], 'https://example.test/api/v1/stations/105');
+    await assert.rejects(api.fetchStation(0), error => error.code === 'STATION_NOT_FOUND');
+    assert.equal(calls.length, 2);
+
+    server.context.fetch = async () => jsonResponse({ success: false, error: { code: 'STATION_NOT_FOUND', message: '역을 찾을 수 없습니다.' } }, 404);
+    await assert.rejects(api.fetchStation(1), error => error.code === 'STATION_NOT_FOUND' && error.status === 404 && error.message === '역을 찾을 수 없습니다.');
+    server.context.fetch = async () => jsonResponse({ success: false, error: { code: 'TOKEN_EXPIRED' } }, 401);
+    await assert.rejects(api.fetchStation(1), error => error.code === 'TOKEN_EXPIRED' && error.status === 401);
+    for (const data of [null, {}, { ...station, lines: null }, { ...station, id: '88001' }, { ...station, lines: [{ lineId: 1 }] }]) {
+        server.context.fetch = async () => jsonResponse({ success: true, data });
+        await assert.rejects(api.fetchStation(1), error => error.code === 'UNKNOWN_ERROR');
+    }
+    assert.equal(server.timers.size, 0);
+});
+
+test('fetchLines: mock 노선·서버 파싱·실패하면 기존 노선 값으로 대체', async () => {
+    const mock = createRuntime();
+    const service = mock.load('src/services/station.ts');
+    const { MOCK_LINES } = mock.load('src/mocks/stations.ts');
+    const lines = await service.fetchLines();
+    assert.deepEqual(plain(lines.slice(0, 2)), [
+        { id: 1, lineCode: '1', name: '1호선', color: '#0052A4' },
+        { id: 2, lineCode: '2', name: '2호선', color: '#00A84D' },
+    ]);
+    // 기존 하드코딩 색(direction.ts LINE_COLORS)과 같은 값이어야 대체해도 화면이 바뀌지 않아요.
+    const { LINE_COLORS } = mock.load('src/services/direction.ts');
+    for (const [id, color] of Object.entries(LINE_COLORS)) assert.equal(lines.find(line => line.id === Number(id)).color, color);
+    // 서버(DB 시드)와 같은 lineCode 형식: 1호선 "1" … 8호선 "8"
+    assert.deepEqual(plain(lines.filter(line => line.id <= 8).map(line => line.lineCode)), ['1', '2', '3', '4', '5', '6', '7', '8']);
+    lines[0].color = '#000000';
+    assert.equal(MOCK_LINES[0].color, '#0052A4');
+
+    const server = createRuntime(serverEnv);
+    const api = server.load('src/services/station.ts');
+    const fallback = plain(server.load('src/mocks/stations.ts').MOCK_LINES);
+    const data = [{ id: 2, lineCode: '2', name: '2호선', color: '#00A84D' }, { id: 41, lineCode: 'K', name: '수인분당선', color: '#F5A200' }];
+    const calls = [];
+    server.context.fetch = async url => { calls.push(url); return jsonResponse({ success: true, data }); };
+    assert.deepEqual(plain(await api.fetchLines()), data);
+    assert.equal(calls[0], 'https://example.test/api/v1/lines');
+    const failures = [
+        async () => { throw new TypeError('연결 실패'); },
+        async () => jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR' } }, 500),
+        async () => jsonResponse({ success: false, error: { code: 'AUTH_REQUIRED' } }, 401),
+        async () => ({ ok: true, status: 200, text: async () => '<html>' }),
+        async () => jsonResponse({ success: true, data: [{ id: '2', name: '2호선' }] }),
+        async () => jsonResponse({ success: true, data: { items: [] } }),
+    ];
+    for (const failure of failures) {
+        server.context.fetch = failure;
+        assert.deepEqual(plain(await api.fetchLines()), fallback);
+    }
+    assert.equal(server.timers.size, 0);
+});
+
+test('역 검색: 50자 초과는 서버를 부르지 않고 VALIDATION_ERROR, 응답 형식 오류는 UNKNOWN_ERROR', async () => {
+    const server = createRuntime(serverEnv);
+    const api = server.load('src/services/station.ts');
+    const calls = [];
+    server.context.fetch = async url => { calls.push(url); return jsonResponse({ success: true, data: { items: [], page: 0, size: 50, totalElements: 0 } }); };
+    await api.searchStations(`  ${'가'.repeat(50)}  `);
+    assert.equal(calls.length, 1);
+    await assert.rejects(api.searchStations('가'.repeat(51)), error => error.code === 'VALIDATION_ERROR' && error.status === 400);
+    assert.equal(calls.length, 1);
+    // 서버는 코드 포인트로 세요: 이모지 26개(코드 포인트 26, UTF-16 52)는 서버를 부르고, 51 코드 포인트는 거절해요.
+    const emoji = '🚇'.repeat(26);
+    assert.equal(Array.from(emoji).length, 26);
+    assert.equal(emoji.length, 52);
+    await api.searchStations(emoji);
+    assert.equal(calls.length, 2);
+    await assert.rejects(api.searchStations(`${'🚇'.repeat(26)}${'가'.repeat(25)}`), error => error.code === 'VALIDATION_ERROR' && error.status === 400);
+    assert.equal(calls.length, 2);
+    server.context.fetch = async () => jsonResponse({ success: true, data: { items: [{ id: 1, name: '역' }], page: 0, size: 50, totalElements: 1 } });
+    await assert.rejects(api.searchStations('역'), error => error.code === 'UNKNOWN_ERROR');
+    const mock = createRuntime().load('src/services/station.ts');
+    await assert.rejects(mock.searchStations('가'.repeat(51)), error => error.code === 'VALIDATION_ERROR');
+});
+
+test('검색 화면이 로딩·결과 없음·401·네트워크·4xx·5xx 를 구분하고 입력을 50자로 제한', async () => {
+    const runtime = createScreenRuntime(serverEnv);
+    let respond;
+    runtime.context.fetch = async () => respond();
+    const texts = node => {
+        if (!node || typeof node !== 'object') return typeof node === 'string' || typeof node === 'number' ? [String(node)] : [];
+        if (Array.isArray(node)) return node.flatMap(texts);
+        return texts(node.props?.children);
+    };
+    const searchFor = async keyword => {
+        const view = runtime.render();
+        findElement(view, element => element.type === 'TextInput').props.onChangeText(keyword);
+        const loading = runtime.render();
+        runtime.advance(300); await settle();
+        return { loading, view: runtime.render() };
+    };
+    const retryButton = view => findElement(view, element => element.type === 'Pressable' && texts(element).includes('다시 시도'));
+
+    assert.equal(findElement(runtime.render(), element => element.type === 'TextInput').props.maxLength, 50);
+
+    respond = () => jsonResponse({ success: true, data: { items: [], page: 0, size: 50, totalElements: 0 } });
+    let { loading, view } = await searchFor('없는역');
+    assert.ok(texts(loading).includes('역을 검색하고 있어요'));
+    assert.ok(texts(findElement(view, element => typeof element.type === 'function' && element.props.keyword === '없는역')?.type({ keyword: '없는역', onRetry() {} })).join('').includes('일치하는'));
+
+    const cases = [
+        [() => jsonResponse({ success: false, error: { code: 'AUTH_REQUIRED' } }, 401), '로그인이 필요해요', false],
+        [() => jsonResponse({ success: false, error: { code: 'TOKEN_EXPIRED', message: '만료' } }, 401), '로그인이 필요해요', false],
+        [() => { throw new TypeError('연결 실패'); }, '서버에 연결하지 못했어요', true],
+        [() => jsonResponse({ success: false, error: { code: 'VALIDATION_ERROR', message: 'keyword 는 50자 이하' } }, 400), '검색어를 확인해 주세요', false],
+        [() => jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR', message: 'NullPointerException' } }, 500), '역 정보를 불러오지 못했어요', true],
+    ];
+    for (const [index, [response, title, retry]] of cases.entries()) {
+        respond = response;
+        ({ view } = await searchFor(`역${index}`));
+        assert.ok(texts(view).includes(title), title);
+        assert.equal(!!retryButton(view), retry, title);
+        assert.equal(texts(view).includes('NullPointerException'), false);
+    }
+
+    // 다시 시도는 같은 검색어로 한 번 더 요청해요.
+    let count = 0;
+    respond = () => { count++; throw new TypeError('연결 실패'); };
+    ({ view } = await searchFor('재시도'));
+    respond = () => { count++; return jsonResponse({ success: true, data: { items: [{ id: 88002, name: '재시도', latitude: 37.5, longitude: 127, isSupported: true, lines: [] }], page: 0, size: 50, totalElements: 1 } }); };
+    retryButton(view).props.onPress();
+    runtime.render(); runtime.advance(300); await settle(); view = runtime.render();
+    assert.equal(count, 2);
+    assert.equal(findElement(view, element => element.type === 'FlatList').props.data[0].id, 88002);
+    runtime.unmount();
+});
+
+test('검색 결과가 첫 페이지보다 많으면 50개만 보여주고 안내', async () => {
+    const runtime = createScreenRuntime(serverEnv);
+    const items = Array.from({ length: 50 }, (_, i) => ({ id: 90000 + i, name: `서버역${i}`, latitude: 37.5, longitude: 127, isSupported: true, lines: [] }));
+    const calls = [];
+    runtime.context.fetch = async url => { calls.push(url); return jsonResponse({ success: true, data: { items, page: 0, size: 50, totalElements: 120 } }); };
+    let view = runtime.render();
+    findElement(view, element => element.type === 'TextInput').props.onChangeText('서버');
+    runtime.render(); runtime.advance(300); await settle(); view = runtime.render();
+    assert.match(calls[0], /page=0&size=50$/);
+    const list = findElement(view, element => element.type === 'FlatList');
+    assert.equal(list.props.data.length, 50);
+    assert.deepEqual(plain(list.props.ListFooterComponent.props.children.slice(0, 4)), ['검색 결과 ', 120, '개 중 ', 50]);
+    runtime.unmount();
+});
+
+test('서버 모드에서 고른 서버 역(id 포함)을 호출 화면에 그대로 돌려줌', async () => {
+    const runtime = createScreenRuntime(serverEnv);
+    // mock 서울역(101)과 같은 id 지만 서버 값이 그대로 전달돼야 해요.
+    const station = { id: 101, name: '서버 건대입구', latitude: 37.54, longitude: 127.07, isSupported: true, lines: [{ lineId: 2, lineName: '2호선', color: '#00A84D', stationCode: '212' }] };
+    runtime.context.fetch = async () => jsonResponse({ success: true, data: { items: [station], page: 0, size: 50, totalElements: 1 } });
+    let picked;
+    runtime.screen.openStationPicker({ purpose: 'departure' }, value => { picked = value; });
+    let view = runtime.render();
+    findElement(view, element => element.type === 'TextInput').props.onChangeText('건대');
+    runtime.render(); runtime.advance(300); await settle(); view = runtime.render();
+    const list = findElement(view, element => element.type === 'FlatList');
+    const item = list.props.renderItem({ item: list.props.data[0], index: 0 }).props.children;
+    item.type(item.props).props.onPress();
+    assert.deepEqual(plain(picked), station);
+    assert.deepEqual(plain(runtime.screen.getRecentStations()[0]), station);
+    runtime.screen.clearRecentStations();
+    runtime.unmount();
 });

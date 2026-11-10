@@ -1,4 +1,4 @@
-import type { Station, StationLine } from '@/types/station';
+import type { Line, Station, StationLine } from '@/types/station';
 
 /**
  * 역 검색 mock 데이터.
@@ -29,6 +29,19 @@ const LINE = {
 } as const;
 
 type LineKey = keyof typeof LINE;
+
+/**
+ * 명세 5.1 `GET /lines` 모양의 mock 노선 목록.
+ * lineCode 는 서버(DB 시드) 형식대로 노선 번호 문자열이에요(1호선 = "1" … 8호선 = "8").
+ * 9호선·수인분당선 등(9, 101~104)은 같은 규칙으로 만든 mock 전용 값이에요.
+ * 서버 호출이 실패했을 때 쓰는 기존 노선 값도 이 목록이에요.
+ */
+export const MOCK_LINES: Line[] = Object.values(LINE).map(({ lineId, lineName, color }) => ({
+    id: lineId,
+    lineCode: String(lineId),
+    name: lineName,
+    color,
+}));
 
 function line(key: LineKey, stationCode: string): StationLine {
     return { ...LINE[key], stationCode };
