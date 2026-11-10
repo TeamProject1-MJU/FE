@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { formatDirection, formatWait } from '@/components/route/format';
+import { type ReactNode, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -44,6 +45,7 @@ function stopLabel(step: RouteStep, stopIndex: number) {
 
 type Props = {
     route: Route;
+    nextTrains?: ReactNode;
     /** 승차 구간의 '표지판으로 방향 확인' 버튼 */
     onSignCheck: (step: RouteStep) => void;
 };
@@ -52,7 +54,7 @@ type Props = {
  * 경로 구간 목록 (#35)
  * 명세 6.1 route.steps 를 순서대로 그립니다: 승차 → (중간역) → 하차 → 환승 도보 → … → 도착
  */
-export default function RouteTimeline({ route, onSignCheck }: Props) {
+export default function RouteTimeline({ route, onSignCheck, nextTrains }: Props) {
     const [openSteps, setOpenSteps] = useState<Record<number, boolean>>({});
 
     const lastSubwayIndex = route.steps.reduce(
@@ -112,10 +114,16 @@ export default function RouteTimeline({ route, onSignCheck }: Props) {
                                 <View style={[styles.row, styles.meta]}>
                                     <LineBadge line={step.line} />
                                     <Text style={styles.metaText} numberOfLines={2}>
-                                        {step.line?.name ?? ''} {step.direction ?? ''} · {Math.max(step.stops.length - 1, 0)}개역{' '}
+                                        {step.line?.name ?? ''} {formatDirection(step)} · {Math.max(step.stops.length - 1, 0)}개역{' '}
                                         {toMinutes(step.durationSec)}분
                                     </Text>
                                 </View>
+
+                                {!!formatWait(step, route.steps.slice(0, index).some(previous => previous.type === 'SUBWAY')) && (
+                                    <Text style={styles.metaText}>{formatWait(step, route.steps.slice(0, index).some(previous => previous.type === 'SUBWAY'))}</Text>
+                                )}
+
+                                {index === route.steps.findIndex(item => item.type === 'SUBWAY') && nextTrains}
 
                                 {middle.length > 0 && (
                                     <Pressable

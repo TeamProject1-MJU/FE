@@ -20,13 +20,13 @@ export type CongestionLevel =
 
 export type Congestion = {
     supported: boolean;
-    kind: 'PREDICTED' | 'MOCK' | null;
+    kind: 'PREDICTED' | 'ESTIMATED' | 'MOCK' | null;
     pct: number | null;
     level: CongestionLevel | null;
     levelLabel: string | null;
 };
 
-export type RouteType = 'FASTEST' | 'FEWER_TRANSFERS' | 'CHEAPEST';
+export type RouteType = 'FASTEST' | 'FEWER_TRANSFERS' | 'CHEAPEST' | null;
 export type RouteSource = 'KAKAO' | 'INTERNAL';
 export type FareSource = 'KAKAO' | 'ESTIMATED';
 
@@ -51,7 +51,12 @@ export type RouteStationCongestion = {
     congestion: Congestion;
 };
 
+export type WaitKind = 'REALTIME' | 'ESTIMATED' | 'NONE';
+
 export type RouteStep = {
+    waitSec?: number | null;
+    waitKind?: WaitKind;
+    nextTrains?: { destinationLabel: string; secondsUntil: number; message: string | null; receivedAt: string }[];
     type: 'WALKING' | 'SUBWAY';
     guidance: string;
     durationSec: number;
@@ -65,6 +70,10 @@ export type RouteStep = {
 };
 
 export type RouteSummary = {
+    waitSec?: number | null;
+    waitKind?: WaitKind;
+    transferWaitSec?: number;
+    totalWithWaitSec?: number;
     totalTimeSec: number;
     /** ISO-8601 */
     arrivalAt: string;

@@ -78,6 +78,7 @@ export default function RouteSearchScreen() {
         departure?: string;
         destination?: string;
         focus?: Field;
+        arrivals?: string;
     }>();
 
     const [departure, setDeparture] = useState<StationSummary | null>(null);
@@ -181,7 +182,10 @@ export default function RouteSearchScreen() {
 
         router.push({
             pathname: '/route-guide',
-            params: { routeId: route.routeId },
+            params: {
+                routeId: route.routeId,
+                ...(params.arrivals === 'none' || params.arrivals === 'fail' ? { arrivals: params.arrivals } : {}),
+            },
         });
     };
 

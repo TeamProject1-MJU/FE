@@ -58,11 +58,12 @@ export default function Congestion({ congestion, compact = false, slot }: Props)
 
     const firstTrain = !!slot?.firstTrain;
     const isMock = !!level && congestion?.kind === 'MOCK';
+    const isEstimated = !!level && congestion?.kind === 'ESTIMATED';
 
     const spoken = [
         `혼잡도 ${level ? label : '혼잡도 데이터 미제공'}`,
         firstTrain && slot ? `첫차 ${formatSlot(slot)} 기준` : '',
-        isMock ? '임시 데이터' : '',
+        isMock ? '임시 데이터' : isEstimated ? '추정 데이터' : '',
     ]
         .filter(Boolean)
         .join(', ');
@@ -94,9 +95,9 @@ export default function Congestion({ congestion, compact = false, slot }: Props)
 
             {!compact && firstTrain && slot && <Text style={styles.slotText}>{formatSlot(slot)} 기준</Text>}
 
-            {!compact && isMock && (
+            {(isEstimated || (!compact && isMock)) && (
                 <View style={styles.mockTag}>
-                    <Text style={styles.mockText}>임시</Text>
+                    <Text style={styles.mockText}>{isEstimated ? '추정' : '임시'}</Text>
                 </View>
             )}
         </View>

@@ -1,3 +1,4 @@
+import { formatTotalTime } from '@/components/route/format';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -5,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import Congestion from '@/components/route/Congestion';
+import NextTrains from '@/components/route/NextTrains';
 import { formatFare } from '@/components/route/RouteCard';
 import RouteMapPreview from '@/components/route/RouteMapPreview';
 import RouteTimeline from '@/components/route/RouteTimeline';
@@ -33,8 +35,9 @@ const formatClock = (iso: string) => {
  */
 export default function RouteGuideScreen() {
     const insets = useSafeAreaInsets();
-    const { routeId } = useLocalSearchParams<{ routeId?: string }>();
+    const { routeId, arrivals } = useLocalSearchParams<{ routeId?: string; arrivals?: string }>();
     const selected = getSelectedRoute(routeId);
+    const firstSubway = selected?.route.steps.find(step => step.type === 'SUBWAY');
 
     const goBack = () => {
         if (router.canGoBack()) router.back();
@@ -97,7 +100,7 @@ export default function RouteGuideScreen() {
 
                         <View style={styles.timeRow}>
                             <Text style={styles.time}>
-                                {Math.round(selected.route.summary.totalTimeSec / 60)}분
+                                {formatTotalTime(selected.route.summary)}
                             </Text>
                             {!!formatClock(selected.route.summary.arrivalAt) && (
                                 <Text style={styles.arrival}>
@@ -139,7 +142,11 @@ export default function RouteGuideScreen() {
                         </Text>
                     </View>
 
-                    <RouteTimeline route={selected.route} onSignCheck={openSignCheck} />
+                    <RouteTimeline
+                        route={selected.route}
+                        onSignCheck={openSignCheck}
+                        nextTrains={firstSubway && <NextTrains step={firstSubway} mock={arrivals === 'none' || arrivals === 'fail' ? arrivals : undefined} />}
+                    />
                 </ScrollView>
             )}
         </View>
@@ -219,6 +226,7 @@ const styles = StyleSheet.create({
     timeRow: {
         marginTop: 8,
         flexDirection: 'row',
+        flexWrap: 'wrap',
         alignItems: 'center',
         gap: 8,
     },

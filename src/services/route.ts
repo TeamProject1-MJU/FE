@@ -46,17 +46,45 @@ export async function searchRoute(
         throw new RouteSearchError('ROUTE_NOT_FOUND', '지하철 경로를 찾지 못했어요.');
     }
 
-    // 도착 시각 = 지금 + 소요 시간 (명세: summary.arrivalAt = departAt(생략 시 현재 시각) + totalTimeSec)
+    // mock 서버의 도착 시각을 만듭니다. 화면에서는 이 값을 다시 계산하지 않습니다.
     const now = Date.now();
     return {
         ...result.data,
-        routes: result.data.routes.map(route => ({
-            ...withStationSlots(route, now),
-            summary: {
-                ...route.summary,
-                arrivalAt: new Date(now + route.summary.totalTimeSec * 1000).toISOString(),
-            },
-        })),
+        routes: result.data.routes.map(route => {
+            const prepared = withMockWait(withStationSlots(route, now));
+            return {
+                ...prepared,
+                summary: {
+                    ...prepared.summary,
+                    arrivalAt: new Date(now + (prepared.summary.totalWithWaitSec ?? prepared.summary.totalTimeSec) * 1000).toISOString(),
+                },
+            };
+        }),
+    };
+}
+
+/** 첫 경로에는 대기 필드를 넣고 나머지는 이전 응답 형태를 유지합니다. */
+function withMockWait(route: Route): Route {
+    if (route.routeId !== 'r1') return route;
+    let subwayIndex = 0;
+    const steps = route.steps.map(step => {
+        if (step.type !== 'SUBWAY') return step;
+        const first = subwayIndex++ === 0;
+        return { ...step, waitSec: first ? 180 : 120, waitKind: 'ESTIMATED' as const, nextTrains: [] };
+    });
+    // 환승 경로는 이동 23분·대기 포함 28분, 직통 경로는 이동 42분·대기 포함 45분입니다.
+    const transferWaitSec = route.summary.transferCount > 0 ? 120 : 0;
+    const totalWithWaitSec = route.summary.transferCount > 0 ? 1680 : 2700;
+    return {
+        ...route,
+        steps,
+        summary: {
+            ...route.summary,
+            waitSec: 180,
+            waitKind: 'ESTIMATED',
+            transferWaitSec,
+            totalWithWaitSec,
+        },
     };
 }
 
