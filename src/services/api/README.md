@@ -193,7 +193,7 @@ await fetchRoomMembers(roomId); // GET /rooms/{roomId}/members
 - `getMockRoom`·`getMockMembers`는 서버 모드에서 캐시만 읽고 mock 방으로 대체하지 않아요. 후보·채팅 API는 mock을 유지하며 이 방 정보를 읽어요. 채팅은 캐시 상세를 우선 사용하고 없으면 실제 상세 조회를 해요. 추천은 #99부터 서버 8.1~8.3을 불러요(아래 "중간역 추천" 항목).
 - ROOM_NOT_FOUND·NOT_ROOM_MEMBER·NETWORK_ERROR·VALIDATION_ERROR·ROOM_BUSY는 같은 RoomError 코드로 전달해요. 형식 오류와 그 밖의 서버 오류는 UNKNOWN_ERROR예요. TOKEN_*과 공통 인증 오류는 ApiError 그대로 A-1에 맡겨요.
 - 서버 모드의 `fetchMyRooms`·`fetchRoomDetail`은 mock 실패·빈 목록 플래그를 무시해요. 화면의 로딩·빈 목록·재시도·접근 불가 표시는 실제 응답에 따라 동작해요.
-- 생성·참여는 아래 #97에서 연동해요. 초대 코드 조회·수정·출발역 변경·나가기·승계·후보·투표·채팅·WebSocket의 실제 API 연동은 범위 밖이에요. mock 데이터·이벤트를 서버 응답으로 표시하거나 저장하지 않아요.
+- 생성·참여는 #97, 초대 코드 조회·방 정보 수정·출발역 변경은 #106에서 연동해요. 나가기·승계·후보·투표·채팅·WebSocket의 실제 API 연동은 범위 밖이에요. mock 데이터·이벤트를 서버 응답으로 표시하거나 저장하지 않아요.
 - 실서버 확인은 Swagger에서 같은 계정으로 방을 만든 뒤 웹에서 GET /rooms·상세·멤버 응답과 화면을 비교해요. 빈 계정, 일반 멤버/방장, 403·404도 확인해요. 테스트용 토큰 주입 코드와 `.env`는 커밋하지 않아요.
 
 
@@ -210,7 +210,7 @@ const joined = await joinRoom('a3k9pz ');
 
 - 이름은 기존 `roomNameLength`대로 앞뒤 공백을 뺀 유니코드 코드 포인트 1~30자를 검사해요. 문자열이 아니거나 길이가 맞지 않으면 전송 전에 `VALIDATION_ERROR`예요. 선택 시각은 null 또는 시간대가 포함된 ISO 문자열이에요. mock 실패 플래그는 서버 모드에서 무시해요.
 - 201 응답을 `unknown`으로 검사해요. 서버의 id·roomCode·name·maxMembers·status·ownerId·appointmentAt은 그대로 사용하고, 응답에 없는 myRole(OWNER)·memberCount(1)·selectedStation(null)만 생성 규칙으로 채워요. 가입 시각·멤버 상세는 만들지 않아요.
-- 생성 요약과 코드를 같은 계정의 메모리 캐시에 반영해요. 생성 완료 화면의 표시·복사·공유는 응답의 `roomCode`를 사용해요. 이후 상세에서도 이 실행에서 확인한 코드는 사용할 수 있어요. 7.9 호출은 추가하지 않으며, 코드를 모르는 서버 방에 가짜 코드를 만들지 않아요.
+- 생성 요약과 코드를 같은 계정의 메모리 캐시에 반영해요. 생성 완료 화면의 표시·복사·공유는 응답의 `roomCode`를 사용해요. #106부터 이후 상세·초대 시트에서는 실제 7.9로 현재 코드를 조회해요. 가짜 코드는 만들지 않아요.
 - 참여 코드는 `normalizeRoomCode`의 trim·대문자 변환 후 `isValidRoomCode`로 검사해요. 서버 입력 화면은 붙여넣기 전에 6자로 자르지 않으며, 내부 공백·기호·초과 글자를 임의로 삭제해 다른 유효 코드로 만들지 않아요. mock 입력은 기존 정리 동작을 유지해요.
 - 참여 성공 응답의 UUID를 확인한 뒤 기존 상세 GET으로 실제 역할·멤버 수를 받아 캐시와 목록을 갱신해요. POST 성공 뒤 GET만 실패하면 참여 결과를 실패로 바꾸지 않고 상세 화면에서 조회를 재시도해요. 생성·참여 POST 자체를 자동 재전송하지 않아요. 기존 A-1의 인증 갱신·재시도와 공통 10초 제한은 유지해요.
 - ROOM_CODE_INVALID(404)·ROOM_FULL/ALREADY_JOINED/ROOM_BUSY(409)·VALIDATION_ERROR(400)는 같은 RoomError 코드로, 네트워크·시간 초과는 NETWORK_ERROR로, 형식 오류·그 밖의 오류는 UNKNOWN_ERROR로 전달해요. TOKEN_*과 공통 인증 오류는 기존 A-1에 맡기며 화면에서 중복 안내하지 않아요.
@@ -243,3 +243,17 @@ listRecommendationRuns(roomId); // 이 앱 세션에서 본 실행만, 최근 �
 - 요청 전 `getRoomCacheScope()`로 계정 범위를 잡고 응답 뒤 `assertRoomCacheScope()`로 확인해요. 계정이 바뀐 뒤의 늦은 응답은 `AUTH_REQUIRED`로 버려요. 계정이 바뀌면(`subscribeRoomCacheReset`) 이전 실행 목록도 비워요.
 - 화면은 8.1 요청 중 계산 버튼과 "다시 추천받기"를 막고, 상태가 반영되기 전 연타도 한 번만 보내요.
 - 후보 제안·투표(추천 → 후보 올리기 포함)는 mock 유지, WS 수신 재조회와 새 필드 화면 표시는 범위 밖이에요.
+
+
+## 초대 코드·출발역·방 정보 수정 (#106)
+
+- `fetchInviteCode(roomId)`는 서버 모드에서 `GET /rooms/{roomId}/invite-code`를 호출해요. 로컬 생성 기록이나 캐시 역할로 미리 거절하지 않고 현재 서버 권한으로 확인해요. 응답은 `{ roomCode: 대문자 영문·숫자 6자 }`로 검사해 서버 캐시에 보관해요. 앱 재시작 뒤에도 현재 방장은 조회할 수 있어요.
+- `updateMyDeparture(roomId, { departureStationId })`는 정수 ID 하나만 `PATCH /rooms/{roomId}/members/me`로 보내요. null·누락·문자열·소수·JS에서 안전하지 않은 정수는 요청 전에 VALIDATION_ERROR예요. 서버 모드에서는 mock 역 목록을 조회하거나 요청의 역으로 가짜 멤버를 만들지 않아요.
+- `updateRoom(roomId, patch)`는 `PATCH /rooms/{roomId}`로 선택한 name·appointmentAt만 보내요. 이름은 기존 trim·코드 포인트 1~30자로 검사해요. name:null은 오류, appointmentAt:null은 해제이며 생략은 유지예요. 빈 body도 허용해요. 지정한 시각은 시간대 있는 미래 ISO인지 검사하고 UTC로 보내요.
+- 두 PATCH의 성공 data는 반드시 null이어야 해요. 출발역은 기존 멤버 GET, 방 정보는 기존 상세 GET으로 다시 받아 공용 캐시와 목록에 반영해요. 서버 모드 반환은 void예요. mock에서는 기존 멤버/방 객체 반환을 유지하므로 공개 반환 타입은 각각 `Promise<RoomMember | void>`, `Promise<RoomSummary | void>`예요. 현재 호출 화면은 반환 객체를 사용하지 않아요.
+- PATCH가 성공하고 GET만 실패하면 "변경은 저장했지만 최신 정보를 불러오지 못했어요"라고 안내해요. 서비스 자체의 PATCH·GET 자동 재시도는 추가하지 않아요. 기존 공통 10초 제한과 A-1 인증 갱신 규칙은 유지해요.
+- NOT_ROOM_OWNER·NOT_ROOM_MEMBER·ROOM_NOT_FOUND·ROOM_BUSY·STATION_NOT_FOUND·STATION_UNSUPPORTED·VALIDATION_ERROR는 같은 RoomError 코드로 연결해요. 형식 오류·그 밖의 오류는 UNKNOWN_ERROR, 네트워크·시간 초과는 NETWORK_ERROR예요. TOKEN_*·401은 ApiError 그대로 A-1에 맡기고 화면에서 중복 안내하지 않아요.
+- 비멤버·없는 방 응답은 대상 방 캐시를 제거해요. NOT_ROOM_OWNER는 이전 초대 코드 캐시를 지워요. 비멤버 화면은 목록으로 이동하고 수정 권한 상실은 방장 전용 안내를 보여 줘요. 초대 시트에서 권한이 바뀌면 상세를 재조회해 헤더 권한도 갱신해요.
+- 변경·조회 전후 `sessionGeneration:userId` 범위를 검사해요. 쓰기 전에 시작된 조회는 새 캐시를 덮거나 삭제하지 못해요. 화면의 ref 잠금과 조회 번호로 연타, 닫힌 시트, 화면 이탈, 다른 방·계정으로 전환한 뒤의 늦은 응답과 예약 이동을 막아요.
+- 수정 화면은 바꾼 필드만 보내고, 기존 약속 시각의 초·밀리초 차이만으로 시각이 바뀌었다고 판단하지 않아요. 이름만 바꾸면 기존 시각은 그대로 유지해요. 과거 시각은 입력 단계에서도 먼저 막아요.
+- mock 모드는 기존 기능·실패 플래그·객체 반환을 유지해요. 추천·후보·투표·확정 약속역을 새로 만들거나 지우는 API는 호출하지 않아요. 나가기·승계·약속역 지정/해제·WebSocket은 이번 범위 밖이에요.

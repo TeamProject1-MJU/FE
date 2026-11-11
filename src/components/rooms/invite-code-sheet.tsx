@@ -10,6 +10,7 @@ import {
 import * as Clipboard from 'expo-clipboard';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
+import { ApiError, isAuthError } from '@/services/api/errors';
 import { fetchInviteCode } from '@/services/room';
 import { RoomError, type RoomErrorCode } from '@/types/room';
 
@@ -35,6 +36,7 @@ type Props = {
     onClose: () => void;
     /** 화면 확인용: 첫 조회를 실패시킵니다 (다시 시도하면 성공) */
     mockError?: boolean;
+    onAccessError?: (code: RoomErrorCode) => void;
 };
 
 /**
@@ -43,38 +45,54 @@ type Props = {
  * - 방장(현재 OWNER)만 열 수 있어요. 열 때마다 7.9 를 다시 조회합니다 (방장이 바뀌었으면 NOT_ROOM_OWNER).
  * - 조회 중 / 성공(코드 + 복사) / 실패(다시 시도) 상태를 가집니다.
  * - 복사는 화면에 보이는 roomCode 문자열을 그대로 클립보드에 넣어요.
- * TODO(범위 밖): 외부 공유(Share 시트)·실제 API 연동
+ * TODO(범위 밖): 외부 공유(Share 시트)
  */
-export default function InviteCodeSheet({ visible, roomId, roomName, bottomInset, onClose, mockError }: Props) {
+export default function InviteCodeSheet({ visible, roomId, roomName, bottomInset, onClose, mockError, onAccessError }: Props) {
     const [state, setState] = useState<State>({ status: 'loading' });
     const [copied, setCopied] = useState(false);
     const failNext = useRef(false);
+    const requestId = useRef(0);
+    const busy = useRef(false);
     const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const load = useCallback(async () => {
+        if (busy.current) return;
+        busy.current = true;
+        const id = ++requestId.current;
         setState({ status: 'loading' });
         setCopied(false);
         try {
             const fail = failNext.current;
             failNext.current = false; // 다시 시도하면 성공하도록
             const { roomCode } = await fetchInviteCode(roomId, fail ? 'error' : undefined);
-            setState({ status: 'success', roomCode });
+            if (id === requestId.current) setState({ status: 'success', roomCode });
         } catch (error) {
+            if (id !== requestId.current || error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
             const code: RoomErrorCode = error instanceof RoomError ? error.code : 'NETWORK_ERROR';
             const message = error instanceof RoomError ? error.message : '초대 코드를 불러오지 못했어요.';
             setState({ status: 'error', code, message });
+            if (code === 'NOT_ROOM_OWNER' || code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND') onAccessError?.(code);
+        } finally {
+            if (id === requestId.current) busy.current = false;
         }
-    }, [roomId]);
+    }, [roomId, onAccessError]);
+
+    const cancelRequest = useCallback(() => {
+        requestId.current++;
+        busy.current = false;
+        if (copyTimer.current) clearTimeout(copyTimer.current);
+    }, []);
 
     // 열릴 때마다 새로 조회 (방장 위임 등으로 권한이 바뀌었을 수 있어요)
     useEffect(() => {
+        cancelRequest();
         if (!visible) return;
         failNext.current = !!mockError;
-        load();
-        return () => {
-            if (copyTimer.current) clearTimeout(copyTimer.current);
-        };
-    }, [visible, mockError, load]);
+        const id = requestId.current;
+        // 같은 프레임에 닫힌 시트의 예약 조회도 취소해요.
+        void Promise.resolve().then(() => { if (id === requestId.current) return load(); });
+        return cancelRequest;
+    }, [visible, mockError, load, cancelRequest]);
 
     const copy = async () => {
         if (state.status !== 'success') return;
@@ -84,7 +102,7 @@ export default function InviteCodeSheet({ visible, roomId, roomName, bottomInset
         copyTimer.current = setTimeout(() => setCopied(false), 2000);
     };
 
-    const retryable = state.status === 'error' && state.code === 'NETWORK_ERROR';
+    const retryable = state.status === 'error' && (state.code === 'NETWORK_ERROR' || state.code === 'ROOM_BUSY' || state.code === 'UNKNOWN_ERROR');
 
     return (
         <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
@@ -144,7 +162,7 @@ export default function InviteCodeSheet({ visible, roomId, roomName, bottomInset
                             <View style={styles.note}>
                                 <Ionicons name="information-circle-outline" size={16} color={SECONDARY} />
                                 <Text style={styles.noteText}>
-                                    친구에게 이 코드를 직접 전달해 주세요. 상대는 약속 목록의 '초대 코드로 참여'에서 입력해요. 방장이 바뀌면 새 방장이 코드를 볼 수 있어요.
+                                    친구에게 이 코드를 직접 전달해 주세요. 상대는 약속 목록의 &apos;초대 코드로 참여&apos;에서 입력해요. 방장이 바뀌면 새 방장이 코드를 볼 수 있어요.
                                 </Text>
                             </View>
                         </>

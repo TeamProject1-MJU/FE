@@ -101,6 +101,9 @@ export default function RoomRecommendationsScreen() {
     const runIdParam = params.runId ? String(params.runId) : undefined;
     const myUserId = getMyUserId();
     const requestId = useRef(0);
+    const active = useRef(true);
+    const departureLock = useRef(false);
+    const departureId = useRef(0);
 
     const [detail, setDetail] = useState<RoomDetail | null>(null);
     const [run, setRun] = useState<RecommendationRun | null>(null);
@@ -161,9 +164,11 @@ export default function RoomRecommendationsScreen() {
     // 방 화면 진입·복귀 시 8.2 를 다시 조회해 isStale 을 갱신합니다 (명세 8.2). 계산 중에는 건너뜀
     useFocusEffect(
         useCallback(() => {
+            active.current = true;
+            if (!departureLock.current) setDepartureSaving(false);
             if (!running) void load();
             // DOM ref가 아닌 요청 카운터로 이전 화면의 조회를 무효화해요.
-            return () => { requestId.current++; };
+            return () => { active.current = false; requestId.current++; departureId.current++; };
         }, [load, running]),
     );
 
@@ -249,14 +254,20 @@ export default function RoomRecommendationsScreen() {
         openStationPicker(
             { purpose: 'departure', contextLabel: detail.name, selectedStationId: me?.departureStation?.id },
             async (station: Station) => {
+                if (departureLock.current) return;
+                departureLock.current = true;
+                const id = ++departureId.current;
                 setDepartureSaving(true);
                 try {
                     await updateMyDeparture(detail.id, { departureStationId: station.id });
-                    await load();
+                    if (active.current && id === departureId.current) await load();
                 } catch (error) {
+                    if (!active.current || id !== departureId.current || error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
+                    if (error instanceof RoomError && (error.code === 'NOT_ROOM_MEMBER' || error.code === 'ROOM_NOT_FOUND')) { router.replace('/rooms'); return; }
                     setNotice(error instanceof RoomError ? error.message : '출발역을 저장하지 못했어요.');
                 } finally {
-                    setDepartureSaving(false);
+                    departureLock.current = false;
+                    if (active.current) setDepartureSaving(false);
                 }
             },
         );

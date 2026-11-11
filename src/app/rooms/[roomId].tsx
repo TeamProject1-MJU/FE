@@ -38,7 +38,7 @@ import {
     parseLeaveRoomScenario,
     prepareLeaveMock,
 } from '@/services/room';
-import { RoomError, type RoomDetail } from '@/types/room';
+import { RoomError, type RoomErrorCode, type RoomDetail } from '@/types/room';
 import { useMock as isMockMode } from '@/services/api/config';
 import { ApiError, isAuthError } from '@/services/api/errors';
 
@@ -122,6 +122,10 @@ export default function RoomDetailScreen() {
     const myUserId = getMyUserId();
     const requestId = useRef(0);
     const proposalsRequestId = useRef(0);
+    const active = useRef(true);
+    const departureLock = useRef(false);
+    const departureId = useRef(0);
+    const departureTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const [detail, setDetail] = useState<RoomDetail | null>(null);
     const [loadError, setLoadError] = useState<LoadError | null>(null);
@@ -132,6 +136,19 @@ export default function RoomDetailScreen() {
     const [tab, setTab] = useState<Tab>(params.tab === 'vote' ? 'vote' : 'chat');
     const [sheet, setSheet] = useState<Sheet>(null);
     const [notice, setNotice] = useState('');
+
+    const handleAccessError = useCallback(async (code: RoomErrorCode) => {
+        if (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND') { router.replace('/rooms'); return; }
+        if (code !== 'NOT_ROOM_OWNER') return;
+        setInviteCode(null);
+        const id = requestId.current;
+        try {
+            const latest = await fetchRoomDetail(roomId);
+            if (active.current && id === requestId.current) setDetail(latest);
+        } catch (error) {
+            if (active.current && id === requestId.current && error instanceof RoomError && error.code === 'NOT_ROOM_MEMBER') router.replace('/rooms');
+        }
+    }, [roomId]);
 
     /** 7.15 후보 목록 재조회 (제안·삭제·투표·확정 후, 화면 복귀 시) */
     const loadProposals = useCallback(async () => {
@@ -178,8 +195,12 @@ export default function RoomDetailScreen() {
                 try {
                     const code = (await fetchInviteCode(roomId)).roomCode;
                     if (id === requestId.current) setInviteCode(code);
-                } catch {
-                    if (id === requestId.current) setInviteCode(null);
+                } catch (error) {
+                    if (error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) throw error;
+                    if (id === requestId.current) {
+                        setInviteCode(null);
+                        if (error instanceof RoomError) await handleAccessError(error.code);
+                    }
                 }
             } else {
                 setInviteCode(null);
@@ -189,8 +210,9 @@ export default function RoomDetailScreen() {
             setDetail(null);
             const code = error instanceof RoomError ? error.code : null;
             setLoadError(code === 'ROOM_NOT_FOUND' || code === 'NOT_ROOM_MEMBER' ? code : 'UNKNOWN');
+            if (code === 'NOT_ROOM_MEMBER') router.replace('/rooms');
         }
-    }, [roomId, params.mock, loadProposals, leaveScenario]);
+    }, [roomId, params.mock, loadProposals, leaveScenario, handleAccessError]);
 
     useEffect(() => {
         return subscribeRoomMockChanges(change => {
@@ -237,9 +259,15 @@ export default function RoomDetailScreen() {
 
     useFocusEffect(
         useCallback(() => {
+            active.current = true;
+            if (!departureLock.current) setDepartureSaving(null);
             void load();
-            // 화면을 떠나거나 다른 방을 열면 이전 조회를 무효화해요.
-            return () => { requestId.current++; proposalsRequestId.current++; };
+            // 화면을 떠나거나 다른 방을 열면 이전 조회·저장 화면 갱신을 무효화해요.
+            return () => {
+                active.current = false;
+                requestId.current++; proposalsRequestId.current++; departureId.current++;
+                if (departureTimer.current) clearTimeout(departureTimer.current);
+            };
         }, [load]),
     );
 
@@ -270,7 +298,9 @@ export default function RoomDetailScreen() {
      * 서비스에서도 STATION_UNSUPPORTED 로 한 번 더 거절합니다. 실패하면 기존 출발역은 그대로예요.
      */
     const saveDeparture = async (station: Station) => {
-        if (!detail) return;
+        if (!detail || departureLock.current) return;
+        departureLock.current = true;
+        const id = ++departureId.current;
         setDepartureSaving(station);
         setDepartureFailed(null);
         setNotice('');
@@ -278,17 +308,22 @@ export default function RoomDetailScreen() {
             const fail = departureFailNext.current;
             departureFailNext.current = undefined; // 다시 시도하면 성공하도록
             await updateMyDeparture(detail.id, { departureStationId: station.id }, fail);
+            if (!active.current || id !== departureId.current) return;
             setDepartureSaving(null);
             await load(); // 방 상세·멤버 목록에 반영 (7.4/7.6 재조회)
+            if (!active.current || id !== departureId.current) return;
             setDepartureSaved(`${formatStationName(station.name)}으로 설정했어요`);
-            setTimeout(() => setDepartureSaved(null), 2500);
+            departureTimer.current = setTimeout(() => { if (active.current) setDepartureSaved(null); }, 2500);
         } catch (error) {
+            if (!active.current || id !== departureId.current || error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
+            if (error instanceof RoomError && (error.code === 'NOT_ROOM_MEMBER' || error.code === 'ROOM_NOT_FOUND')) { await handleAccessError(error.code); return; }
             const message = error instanceof RoomError ? error.message : '출발역을 저장하지 못했어요. 다시 시도해 주세요.';
             const retryable = !(error instanceof RoomError) || error.code === 'NETWORK_ERROR' || error.code === 'ROOM_BUSY';
             setDepartureFailed(retryable ? { station, message } : null);
             setNotice(message);
         } finally {
-            setDepartureSaving(null);
+            departureLock.current = false;
+            if (active.current) setDepartureSaving(null);
         }
     };
 
@@ -565,6 +600,7 @@ export default function RoomDetailScreen() {
                     roomName={detail.name}
                     bottomInset={insets.bottom}
                     mockError={inviteFailNext}
+                    onAccessError={handleAccessError}
                     onClose={() => {
                         setInviteFailNext(false);
                         setSheet(null);

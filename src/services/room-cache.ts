@@ -138,7 +138,7 @@ export function cacheJoinedRoom(roomId: string, roomCode: string, expected: stri
     listIds = listIds.filter(id => id !== roomId);
 }
 
-/** 7.9는 아직 연동하지 않아요. 이 세션의 서버 생성 응답으로 확인한 코드만 보여 줘요. */
+/** 서버에서 확인한 초대 코드예요. 현재 OWNER인 캐시에서만 읽어요. */
 export function readCachedRoomCode(roomId: string): string | undefined {
     syncScope();
     const entry = entries.get(roomId);
@@ -148,4 +148,16 @@ export function readCachedRoomCode(roomId: string): string | undefined {
 export function findCachedRoomIdByCode(roomCode: string): string | undefined {
     syncScope();
     return [...entries].find(([, entry]) => entry.roomCode === roomCode)?.[0];
+}
+
+
+export function cacheRoomInviteCode(roomId: string, roomCode: string, expected: string) {
+    assertRoomCacheScope(expected);
+    entries.set(roomId, { ...entries.get(roomId), roomCode });
+}
+
+export function clearCachedRoomCode(roomId: string, expected: string) {
+    assertRoomCacheScope(expected);
+    const entry = entries.get(roomId);
+    if (entry) delete entry.roomCode;
 }
