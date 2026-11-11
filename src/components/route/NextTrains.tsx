@@ -2,13 +2,19 @@ import { useCallback, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { formatNextTrain } from '@/components/route/format';
+import { isAuthError } from '@/services/api/errors';
 import { fetchArrivals, type ArrivalsMock } from '@/services/arrivals';
 import type { ArrivalsResponse } from '@/types/arrivals';
 import type { RouteStep } from '@/types/route';
 
+/** 서버가 (역, 노선)별로 10~20초 캐시하고 일일 호출 한도가 있어 15~30초 사이로 지켜요. */
 const ARRIVALS_POLL_MS = 20000;
 
-/** 첫 승차 구간만 독립적으로 갱신하여 경로와 전체 목록의 재렌더링을 줄입니다. */
+/**
+ * 첫 승차 구간만 독립적으로 갱신하여 경로와 전체 목록의 재렌더링을 줄입니다.
+ * available:false·열차 없음·호출 실패면 줄을 숨기고, 인증 오류는 A-1 공통 처리에 맡겨 이전 값을 그대로 둬요.
+ */
 export default function NextTrains({ step, mock }: { step: RouteStep; mock?: ArrivalsMock }) {
     const [data, setData] = useState<ArrivalsResponse | null>(null);
     const [loading, setLoading] = useState(true);
@@ -37,8 +43,9 @@ export default function NextTrains({ step, mock }: { step: RouteStep; mock?: Arr
                     setData(response);
                     setNow(Date.now());
                 }
-            } catch {
-                if (active) setData(null);
+            } catch (error) {
+                // 인증 오류는 공통 처리(갱신·로그인 이동)에 맡기고 줄이 깜빡이지 않게 이전 값을 유지해요.
+                if (active && !isAuthError(error)) setData(null);
             } finally {
                 pending = false;
                 if (active) setLoading(false);
@@ -61,10 +68,7 @@ export default function NextTrains({ step, mock }: { step: RouteStep; mock?: Arr
     return (
         <View style={styles.row}>
             <Text style={styles.text}>
-                다음 열차{loading ? ' 확인 중' : ` · ${data!.trains.slice(0, 2).map(train => {
-                    const seconds = Math.max(0, train.secondsUntil - elapsed);
-                    return `${train.destinationLabel} ${Math.floor(seconds / 60)}분 ${seconds % 60}초`;
-                }).join(' · ')}`}
+                다음 열차{loading ? ' 확인 중' : ` · ${data!.trains.slice(0, 2).map(train => formatNextTrain(train, elapsed)).join(' · ')}`}
             </Text>
         </View>
     );
