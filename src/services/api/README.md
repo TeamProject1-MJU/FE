@@ -153,16 +153,25 @@ import { formatNextTrain } from '@/components/route/format';
 const data = await fetchArrivals({ stationId: 222, lineId: 2, nextStationId: 223, directionCode: 'INNER', limit: 2 });
 if (data.available) {
     const elapsed = Math.max(0, Math.floor((Date.now() - Date.parse(data.receivedAt!)) / 1000));
-    data.trains.map(train => formatNextTrain(train, elapsed)); // "성수행 2분 5초" · "성수행 곧 도착" · "성수행 전역 출발"
+    data.trains.map(train => formatNextTrain(train, elapsed)); // "성수행 2분 5초" · "성수행 곧 도착" · "성수행 · [2]번째 전역"
 }
 ```
 
-- `lineId`는 항상 보내고 `nextStationId`·`directionCode`·`limit`은 값이 있을 때만 보내요. `limit`은 1~5로 맞춰요. 역·노선·다음 역 ID가 양의 정수가 아니거나 방향 값이 다르면 서버를 부르지 않고 `VALIDATION_ERROR`(400)를 던져요(`/stations/NaN/arrivals` 방지).
+- `lineId`는 항상 보내고 `nextStationId`·`directionCode`·`limit`은 값이 있을 때만 보내요. `limit`은 1~5로 맞춰요(BE 기본 3·최대 10). 역·노선·다음 역 ID가 양의 정수가 아니거나 방향 값이 다르면 서버를 부르지 않고 `VALIDATION_ERROR`(400)를 던져요(`/stations/NaN/arrivals` 방지).
 - `NextTrains`는 첫 승차 구간의 `stops[0].id`(역), `line.id`(노선), `stops[1].id`(`nextStationId`), `directionCode`, `limit: 2`로 불러요.
-- `available: false`는 오류가 아닌 정상 응답이에요. `reason`(`UNSUPPORTED_STATION`·`NO_DATA`·`UPSTREAM_ERROR`·`DISABLED`)만 확인하고 `trains`는 빈 배열로 돌려줘요. 화면은 "다음 열차" 줄만 숨겨요.
-- `available: true`이면 `receivedAt`(시각으로 읽히는 문자열)과 `trains` 배열(빈 배열 허용), 열차마다 `destinationLabel`(문자열)·`directionCode`(5개 값 또는 null)·`nextStationName`(문자열 또는 null)·`secondsUntil`(숫자)·`message`(문자열 또는 null)를 검사해요. 맞지 않으면 `UNKNOWN_ERROR`예요.
+- 응답은 BE `ArrivalResponse` 기준이에요. 서버는 `stationId`·`lineId`·`nextStationName`을 보내지 않아서 필수로 검사하지 않아요(숫자로 올 때만 담아요). `available`은 boolean이어야 해요.
+- `available: false`는 오류가 아닌 정상 응답이에요. BE는 이때도 `reason`(`UNSUPPORTED_STATION`·`NO_DATA`·`UPSTREAM_ERROR`·`DISABLED`)·`receivedAt`(null 가능)·`trains`(`[]`)를 항상 보내요. 앱은 `reason`만 확인하고 `trains`는 빈 배열로 돌려줘요. 화면은 "다음 열차" 줄만 숨겨요.
+- `available: true`이면 `reason`은 null이라 검사하지 않아요. `receivedAt`(`+09:00` 오프셋이 붙은 ISO 문자열, 시각으로 읽혀야 해요)과 `trains` 배열(빈 배열 허용)을 검사해요. 열차마다 아래를 검사하고, 맞지 않으면 `UNKNOWN_ERROR`예요.
+  - `destinationName`: 문자열. 이전 이름 `destinationLabel`도 같은 값으로 받아요.
+  - `secondsUntil`: 숫자 또는 null. "[N]번째 전역"처럼 알 수 없으면 null이에요.
+  - `message`: 문자열(null도 받아요). null이 아니라 항상 서울시 `arvlMsg2` 원문이에요. 예: "2분 50초 후", "전역 출발", "[2]번째 전역"
+  - `directionCode`: 5개 값 또는 null(매핑되지 않으면 null). 없으면 null로 받아요.
+  - 화면이 쓰지 않는 `stopsAway`("[N]번째 전역"이 아니면 null)·`lastTrain`·`express`는 형식이 맞을 때만 담고, 없거나 다르면 빼요.
 - 서버 오류 코드는 그대로 전달해요. 401 계열은 공통 클라이언트(A-1)가 갱신·로그인 이동을 처리한 뒤 던져요.
-- 표시 규칙(`formatNextTrain`): 남은 초 = max(0, `secondsUntil` − `receivedAt` 이후 지난 초). 공백이 아닌 `message`가 있으면 그 문구, 없고 남은 초가 60 미만이면 "곧 도착", 그 밖에는 "N분 N초"예요(60초 → "1분 0초", 59초·0초 → "곧 도착").
-- `NextTrains`는 화면에 들어올 때 바로 한 번, 이후 20초마다 불러요(서버가 역·노선별 10~20초 캐시와 일일 한도가 있어 15~30초를 지켜요). 이전 요청이 끝나지 않았으면 다음 폴링을 건너뛰어요. `available: false`·열차 없음·호출 실패(`UNKNOWN_ERROR` 포함)는 줄을 숨기고, 인증 오류는 이전 값을 그대로 둬요. 토큰을 갱신하는 동안에는 요청이 끝나지 않아 이전 값이 계속 보여요.
-- mock 모드는 기존 동작을 유지하고 서버를 부르지 않아요. 둘째 인자 `'none'`(available:false)·`'fail'`(호출 실패)은 mock 모드에서만 쓰고 서버 모드에서는 무시해요. 안내 화면 주소에 `&arrivals=none` 또는 `&arrivals=fail`을 붙여 확인해요.
+- 표시 규칙(`formatNextTrain`):
+  - `secondsUntil`이 숫자이면 `message`와 상관없이 카운트다운해요. 남은 초 = max(0, `secondsUntil` − `receivedAt` 이후 지난 초). 60초 미만이면 "성수행 곧 도착", 그 밖에는 "성수행 N분 N초"예요(60초 → "1분 0초", 59초·0초 → "곧 도착").
+  - `secondsUntil`이 null일 때만 `message`를 시간 대신 "성수행 · [2]번째 전역"처럼 보여줘요. `message`가 이미 "성수행"으로 시작하면 행선지는 한 번만 나와요. `message`도 비어 있으면 "성수행"만 보여줘요.
+  - 행선지는 `formatDestination`으로 "성수" → "성수행"처럼 "행"을 붙여요. 이미 "행"으로 끝나면 붙이지 않아요.
+- `NextTrains`는 화면에 들어올 때 바로 한 번, 이후 20초마다 불러요(서버가 역·노선별 10~20초 캐시와 일일 한도가 있어 15~30초를 지켜요). 이전 요청이 끝나지 않았으면 다음 폴링을 건너뛰어요. `available: false`·열차 없음·`receivedAt`을 읽을 수 없음·호출 실패(`UNKNOWN_ERROR` 포함)는 줄을 숨기고, 인증 오류는 이전 값을 그대로 둬요. 토큰을 갱신하는 동안에는 요청이 끝나지 않아 이전 값이 계속 보여요.
+- mock 모드는 기존 동작을 유지하고 서버를 부르지 않아요. mock 응답도 실서버와 같은 필드 이름이고 `message`에 "3분 2초 후" 같은 문구를 채워요. 둘째 인자 `'none'`(available:false)·`'fail'`(호출 실패)은 mock 모드에서만 쓰고 서버 모드에서는 무시해요. 안내 화면 주소에 `&arrivals=none` 또는 `&arrivals=fail`을 붙여 확인해요.
 - 경로 검색(6.1)의 대기 필드(`waitSec`, `nextTrains`) 표시는 이번 범위가 아니에요.
