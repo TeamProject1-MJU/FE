@@ -62,7 +62,10 @@ export type CongestionSlot = {
 };
 
 /** 6.2 응답을 6.1 과 같은 congestion 모양으로 바꿔요. 단계·라벨은 서버 값을 그대로 써요(pct 로 다시 계산하지 않아요). */
-export function toCongestion(data: CongestionResponse): Congestion {
+export function toCongestion(
+    data: Pick<CongestionResponse, 'supported' | 'pct' | 'level' | 'levelLabel'>
+        & Partial<Pick<CongestionResponse, 'kind' | 'source'>>,
+): Congestion {
     const supported = data.supported;
     return {
         supported,

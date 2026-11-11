@@ -95,7 +95,6 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
                 <View style={styles.timeBox}>
                     <Text style={styles.minutes}>
                         {formatTotalTime(summary)}
-                        <Text style={styles.minutesUnit}> 분</Text>
                     </Text>
                     {!!arrival && <Text style={styles.arrival}>{arrival} 도착</Text>}
                 </View>

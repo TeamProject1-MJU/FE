@@ -1282,3 +1282,336 @@ test('서버 모드는 복원 중 보호 화면을 가리고 signedOut은 로그
         }
     }
 });
+
+const routeOrigin = { id: 88001, name: '서버 출발', lines: [2], isSupported: true };
+const routeDestination = { id: 99002, name: '서버 도착', lines: [2], isSupported: true };
+const missingRouteCongestion = () => ({ supported: false, kind: null, pct: null, level: null, levelLabel: null });
+
+function routeData() {
+    const congestion = { supported: true, kind: 'ESTIMATED', pct: 87.3, level: 'NORMAL', levelLabel: '서버 라벨' };
+    return {
+        routeSource: 'KAKAO',
+        routes: [{
+            routeId: 'server-route-1', routeType: null,
+            summary: {
+                totalTimeSec: 913, arrivalAt: '2026-11-11T23:41:17+09:00', fare: 1789,
+                fareSource: 'ESTIMATED', transferCount: 1, walkingMinutes: 3, congestion,
+            },
+            steps: [{
+                type: 'WALKING', guidance: '서버 도보 안내', durationSec: 83, distanceM: 57,
+                line: null, direction: null, directionCode: null, stops: [], path: null, stations: [],
+            }, {
+                type: 'SUBWAY', guidance: '서버 승차 안내', durationSec: 830, distanceM: 6789,
+                line: { id: 2, name: '2호선', color: '#00a84d' }, direction: null, directionCode: 'INNER',
+                stops: [{ id: 88001, name: '서버 출발', order: 0 }, { id: 99002, name: '서버 도착', order: 1 }],
+                path: [[127.01, 37.5], [127.02, 37.51]],
+                stations: [
+                    { id: 88001, name: '서버 출발', slotStart: '23:30', slotDate: null, firstTrain: false, congestion },
+                    { id: 99002, name: '서버 도착', slotStart: '00:00', slotDate: '2026-11-11', firstTrain: false, congestion: null },
+                ],
+            }],
+        }],
+    };
+}
+
+test('경로 서버 요청 URL·본문·roomId 선택 포함과 departAt 생략, 서버 ID 사용', async () => {
+    const r = createRuntime(serverEnv);
+    const calls = [];
+    r.context.fetch = async (url, options) => { calls.push({ url, options }); return jsonResponse({ success: true, data: routeData() }); };
+    const service = r.load('src/services/route.ts');
+    for (const options of [undefined, {}, { roomId: undefined }, { roomId: 'server-room-7' }]) {
+        // 지원 여부 판단은 서버가 하며 서버 모드에서 mock 역 목록을 검사하지 않아요.
+        await service.searchRoute({ ...routeOrigin, isSupported: false }, routeDestination, options);
+        const call = calls.at(-1);
+        assert.equal(call.url, 'https://example.test/api/v1/routes/search');
+        assert.equal(call.options.method, 'POST');
+        assert.deepEqual(JSON.parse(call.options.body), {
+            originStationId: 88001, destinationStationId: 99002,
+            ...(options?.roomId === undefined ? {} : { roomId: 'server-room-7' }),
+        });
+        assert.equal(Object.hasOwn(JSON.parse(call.options.body), 'departAt'), false);
+    }
+    assert.equal(calls.length, 4);
+    assert.equal(r.timers.size, 0);
+});
+
+test('경로 정상 응답의 서버 값·null·대기 필드 생략을 보존하고 혼잡도만 정리', async () => {
+    for (const routeSource of ['KAKAO', 'INTERNAL']) {
+        const r = createRuntime(serverEnv);
+        const data = routeData(); data.routeSource = routeSource;
+        r.context.fetch = async () => jsonResponse({ success: true, data });
+        const result = plain(await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination));
+        const expected = plain(data);
+        expected.routes[0].steps[1].stations[1].congestion = missingRouteCongestion();
+        assert.deepEqual(result, expected);
+        assert.equal(result.routes[0].summary.arrivalAt, '2026-11-11T23:41:17+09:00');
+        for (const field of ['waitSec', 'waitKind', 'transferWaitSec', 'totalWithWaitSec']) {
+            assert.equal(Object.hasOwn(result.routes[0].summary, field), false);
+        }
+        assert.equal(result.routes[0].steps[1].direction, null);
+        assert.equal(result.routes[0].steps[1].directionCode, 'INNER');
+    }
+});
+
+test('경로 요약 혼잡도 null·미제공과 stations null은 화면용 미제공·빈 배열', async () => {
+    const cases = [null, missingRouteCongestion(), { supported: false, kind: 'MOCK', pct: 90, level: 'NORMAL', levelLabel: '이 값은 표시하지 않아요' }];
+    for (const congestion of cases) {
+        const r = createRuntime(serverEnv);
+        const data = routeData();
+        data.routes[0].summary.congestion = congestion;
+        data.routes[0].steps[1].stations = null;
+        r.context.fetch = async () => jsonResponse({ success: true, data });
+        const result = await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination);
+        assert.deepEqual(plain(result.routes[0].summary.congestion), missingRouteCongestion());
+        assert.deepEqual(plain(result.routes[0].steps[1].stations), []);
+    }
+});
+
+test('경로가 내려주는 선택 대기 필드는 검사 후 그대로 보존', async () => {
+    const r = createRuntime(serverEnv); const data = routeData();
+    Object.assign(data.routes[0].summary, { waitSec: 180, waitKind: 'ESTIMATED', transferWaitSec: 120, totalWithWaitSec: 1213 });
+    Object.assign(data.routes[0].steps[1], { waitSec: null, waitKind: 'NONE', nextTrains: [] });
+    r.context.fetch = async () => jsonResponse({ success: true, data });
+    const result = plain(await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination));
+    assert.deepEqual(result.routes[0].summary, data.routes[0].summary);
+    assert.equal(result.routes[0].steps[1].waitSec, null);
+    assert.deepEqual(result.routes[0].steps[1].nextTrains, []);
+});
+
+test('경로 응답의 화면 사용 필드 누락·잘못된 타입은 일반 경로 오류', async () => {
+    const mutations = [];
+    const missing = (select, fields) => fields.forEach(field => mutations.push(data => { delete select(data)[field]; }));
+    missing(data => data, ['routeSource', 'routes']);
+    missing(data => data.routes[0], ['routeId', 'routeType', 'summary', 'steps']);
+    missing(data => data.routes[0].summary, ['totalTimeSec', 'arrivalAt', 'fare', 'fareSource', 'transferCount', 'walkingMinutes', 'congestion']);
+    missing(data => data.routes[0].steps[1], ['type', 'guidance', 'durationSec', 'distanceM', 'line', 'direction', 'directionCode', 'stops', 'path', 'stations']);
+    missing(data => data.routes[0].steps[1].stations[0], ['id', 'name', 'slotStart', 'slotDate', 'firstTrain', 'congestion']);
+    missing(data => data.routes[0].summary.congestion, ['supported', 'kind', 'pct', 'level', 'levelLabel']);
+    mutations.push(
+        data => { data.routeSource = 'UNKNOWN'; },
+        data => { data.routes = {}; },
+        data => { data.routes[0].routeId = 123; },
+        data => { data.routes[0].routeType = 'OTHER'; },
+        data => { data.routes[0].summary.totalTimeSec = '913'; },
+        data => { data.routes[0].summary.arrivalAt = 'invalid'; },
+        data => { data.routes[0].summary.fareSource = null; },
+        data => { data.routes[0].summary.congestion.kind = null; },
+        data => { data.routes[0].summary.congestion.level = 'INVALID'; },
+        data => { data.routes[0].summary.congestion.pct = '87.3'; },
+        data => { data.routes[0].steps[1].line = null; },
+        data => { data.routes[0].steps[1].line.id = '2'; },
+        data => { data.routes[0].steps[1].stops[0].order = '0'; },
+        data => { data.routes[0].steps[1].directionCode = 'INVALID'; },
+        data => { data.routes[0].steps[1].path = [[127, null]]; },
+        data => { data.routes[0].steps[1].stations[0].firstTrain = 'false'; },
+        data => { data.routes[0].summary.totalWithWaitSec = '1213'; },
+        data => { data.routes[0].steps[1].waitKind = 'OTHER'; },
+        data => { data.routes[0].steps[1].nextTrains = [null]; },
+    );
+    const r = createRuntime(serverEnv);
+    let current;
+    r.context.fetch = async () => jsonResponse({ success: true, data: current });
+    const service = r.load('src/services/route.ts');
+    for (let i = 0; i < mutations.length; i++) {
+        current = routeData(); mutations[i](current);
+        await assert.rejects(service.searchRoute(routeOrigin, routeDestination), error => error instanceof r.load('src/types/route.ts').RouteSearchError && error.code === 'EXTERNAL_API_ERROR', `변형 ${i}`);
+    }
+});
+
+test('경로 오류 매핑 422·404·403·400·5xx와 TOKEN 계열 원본 보존', async () => {
+    const r = createRuntime(serverEnv);
+    const { searchRoute } = r.load('src/services/route.ts');
+    const { ApiError } = r.load('src/services/api/errors.ts');
+    for (const [code, status, expected] of [
+        ['STATION_UNSUPPORTED', 422, 'STATION_UNSUPPORTED'], ['ROUTE_NOT_FOUND', 404, 'ROUTE_NOT_FOUND'],
+        ['STATION_NOT_FOUND', 404, 'STATION_NOT_FOUND'], ['NOT_ROOM_MEMBER', 403, 'EXTERNAL_API_ERROR'],
+        ['VALIDATION_ERROR', 400, 'EXTERNAL_API_ERROR'], ['EXTERNAL_API_ERROR', 502, 'EXTERNAL_API_ERROR'],
+        ['UNKNOWN_ERROR', 500, 'EXTERNAL_API_ERROR'], ['TOKEN_EXPIRED', 401, 'TOKEN_EXPIRED'],
+        ['TOKEN_INVALID', 401, 'TOKEN_INVALID'], ['TOKEN_FUTURE', 401, 'TOKEN_FUTURE'], ['AUTH_REQUIRED', 401, 'AUTH_REQUIRED'],
+    ]) {
+        let calls = 0;
+        r.context.fetch = async () => { calls++; return jsonResponse({ success: false, error: { code, message: '서버 오류', details: { check: true } } }, status); };
+        await assert.rejects(searchRoute(routeOrigin, routeDestination), error => error.code === expected
+            && (status !== 401 || error instanceof ApiError && error.status === 401 && error.message === '서버 오류' && error.details.check));
+        assert.equal(calls, 1);
+    }
+    r.context.fetch = async () => { throw new TypeError('연결 실패'); };
+    await assert.rejects(searchRoute(routeOrigin, routeDestination), { code: 'NETWORK_ERROR' });
+});
+
+test('경로 시간 초과는 10초·NETWORK_ERROR, 요청·본문 모두 재시도 없음', async () => {
+    for (const phase of ['request', 'body']) {
+        const r = createRuntime(serverEnv); let calls = 0;
+        r.context.fetch = (_url, options) => {
+            calls++;
+            const pending = () => new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(Error('중단'))));
+            return phase === 'request' ? pending() : Promise.resolve({ ok: true, status: 200, text: pending });
+        };
+        const result = r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination);
+        const rejected = assert.rejects(result, { code: 'NETWORK_ERROR' });
+        await settle();
+        assert.equal([...r.timers.values()][0].ms, 10000);
+        r.advance(9999); await settle(); assert.equal(r.timers.size, 1);
+        r.advance(1); await rejected;
+        assert.equal(calls, 1); assert.equal(r.timers.size, 0);
+    }
+});
+
+test('mock 경로의 기존 대기·도착 시각·오류 동작 유지, 서버 호출 없음', async () => {
+    const r = createRuntime(); let calls = 0;
+    r.context.fetch = async () => { calls++; throw Error(); };
+    const service = r.load('src/services/route.ts');
+    const stations = r.load('src/mocks/routes.ts').MOCK_STATIONS;
+    const origin = stations.find(station => station.name === '건대입구');
+    const destination = stations.find(station => station.name === '사당');
+    assert.ok(origin); assert.ok(destination);
+    const pending = service.searchRoute(origin, destination, { roomId: 'mock-room' });
+    r.advance(800); const result = await pending;
+    assert.ok(result.routes.length);
+    const first = result.routes.find(route => route.routeId === 'r1');
+    assert.ok(first.summary.totalWithWaitSec); assert.ok(Number.isFinite(Date.parse(first.summary.arrivalAt)));
+    const unsupported = service.searchRoute({ ...origin, isSupported: false }, destination);
+    const rejected = assert.rejects(unsupported, { code: 'STATION_UNSUPPORTED' }); r.advance(800); await rejected;
+    const notFound = service.searchRoute({ ...origin, name: '없는 역' }, destination);
+    const notFoundRejected = assert.rejects(notFound, { code: 'ROUTE_NOT_FOUND' }); r.advance(800); await notFoundRejected;
+    assert.equal(calls, 0);
+});
+
+function routeScreenRuntime(params, mock = false) {
+    const r = createScreenRuntime(mock ? {} : serverEnv, 'src/app/route-search.tsx');
+    r.external['expo-router'].useLocalSearchParams = () => params;
+    // 경로 화면의 검색 effect가 실제 React처럼 안정적인 콜백을 보도록 해요.
+    r.external.react.useCallback = (callback, dependencies) => {
+        const ref = r.external.react.useRef(null);
+        if (!ref.current || dependencies.some((value, index) => value !== ref.current.dependencies[index])) {
+            ref.current = { callback, dependencies };
+        }
+        return ref.current.callback;
+    };
+    return r;
+}
+
+function stationSearchData(items) { return { items, page: 0, size: 50, totalElements: items.length }; }
+function serverRouteStation(id, name, isSupported = true) {
+    return { id, name, isSupported, latitude: 37.5, longitude: 127, lines: [{ lineId: 2, lineName: '2호선', color: '#00a84d', stationCode: String(id) }] };
+}
+
+test('경로 화면 초기 역은 서버 지원 역의 접미사 제외 정확한 이름과 ID 사용, 실패·미일치는 null', async () => {
+    for (const outcome of ['found', 'missing', 'network']) {
+        const r = routeScreenRuntime({ departure: ' 강남역 ', destination: '사당' });
+        const calls = [];
+        r.context.fetch = async (url, options) => {
+            calls.push({ url, options });
+            if (url.endsWith('/routes/search')) return jsonResponse({ success: true, data: routeData() });
+            if (outcome === 'network') throw Error();
+            const items = url.includes(encodeURIComponent('강남'))
+                ? [serverRouteStation(701, '강남', false), serverRouteStation(702, '강남구청'), ...(outcome === 'found' ? [serverRouteStation(88001, '강남')] : [])]
+                : [serverRouteStation(99002, '사당역')];
+            return jsonResponse({ success: true, data: stationSearchData(items) });
+        };
+        r.render(); await settle(); let view = r.render(); await settle();
+        const origin = findElement(view, element => element.props?.label === '출발').props.station;
+        assert.equal(origin?.id ?? null, outcome === 'found' ? 88001 : null);
+        assert.equal(findElement(view, element => element.props?.label === '도착').props.station?.id ?? null, outcome === 'network' ? null : 99002);
+        if (outcome === 'found') {
+            const request = calls.find(call => call.url.endsWith('/routes/search'));
+            assert.deepEqual(JSON.parse(request.options.body), { originStationId: 88001, destinationStationId: 99002 });
+        }
+        r.unmount(); await settle();
+    }
+});
+
+test('경로 초기 역의 늦은 응답은 바뀐 초기값·사용자의 새 선택을 덮지 않아요', async () => {
+    const params = { departure: '이전' }; const r = routeScreenRuntime(params);
+    const pending = [];
+    r.context.fetch = () => new Promise(resolve => pending.push(resolve));
+    r.render(); await settle(); params.departure = '현재'; r.render(); await settle();
+    pending[1](jsonResponse({ success: true, data: stationSearchData([serverRouteStation(88001, '현재')]) }));
+    await settle(); let view = r.render();
+    assert.equal(findElement(view, element => element.props?.label === '출발').props.station.id, 88001);
+    pending[0](jsonResponse({ success: true, data: stationSearchData([serverRouteStation(77001, '이전')]) }));
+    await settle(); view = r.render();
+    assert.equal(findElement(view, element => element.props?.label === '출발').props.station.id, 88001);
+    // 피커에서 새 역을 고르는 동안 초기 조회를 무효화해요.
+    params.departure = '느린초기값'; r.render(); await settle(); view = r.render();
+    findElement(view, element => element.props?.label === '출발').props.onPress();
+    // 피커 자체의 선택 동작은 기존 B-1 검사가 담당해요. 열기만 해도 초기 조회는 무효가 돼요.
+    pending[2](jsonResponse({ success: true, data: stationSearchData([serverRouteStation(66001, '느린초기값')]) }));
+    await settle(); view = r.render();
+    assert.equal(findElement(view, element => element.props?.label === '출발').props.station.id, 88001);
+    r.unmount();
+});
+
+test('경로 화면은 TOKEN 오류를 중복 안내하지 않고 경로 오류 코드는 기존 안내로 전달', async () => {
+    for (const code of ['TOKEN_INVALID', 'TOKEN_EXPIRED', 'STATION_UNSUPPORTED', 'STATION_NOT_FOUND', 'ROUTE_NOT_FOUND', 'NETWORK_ERROR']) {
+        const r = routeScreenRuntime({ departure: '강남', destination: '사당' });
+        r.context.fetch = async url => {
+            if (url.endsWith('/routes/search')) {
+                if (code === 'NETWORK_ERROR') throw Error();
+                return jsonResponse({ success: false, error: { code } }, code.startsWith('TOKEN_') ? 401 : code === 'STATION_UNSUPPORTED' ? 422 : 404);
+            }
+            return jsonResponse({ success: true, data: stationSearchData([url.includes(encodeURIComponent('강남')) ? serverRouteStation(88001, '강남') : serverRouteStation(99002, '사당')]) });
+        };
+        r.render(); await settle(); r.render(); await settle(); const view = r.render();
+        const message = findElement(view, element => element.props?.code === code);
+        assert.equal(!!message, !code.startsWith('TOKEN_'));
+        r.unmount(); await settle();
+    }
+});
+
+test('경로 표시: 미제공 회색·예상 요금·대기 필드 없는 시간·방향 코드 유지', () => {
+    const r = createRuntime(); const route = routeData().routes[0];
+    route.steps[1].stations[1].congestion = missingRouteCongestion();
+    const congestion = r.load('src/components/route/Congestion.tsx');
+    assert.equal(congestion.congestionColor(missingRouteCongestion()), congestion.UNSUPPORTED_COLOR);
+    const empty = congestion.default({ congestion: missingRouteCongestion() });
+    assert.ok(findElement(empty, element => element.props?.children === '혼잡도 데이터 미제공'));
+    const format = r.load('src/components/route/format.ts');
+    assert.equal(format.formatTotalTime(route.summary), '15분');
+    assert.equal(format.formatWait(route.steps[1], false), '');
+    assert.equal(format.formatDirection(route.steps[1]), '내선');
+    for (const [directionCode, expected] of [['UP', '상행'], ['DOWN', '하행'], ['INNER', '내선'], ['OUTER', '외선'], ['LOOP', '순환']]) {
+        assert.equal(format.formatDirection({ ...route.steps[1], directionCode, direction: null }), expected);
+    }
+    const card = r.load('src/components/route/RouteCard.tsx').default;
+    assert.ok(findElement(card({ route, expanded: true }), element => element.props?.children === '예상'));
+    const collapsed = card({ route, expanded: false });
+    assert.ok(findElement(collapsed, element => Array.isArray(element.props?.children) && element.props.children.includes('예상 ')));
+});
+
+test('mock 경로 화면 초기값은 기존 mock 역을 그대로 사용해요', async () => {
+    const r = routeScreenRuntime({ departure: '건대입구', destination: '사당' }, true);
+    let calls = 0; r.context.fetch = async () => { calls++; throw Error(); };
+    r.render(); await settle(); let view = r.render();
+    assert.equal(findElement(view, element => element.props?.label === '출발').props.station.id, 114);
+    assert.equal(findElement(view, element => element.props?.label === '도착').props.station.id, 109);
+    r.advance(800); await settle(); view = r.render();
+    assert.ok(findElement(view, element => element.props?.route?.routeId === 'r1'));
+    assert.equal(calls, 0); r.unmount();
+});
+
+test('늦은 경로 응답은 최신 검색·동일역·미선택·닫힌 화면 상태를 덮지 않아요', async () => {
+    for (const outcome of ['newer', 'same', 'empty', 'unmounted']) {
+        const params = { departure: '건대입구', destination: '사당' };
+        const r = routeScreenRuntime(params, true);
+        const types = r.load('src/types/route.ts');
+        const pending = [];
+        r.load('src/services/route.ts').searchRoute = () => new Promise((resolve, reject) => pending.push({ resolve, reject }));
+        r.render(); await settle(); let view = r.render(); await settle();
+        assert.equal(pending.length, 1);
+        if (outcome === 'unmounted') r.unmount();
+        else {
+            params.departure = outcome === 'newer' ? '홍대입구' : outcome === 'same' ? '사당' : '없는역';
+            r.render(); await settle(); r.render(); await settle();
+            if (outcome === 'newer') {
+                assert.equal(pending.length, 2);
+                const newer = routeData(); newer.routes[0].routeId = 'newest';
+                pending[1].resolve(newer); await settle();
+            }
+        }
+        pending[0].resolve(routeData()); await settle(); view = r.render();
+        assert.equal(findElement(view, element => element.props?.route?.routeId === 'server-route-1'), null);
+        if (outcome === 'newer') assert.ok(findElement(view, element => element.props?.route?.routeId === 'newest'));
+        assert.ok(types.RouteSearchError); r.unmount();
+    }
+});

@@ -2,7 +2,7 @@
 
 `.env.example`을 `.env`로 복사합니다. `EXPO_PUBLIC_USE_MOCK`은 생략하면 `true`이고, 정확히 `true`일 때만 mock입니다. 서버를 쓰려면 `false`와 `/api/v1`까지 포함한 `EXPO_PUBLIC_API_BASE_URL`을 설정하고 앱을 완전히 새로고침합니다. 환경변수는 빌드에 포함되므로 토큰은 넣지 않습니다.
 
-현재 인증, 내 정보·닉네임 수정·탈퇴(`services/user.ts`), 역 검색·역 상세·노선 목록(`services/station.ts`), 혼잡도 조회(`services/congestion.ts`)가 서버 모드를 지원해요.
+현재 인증, 내 정보·닉네임 수정·탈퇴(`services/user.ts`), 역 검색·역 상세·노선 목록(`services/station.ts`), 혼잡도 조회(`services/congestion.ts`), 경로 검색(`services/route.ts`)이 서버 모드를 지원해요.
 
 ```ts
 import { get, post, delete as apiDelete } from '@/services/api/client';
@@ -124,3 +124,21 @@ const congestion = toCongestion(data); // 6.1과 같은 { supported, kind, pct, 
 - 서버 오류는 `ApiError`의 코드를 그대로 전달해요. `UserError`는 기존 mock 실패와 호출 전 닉네임 검사용으로 유지해요. mock 모드와 화면 테스트 플래그는 서버를 호출하지 않아요.
 
 실행 검사는 프로젝트 루트에서 `node --test scripts/verify-api-client.cjs`로 돌립니다. 실제 서버와 추가 패키지 없이 응답·오류·인증 헤더·시간 초과·mock 검색을 확인합니다.
+
+## 경로 검색 (#92, 명세 6.1)
+
+```ts
+import { searchRoute } from '@/services/route';
+
+await searchRoute(origin, destination);
+await searchRoute(origin, destination, { roomId });
+// POST /routes/search: { originStationId, destinationStationId, roomId? }
+```
+
+- 서버 모드는 서버 역 ID를 보내요. 홈에서 이름으로 넘어온 초기값도 `searchStations`로 이름 끝의 "역"을 제외한 값이 같은 지원 역을 찾아요. 못 찾거나 조회에 실패하면 비워 두고, 늦은 응답은 새로 선택한 역을 덮지 않아요.
+- `roomId`는 전달됐을 때만 본문에 넣고 `departAt`은 보내지 않아요. 공통 클라이언트의 10초 제한과 기존 A-1 인증 처리를 사용하며 경로 서비스의 재시도는 추가하지 않아요.
+- `routeSource`, 경로·요약·단계·정차역의 화면 사용 필드를 검사해요. 빠지거나 타입이 다르면 `ApiError('UNKNOWN_ERROR')`가 발생하고 서비스 경계에서 `RouteSearchError('EXTERNAL_API_ERROR')`로 바뀌어요.
+- 6.1 혼잡도의 출처는 `kind`예요(6.2만 `source`). `toCongestion`으로 정리하고 혼잡도가 `null`이면 미제공, `stations: null`이면 빈 배열로 처리해요. 도보의 `line: null`, `path: null`, `routeType: null`, 정차역의 `slotDate: null`을 허용해요.
+- 도착 시각·요금·소요시간·방향·혼잡도 단계와 라벨은 서버 값을 사용하며 재계산하거나 방면 문구를 만들지 않아요. 대기 필드는 없어도 정상이고 `totalWithWaitSec ?? totalTimeSec`로 표시해요. 미제공 혼잡도는 회색, 추정 요금은 "예상", `direction: null`인 방향은 `directionCode`로 표시해요.
+- `STATION_UNSUPPORTED`(422), `ROUTE_NOT_FOUND`·`STATION_NOT_FOUND`(404)는 같은 `RouteSearchError` 코드, 네트워크·시간 초과는 `NETWORK_ERROR`, 나머지는 `EXTERNAL_API_ERROR`로 전달해요. `TOKEN_*`과 공통 인증 오류는 `ApiError` 그대로 전달하고 화면에서 중복 안내하지 않아요.
+- mock 모드의 기존 경로·대기·도착 시각 생성은 유지해요. 방 화면 호출 연결, 실시간 도착정보 API, 출발 시각 선택, 지도와 추천 API는 이번 범위 밖이에요.
