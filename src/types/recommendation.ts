@@ -1,5 +1,5 @@
 /**
- * 중간역 추천 타입 (API 명세 v1.12 8장 /rooms/{roomId}/recommendations)
+ * 중간역 추천 타입 (API 명세 v1.12 8장 /rooms/{roomId}/recommendations, #99 BE 코드 기준으로 보정)
  *
  * 8.1 POST  /rooms/{roomId}/recommendations            추천 실행
  * 8.2 GET   /rooms/{roomId}/recommendations/latest     최근 실행 (없으면 data: null)
@@ -27,16 +27,24 @@ export type RecommendationRequest = {
     filter?: RecommendationFilter;
 };
 
-/** 서버가 최종 적용한 조건 ("이렇게 이해했어요") */
+/**
+ * 서버가 최종 적용한 조건 ("이렇게 이해했어요")
+ * 서버는 maxMinutes·maxTransfers·maxFareWon 을 null 로, excludeStationIds·memberLimits 를 빈 배열로 보낼 수 있어요.
+ * 서비스가 null·빈 배열을 빼서 정리하므로 화면은 "값이 있는 항목 = 적용된 조건"으로 읽어요.
+ */
 export type AppliedConstraints = RecommendationFilter;
 
 export type RecommendedStation = {
     id: number;
     name: string;
-    latitude: number;
-    longitude: number;
-    isSupported: boolean;
-    /** 화면 노선 배지용 (7.4 departureStation.lines 와 같은 모양). TODO: 8.1 응답에 lines 가 없으면 역 목록에서 채움 */
+    /** 화면에서 쓰지 않아 서버가 보내지 않으면 비어 있을 수 있어요. */
+    latitude?: number;
+    longitude?: number;
+    isSupported?: boolean;
+    /**
+     * 화면 노선 배지용 (7.4 departureStation.lines 와 같은 모양).
+     * 서버 응답에는 없어서 역 상세(5.3 fetchStation)로 채워요. 조회에 실패하면 비워 두고 배지만 숨겨요.
+     */
     lines?: { lineId: number; lineName: string; color: string }[];
 };
 
@@ -47,14 +55,16 @@ export type RecommendationMetrics = {
     maxMinutes: number;
     /** 1인 평균 예상 요금 */
     averageFare: number;
-    totalTransfers: number;
+    /** 화면에서 쓰지 않아요. */
+    totalTransfers?: number;
 };
 
 export type ParticipantSegment = {
     lineId: number;
     lineName: string;
     color: string;
-    direction: 'UP' | 'DOWN' | 'INNER' | 'OUTER' | 'LOOP';
+    /** 화면에서 쓰지 않아요. */
+    direction?: 'UP' | 'DOWN' | 'INNER' | 'OUTER' | 'LOOP' | null;
     fromStationName: string;
     toStationName: string;
     stationCount: number;
@@ -71,9 +81,15 @@ export type ParticipantTime = {
     distanceM: number;
     /** 출발 예정 시각 = 약속 시각 − travelMinutes (약속 시각 없으면 요청 시각), ISO-8601 */
     departureAt: string;
-    /** 경로 정차역 혼잡도 최댓값 */
-    congestion: { pct: number; level: CongestionLevel; levelLabel: string };
+    /** 경로 정차역 혼잡도 최댓값. 데이터가 없으면 null 이에요(화면은 혼잡도 점·라벨을 숨겨요). */
+    congestion: { pct?: number; level: CongestionLevel; levelLabel: string } | null;
     segments: ParticipantSegment[];
+    /** 서버가 더 보내는 값이에요. 이번 범위에서는 화면에 쓰지 않고 그대로 통과만 시켜요. */
+    boardingTrain?: unknown;
+    legs?: unknown;
+    source?: 'TIMETABLE' | 'ESTIMATE' | string | null;
+    arriveAt?: string | null;
+    slackSeconds?: number | null;
 };
 
 /** 최적역의 노선상 앞·뒤 한 정거장 (2·3위 후보가 아님) */
@@ -122,7 +138,17 @@ export type RecommendationErrorCode =
     | 'NOT_ROOM_MEMBER'
     | 'ROOM_NOT_FOUND'
     | 'RUN_NOT_FOUND'
-    | 'NETWORK_ERROR';
+    | 'NETWORK_ERROR'
+    /** 422 약속 시각이 이미 지남 */
+    | 'APPOINTMENT_PASSED'
+    /** 422 약속 시각 전 60분 안에 도착하는 열차가 없음 */
+    | 'NO_SERVICE_TIME'
+    /** 409 같은 방에서 이미 계산 중 */
+    | 'RECOMMENDATION_IN_PROGRESS'
+    /** 400 요청 값 범위 오류 */
+    | 'VALIDATION_ERROR'
+    /** 응답 형식 오류·모르는 서버 코드 */
+    | 'UNKNOWN_ERROR';
 
 export class RecommendationError extends Error {
     code: RecommendationErrorCode;

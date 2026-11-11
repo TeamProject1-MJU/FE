@@ -8,6 +8,8 @@ export type RequestOptions = {
     query?: QueryParams;
     /** 로그인처럼 인증 헤더가 필요 없는 요청은 false로 지정합니다. */
     auth?: boolean;
+    /** 이 요청만 쓸 제한 시간(ms)이에요. 생략하거나 양수가 아니면 기본 REQUEST_TIMEOUT_MS(10초)예요. 시간 초과도 NETWORK_ERROR예요. */
+    timeoutMs?: number;
 };
 type AccessTokenProvider = () => string | null | undefined | Promise<string | null | undefined>;
 
@@ -50,7 +52,9 @@ async function request<T>(method: string, path: string, body: unknown, options: 
     if (token) headers.Authorization = `Bearer ${token}`;
     const serializedBody = body === undefined ? undefined : JSON.stringify(body);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timeoutMs = options.timeoutMs !== undefined && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+        ? options.timeoutMs : REQUEST_TIMEOUT_MS;
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
         let response: Response;
