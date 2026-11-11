@@ -21,6 +21,9 @@ function createRuntime(env = {}, react = require('react')) {
         fetch: async () => { throw new Error('검사에서 지정하지 않은 요청입니다.'); },
         setTimeout: (callback, ms) => { const id = ++timerId; timers.set(id, { callback, ms, due: now + ms }); return id; },
         clearTimeout: id => timers.delete(id),
+        // 도착정보 폴링 검사용 반복 타이머예요. 같은 가상 시계(advance)로 움직여요.
+        setInterval: (callback, ms) => { const id = ++timerId; timers.set(id, { callback, ms, due: now + ms, repeat: true }); return id; },
+        clearInterval: id => timers.delete(id),
     });
     const native = {
         StyleSheet: { create: value => value },
@@ -62,12 +65,13 @@ function createRuntime(env = {}, react = require('react')) {
             const next = [...timers.entries()].filter(([, timer]) => timer.due <= target).sort((a, b) => a[1].due - b[1].due)[0];
             if (!next) break;
             timers.delete(next[0]);
+            if (next[1].repeat) timers.set(next[0], { ...next[1], due: next[1].due + next[1].ms });
             now = next[1].due;
             next[1].callback();
         }
         now = target;
     }
-    return { load, context, timers, advance, external, native };
+    return { load, context, timers, advance, external, native, now: () => now };
 }
 
 const serverEnv = { EXPO_PUBLIC_API_BASE_URL: ' https://example.test/api/v1/// ', EXPO_PUBLIC_USE_MOCK: 'false' };
@@ -1613,5 +1617,305 @@ test('늦은 경로 응답은 최신 검색·동일역·미선택·닫힌 화면
         assert.equal(findElement(view, element => element.props?.route?.routeId === 'server-route-1'), null);
         if (outcome === 'newer') assert.ok(findElement(view, element => element.props?.route?.routeId === 'newest'));
         assert.ok(types.RouteSearchError); r.unmount();
+    }
+});
+
+/* ---------- 실시간 도착정보 (#95, 명세 6.3) ---------- */
+
+const ARRIVALS_BASE_MS = Date.parse('2026-11-11T08:00:00+09:00');
+const arrivalTrain = (overrides = {}) => ({
+    destinationLabel: '성수행', directionCode: 'INNER', nextStationName: '건대입구', secondsUntil: 125, message: null, ...overrides,
+});
+const arrivalsData = (overrides = {}) => ({
+    stationId: 222, lineId: 2, available: true, reason: null,
+    receivedAt: '2026-11-11T08:00:00+09:00', trains: [arrivalTrain(), arrivalTrain({ secondsUntil: 365 })], ...overrides,
+});
+const arrivalsQuery = { stationId: 222, lineId: 2, nextStationId: 223, directionCode: 'INNER', limit: 2 };
+
+test('도착정보 서버 요청: 경로·lineId 항상·선택 값은 있을 때만·limit 1~5', async () => {
+    const r = createRuntime(serverEnv);
+    const calls = [];
+    r.context.fetch = async (url, options) => { calls.push({ url, options }); return ok(arrivalsData()); };
+    const { fetchArrivals } = r.load('src/services/arrivals.ts');
+    const base = 'https://example.test/api/v1/stations/222/arrivals';
+    for (const [query, expected] of [
+        [arrivalsQuery, `${base}?lineId=2&nextStationId=223&directionCode=INNER&limit=2`],
+        [{ stationId: 222, lineId: 2 }, `${base}?lineId=2`],
+        [{ stationId: 222, lineId: 2, nextStationId: undefined, directionCode: undefined, limit: undefined }, `${base}?lineId=2`],
+        [{ stationId: 222, lineId: 2, directionCode: 'UP' }, `${base}?lineId=2&directionCode=UP`],
+        [{ stationId: 222, lineId: 2, nextStationId: 223 }, `${base}?lineId=2&nextStationId=223`],
+        [{ stationId: 222, lineId: 2, limit: 0 }, `${base}?lineId=2&limit=1`],
+        [{ stationId: 222, lineId: 2, limit: 9 }, `${base}?lineId=2&limit=5`],
+        [{ stationId: 222, lineId: 2, limit: 3.7 }, `${base}?lineId=2&limit=3`],
+        [{ stationId: 222, lineId: 2, limit: NaN }, `${base}?lineId=2&limit=2`],
+    ]) {
+        await fetchArrivals(query);
+        assert.equal(calls.at(-1).url, expected);
+        assert.equal(calls.at(-1).options.method, 'GET');
+    }
+    assert.equal(calls.length, 9);
+    assert.equal(r.timers.size, 0);
+});
+
+test('도착정보 잘못된 ID·방향은 /stations/NaN 같은 요청 없이 VALIDATION_ERROR', async () => {
+    const r = createRuntime(serverEnv);
+    let calls = 0;
+    r.context.fetch = async () => { calls++; return ok(arrivalsData()); };
+    const { fetchArrivals } = r.load('src/services/arrivals.ts');
+    for (const query of [
+        { stationId: NaN, lineId: 2 }, { stationId: undefined, lineId: 2 }, { stationId: '222', lineId: 2 },
+        { stationId: 0, lineId: 2 }, { stationId: 1.5, lineId: 2 }, { stationId: 222, lineId: NaN },
+        { stationId: 222, lineId: null }, { stationId: 222, lineId: 2, nextStationId: NaN },
+        { stationId: 222, lineId: 2, directionCode: 'NORTH' },
+    ]) {
+        await assert.rejects(fetchArrivals(query), { code: 'VALIDATION_ERROR', status: 400 });
+    }
+    assert.equal(calls, 0);
+});
+
+test('도착정보 응답: 정상·빈 열차·available:false 는 오류 없이 통과', async () => {
+    const r = createRuntime(serverEnv);
+    let current;
+    r.context.fetch = async () => ok(current);
+    const { fetchArrivals } = r.load('src/services/arrivals.ts');
+
+    current = { ...arrivalsData({ trains: [arrivalTrain({ directionCode: null, nextStationName: null, message: '전역 출발' })] }), extra: 1 };
+    assert.deepEqual(plain(await fetchArrivals(arrivalsQuery)), arrivalsData({ trains: [arrivalTrain({ directionCode: null, nextStationName: null, message: '전역 출발' })] }));
+    current = arrivalsData({ trains: [] });
+    assert.deepEqual(plain(await fetchArrivals(arrivalsQuery)), arrivalsData({ trains: [] }));
+
+    for (const reason of ['UNSUPPORTED_STATION', 'NO_DATA', 'UPSTREAM_ERROR', 'DISABLED']) {
+        // available:false 면 reason 만 보고 나머지(이상한 trains 포함)는 들여다보지 않아요.
+        for (const extra of [{ receivedAt: null, trains: [] }, { receivedAt: 'x', trains: [null] }, { receivedAt: undefined, trains: undefined }]) {
+            current = { stationId: 222, lineId: 2, available: false, reason, ...extra };
+            const result = plain(await fetchArrivals(arrivalsQuery));
+            assert.equal(result.available, false);
+            assert.equal(result.reason, reason);
+            assert.deepEqual(result.trains, []);
+        }
+    }
+});
+
+test('도착정보 응답의 필드 누락·형식 오류는 UNKNOWN_ERROR', async () => {
+    const r = createRuntime(serverEnv);
+    let current;
+    r.context.fetch = async () => ok(current);
+    const { fetchArrivals } = r.load('src/services/arrivals.ts');
+    const cases = [
+        null, [], '응답',
+        ...['stationId', 'lineId', 'available', 'receivedAt', 'trains'].map(key => { const data = arrivalsData(); delete data[key]; return data; }),
+        ...['destinationLabel', 'directionCode', 'nextStationName', 'secondsUntil', 'message'].map(key => {
+            const train = arrivalTrain(); delete train[key]; return arrivalsData({ trains: [train] });
+        }),
+        arrivalsData({ stationId: '222' }), arrivalsData({ lineId: null }), arrivalsData({ available: 'true' }),
+        arrivalsData({ receivedAt: null }), arrivalsData({ receivedAt: '시각 아님' }), arrivalsData({ receivedAt: 1731279600000 }),
+        arrivalsData({ trains: {} }), arrivalsData({ trains: [null] }),
+        arrivalsData({ trains: [arrivalTrain({ destinationLabel: null })] }),
+        arrivalsData({ trains: [arrivalTrain({ directionCode: 'NORTH' })] }),
+        arrivalsData({ trains: [arrivalTrain({ nextStationName: 3 })] }),
+        arrivalsData({ trains: [arrivalTrain({ secondsUntil: '125' })] }),
+        arrivalsData({ trains: [arrivalTrain({ secondsUntil: null })] }),
+        arrivalsData({ trains: [arrivalTrain({ message: 0 })] }),
+        { stationId: 222, lineId: 2, available: false, reason: null, receivedAt: null, trains: [] },
+        { stationId: 222, lineId: 2, available: false, reason: 'OTHER', receivedAt: null, trains: [] },
+        { stationId: 222, lineId: 2, available: false, receivedAt: null, trains: [] },
+    ];
+    for (let i = 0; i < cases.length; i++) {
+        current = cases[i];
+        await assert.rejects(fetchArrivals(arrivalsQuery), { code: 'UNKNOWN_ERROR' }, `변형 ${i}`);
+    }
+});
+
+test('도착정보 서버 오류 code·상태를 그대로 전달하고 재시도하지 않아요', async () => {
+    const r = createRuntime(serverEnv);
+    const { fetchArrivals } = r.load('src/services/arrivals.ts');
+    for (const [code, status] of [
+        ['VALIDATION_ERROR', 400], ['STATION_NOT_FOUND', 404], ['NOT_FOUND', 404], ['INTERNAL_ERROR', 500],
+        ['TOKEN_INVALID', 401], ['AUTH_REQUIRED', 401],
+    ]) {
+        let calls = 0;
+        r.context.fetch = async () => { calls++; return jsonResponse({ success: false, error: { code, message: '서버 문구' } }, status); };
+        await assert.rejects(fetchArrivals(arrivalsQuery), { code, status, message: '서버 문구' });
+        assert.equal(calls, 1);
+    }
+    r.context.fetch = async () => { throw new TypeError('연결 실패'); };
+    await assert.rejects(fetchArrivals(arrivalsQuery), { code: 'NETWORK_ERROR' });
+});
+
+test('도착정보 mock 은 기존 동작(정상·none·fail)을 유지하고 서버를 부르지 않으며, 서버 모드는 mock 인자를 무시', async () => {
+    const mock = createRuntime();
+    let calls = 0;
+    mock.context.fetch = async () => { calls++; throw Error(); };
+    const service = mock.load('src/services/arrivals.ts');
+    const run = async (...args) => { const pending = service.fetchArrivals(...args); mock.advance(400); return pending; };
+    const normal = plain(await run(arrivalsQuery));
+    assert.equal(normal.available, true);
+    assert.equal(normal.trains.length, 2);
+    assert.equal(normal.trains[0].destinationLabel, '성수행');
+    assert.equal(normal.trains[0].directionCode, 'INNER');
+    assert.equal(normal.trains[1].secondsUntil - normal.trains[0].secondsUntil, 240);
+    assert.ok(Number.isFinite(Date.parse(normal.receivedAt)));
+    assert.equal((await run({ ...arrivalsQuery, limit: 9 })).trains.length, 5);
+    assert.deepEqual(plain(await run(arrivalsQuery, 'none')), { stationId: 222, lineId: 2, available: false, reason: 'NO_DATA', receivedAt: null, trains: [] });
+    const failed = service.fetchArrivals(arrivalsQuery, 'fail'); const rejected = assert.rejects(failed); mock.advance(400); await rejected;
+    assert.equal(calls, 0);
+
+    const server = createRuntime(serverEnv);
+    let serverCalls = 0;
+    server.context.fetch = async () => { serverCalls++; return ok(arrivalsData()); };
+    const { fetchArrivals } = server.load('src/services/arrivals.ts');
+    for (const flag of ['none', 'fail']) {
+        assert.deepEqual(plain(await fetchArrivals(arrivalsQuery, flag)), arrivalsData());
+    }
+    assert.equal(serverCalls, 2);
+    assert.equal(server.timers.size, 0);
+});
+
+test('"곧 도착" 표시: 60초 → 1분 0초, 59·0초 → 곧 도착, message 우선, 지난 시간 반영', () => {
+    const { formatNextTrain, ARRIVING_SOON_SEC } = createRuntime().load('src/components/route/format.ts');
+    const train = (secondsUntil, message = null) => ({ destinationLabel: '성수행', secondsUntil, message });
+    assert.equal(ARRIVING_SOON_SEC, 60);
+    assert.equal(formatNextTrain(train(60), 0), '성수행 1분 0초');
+    assert.equal(formatNextTrain(train(59), 0), '성수행 곧 도착');
+    assert.equal(formatNextTrain(train(0), 0), '성수행 곧 도착');
+    assert.equal(formatNextTrain(train(125), 0), '성수행 2분 5초');
+    // 지난 시간을 빼고, 0 아래로 내려가지 않아요.
+    assert.equal(formatNextTrain(train(125), 65), '성수행 1분 0초');
+    assert.equal(formatNextTrain(train(125), 66), '성수행 곧 도착');
+    assert.equal(formatNextTrain(train(30), 500), '성수행 곧 도착');
+    assert.equal(formatNextTrain(train(125), -30), '성수행 2분 5초');
+    // message 가 있으면 시간 대신 그 문구, 공백만 있으면 시간 규칙을 따라요.
+    assert.equal(formatNextTrain(train(300, '전역 출발'), 0), '성수행 전역 출발');
+    assert.equal(formatNextTrain(train(10, ' 진입 '), 0), '성수행 진입');
+    assert.equal(formatNextTrain(train(300, '   '), 0), '성수행 5분 0초');
+    assert.equal(formatNextTrain(train(30, ''), 0), '성수행 곧 도착');
+});
+
+/** NextTrains 컴포넌트만 구동해요. 실제 React·브라우저 렌더링 검사를 대신하지 않아요. */
+function nextTrainsRuntime(env = serverEnv) {
+    const r = createScreenRuntime(env, 'src/components/route/NextTrains.tsx');
+    // 화면 진입(focus) 효과를 한 번만 실행하도록 실제 React 처럼 안정적인 콜백을 써요.
+    r.external.react.useCallback = (callback, dependencies) => {
+        const ref = r.external.react.useRef(null);
+        if (!ref.current || dependencies.some((value, index) => value !== ref.current.dependencies[index])) {
+            ref.current = { callback, dependencies };
+        }
+        return ref.current.callback;
+    };
+    r.external['expo-router'].useFocusEffect = callback => r.external.react.useEffect(callback, [callback]);
+    // vm 안의 Date 는 바깥과 따로라서 그 안에서 가상 시계에 맞춰요.
+    vm.runInContext('Date', r.context).now = () => ARRIVALS_BASE_MS + r.now();
+    const calls = [];
+    let responder = async () => ok(arrivalsData());
+    r.context.fetch = async (url, options) => { calls.push(url); return responder(url, options); };
+    const step = {
+        type: 'SUBWAY', line: { id: 2, name: '2호선', color: '#00a84d' }, directionCode: 'INNER', direction: null,
+        stops: [{ id: 222, name: '강남', order: 0 }, { id: 223, name: '역삼', order: 1 }, { id: 224, name: '선릉', order: 2 }],
+    };
+    const element = (props = {}) => ({ type: r.screen.default, props: { step, ...props } });
+    const text = props => {
+        const view = r.renderComponent(element(props));
+        if (!view) return null;
+        const flat = node => node == null || typeof node === 'boolean' ? '' : Array.isArray(node) ? node.map(flat).join('') : typeof node === 'object' ? flat(node.props?.children) : String(node);
+        return flat(view);
+    };
+    const receivedNow = () => new Date(ARRIVALS_BASE_MS + r.now()).toISOString();
+    return { ...r, calls, text, receivedNow, respond: fn => { responder = fn; } };
+}
+
+test('NextTrains: 첫 승차 구간 조건으로 부르고 카운트다운 중 1분 아래에서 "곧 도착", 20초 전에는 다시 부르지 않아요', async () => {
+    const r = nextTrainsRuntime();
+    r.respond(async () => ok(arrivalsData({ receivedAt: r.receivedNow(), trains: [arrivalTrain({ secondsUntil: 61 }), arrivalTrain({ secondsUntil: 300 })] })));
+    assert.equal(r.text(), '다음 열차 확인 중');
+    await flush();
+    assert.deepEqual(r.calls, ['https://example.test/api/v1/stations/222/arrivals?lineId=2&nextStationId=223&directionCode=INNER&limit=2']);
+    assert.equal(r.text(), '다음 열차 · 성수행 1분 1초 · 성수행 5분 0초');
+    r.advance(1000); assert.equal(r.text(), '다음 열차 · 성수행 1분 0초 · 성수행 4분 59초');
+    r.advance(1000); assert.equal(r.text(), '다음 열차 · 성수행 곧 도착 · 성수행 4분 58초');
+    r.advance(17999); await flush();
+    assert.equal(r.calls.length, 1);
+    r.advance(1); await flush();
+    assert.equal(r.calls.length, 2);
+    r.advance(20000); await flush();
+    assert.equal(r.calls.length, 3);
+    // message 가 있으면 시간 대신 문구를 보여줘요.
+    r.respond(async () => ok(arrivalsData({ receivedAt: r.receivedNow(), trains: [arrivalTrain({ secondsUntil: 200, message: '전역 출발' })] })));
+    r.advance(20000); await flush();
+    assert.equal(r.text(), '다음 열차 · 성수행 전역 출발');
+    r.unmount();
+    assert.equal(r.timers.size, 0);
+});
+
+test('NextTrains: available:false·빈 열차·UNKNOWN_ERROR·서버 오류·네트워크 실패면 줄만 숨겨요', async () => {
+    for (const outcome of ['unavailable', 'empty', 'malformed', 'server', 'network']) {
+        const r = nextTrainsRuntime();
+        r.respond(async () => ok(arrivalsData({ receivedAt: r.receivedNow() })));
+        r.text(); await flush();
+        assert.ok(r.text().startsWith('다음 열차 · 성수행'), outcome);
+        r.respond(async () => {
+            if (outcome === 'unavailable') return ok({ stationId: 222, lineId: 2, available: false, reason: 'UNSUPPORTED_STATION', receivedAt: null, trains: [] });
+            if (outcome === 'empty') return ok(arrivalsData({ receivedAt: r.receivedNow(), trains: [] }));
+            if (outcome === 'malformed') return ok(arrivalsData({ trains: [{ secondsUntil: '1' }] }));
+            if (outcome === 'server') return jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR' } }, 500);
+            throw new TypeError('연결 실패');
+        });
+        r.advance(20000); await flush();
+        assert.equal(r.text(), null, outcome);
+        r.unmount();
+    }
+});
+
+test('NextTrains: 인증 오류는 이전 값을 유지하고, 토큰 갱신 중에도 줄이 유지되며 겹쳐 부르지 않아요', async () => {
+    const r = nextTrainsRuntime();
+    const api = r.load('src/services/api/client.ts');
+    let token = 'token-old';
+    const refresh = deferred();
+    let refreshes = 0;
+    api.setAccessTokenProvider(() => token);
+    api.setTokenRefresher(async () => { refreshes++; await refresh.promise; token = 'token-new'; });
+    const authHeaders = [];
+    r.respond(async (_url, options) => {
+        authHeaders.push(options.headers.Authorization);
+        return ok(arrivalsData({ receivedAt: r.receivedNow(), trains: [arrivalTrain({ secondsUntil: 600 })] }));
+    });
+    r.text(); await flush();
+    assert.equal(r.text(), '다음 열차 · 성수행 10분 0초');
+
+    // TOKEN_INVALID 처럼 갱신 없이 실패하는 인증 오류: 이전 값을 그대로 둬요.
+    r.respond(async () => fail('TOKEN_INVALID'));
+    r.advance(20000); await flush();
+    assert.equal(r.text(), '다음 열차 · 성수행 9분 40초');
+
+    // TOKEN_EXPIRED: 갱신이 끝날 때까지 요청이 끝나지 않으므로 이전 값이 보이고, 다음 폴링은 건너뛰어요.
+    r.respond(async (_url, options) => {
+        authHeaders.push(options.headers.Authorization);
+        if (options.headers.Authorization === 'Bearer token-old') return fail('TOKEN_EXPIRED');
+        return ok(arrivalsData({ receivedAt: r.receivedNow(), trains: [arrivalTrain({ secondsUntil: 90 })] }));
+    });
+    const before = r.calls.length;
+    r.advance(20000); await flush();
+    assert.equal(r.calls.length, before + 1);
+    assert.equal(refreshes, 1);
+    assert.equal(r.text(), '다음 열차 · 성수행 9분 20초');
+    r.advance(20000); await flush();
+    assert.equal(r.calls.length, before + 1, '갱신 중에는 다음 폴링을 겹쳐 보내지 않아요');
+    assert.equal(r.text(), '다음 열차 · 성수행 9분 0초');
+    refresh.resolve(); await flush();
+    assert.equal(r.calls.length, before + 2);
+    assert.equal(authHeaders.at(-1), 'Bearer token-new');
+    assert.equal(r.text(), '다음 열차 · 성수행 1분 30초');
+    r.unmount();
+});
+
+test('NextTrains: mock 모드의 정상·none·fail 표시와 서버 미호출', async () => {
+    for (const flag of [undefined, 'none', 'fail']) {
+        const r = nextTrainsRuntime({});
+        r.text({ mock: flag });
+        r.advance(400); await flush();
+        const shown = r.text({ mock: flag });
+        if (flag) assert.equal(shown, null, flag);
+        else assert.match(shown, /^다음 열차 · 성수행 3분 2초 · 성수행 7분 2초$/);
+        assert.equal(r.calls.length, 0);
+        r.unmount();
     }
 });
