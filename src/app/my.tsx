@@ -1,5 +1,5 @@
 import { useMock } from '@/services/api/config';
-import { getSession } from '@/stores/auth-store';
+import { ApiError, API_ERROR_MESSAGES, isAuthError } from '@/services/api/errors';
 import { ComponentProps, ReactNode, useCallback, useEffect, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
@@ -21,7 +21,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { fetchMe, logout, nicknameLength, updateNickname, validateNickname, withdraw } from '@/services/user';
 import { resetToLogin, useRedirectIfSignedOut } from '@/stores/auth-store';
-import { NICKNAME_MAX, UserError, type User } from '@/types/user';
+import { NICKNAME_MAX, UserError, type UserProfile } from '@/types/user';
 
 const NAVY = '#0f1c3f';
 const MINT_DEEP = '#12a77a';
@@ -37,6 +37,14 @@ type IoniconName = ComponentProps<typeof Ionicons>['name'];
 type Sheet = 'nickname' | 'logout' | 'withdraw' | null;
 type Load = { kind: 'loading' } | { kind: 'error' } | { kind: 'done'; user: { nickname: string } };
 
+/** 락 경합은 재시도를 안내하고, 나머지 서버·mock 오류는 기존 문구를 사용해요. */
+function userErrorMessage(error: unknown, fallback: string): string {
+    if (error instanceof ApiError || error instanceof UserError) {
+        return error.code === 'ROOM_BUSY' ? API_ERROR_MESSAGES.ROOM_BUSY : error.message;
+    }
+    return fallback;
+}
+
 /** 앱 권한 상태 (TODO: expo-image-picker·expo-location 권한 조회로 교체) */
 const MOCK_PERMISSIONS: { key: string; label: string; granted: boolean }[] = [
     { key: 'camera', label: '카메라', granted: true },
@@ -50,7 +58,7 @@ const TAB_BAR_CONTENT_HEIGHT = 58;
  *
  * 내 정보(닉네임·로그인 방식), 앱 권한, 로그아웃·회원 탈퇴.
  * 닉네임 수정·로그아웃·회원 탈퇴는 상세설계서대로 아래에서 올라오는 시트로 엽니다.
- * 서버 모드는 확인된 세션 닉네임만 표시하고, 미확인 상태는 기본 문구로 보여줘요.
+ * 서버 모드도 내 정보를 조회하고, 수정 결과로 화면과 세션을 갱신해요.
  */
 export default function MyScreen() {
     const insets = useSafeAreaInsets();
@@ -74,10 +82,10 @@ export default function MyScreen() {
     const loadUser = useCallback(async () => {
         setLoad({ kind: 'loading' });
         try {
-            const session = getSession();
-            const user = useMock() ? await fetchMe(failNext) : { nickname: session?.nickname ?? '사용자' };
+            const user = await fetchMe(failNext);
             setLoad({ kind: 'done', user });
-        } catch {
+        } catch (error) {
+            if (!useMock() && isAuthError(error)) return;
             setLoad({ kind: 'error' });
             setFailNext(false); // 다시 시도하면 성공하도록
         }
@@ -148,7 +156,7 @@ export default function MyScreen() {
                         </View>
                         <Pressable
                             style={({ pressed }) => [styles.smallButton, pressed && styles.pressed]}
-                            onPress={() => useMock() ? setSheet('nickname') : setToast('닉네임 수정은 아직 준비 중이에요.')}
+                            onPress={() => setSheet('nickname')}
                             accessibilityRole="button"
                         >
                             <Text style={styles.smallButtonText}>닉네임 수정</Text>
@@ -194,7 +202,7 @@ export default function MyScreen() {
                     </Pressable>
                     <Pressable
                         style={({ pressed }) => [styles.listRow, styles.listDivider, pressed && styles.pressed]}
-                        onPress={() => useMock() ? setSheet('withdraw') : setToast('회원 탈퇴는 아직 준비 중이에요.')}
+                        onPress={() => setSheet('withdraw')}
                         accessibilityRole="button"
                     >
                         <Text style={styles.listLabel}>회원 탈퇴</Text>
@@ -272,15 +280,15 @@ export default function MyScreen() {
                     confirmLabel="탈퇴하기"
                     danger
                     failText="탈퇴하지 못했어요."
-                    successText="탈퇴가 완료됐어요"
+                    successText={useMock() ? '탈퇴가 완료됐어요' : undefined}
                     onClose={() => setSheet(null)}
                     onConfirm={async () => {
                         const fail = failWithdraw;
                         setFailWithdraw(false); // 다시 시도하면 성공하도록
                         await withdraw(fail);
                     }}
-                    // 완료 안내를 잠깐 보여준 뒤, 이전 화면 기록 없이 로그인 화면으로 이동
-                    onDone={resetToLogin}
+                    // mock은 완료 안내 후 이동하고, 서버 모드는 서비스가 인증 정리 후 바로 이동해요.
+                    onDone={useMock() ? resetToLogin : undefined}
                 />
             )}
         </View>
@@ -339,7 +347,7 @@ function NicknameSheet({
     /** 테스트용: 첫 저장을 실패시킵니다 */
     failFirstSave?: boolean;
     onClose: () => void;
-    onSaved: (user: User) => void;
+    onSaved: (user: UserProfile) => void;
 }) {
     const [value, setValue] = useState(current);
     const [saving, setSaving] = useState(false);
@@ -357,8 +365,9 @@ function NicknameSheet({
         try {
             onSaved(await updateNickname(value, failNext));
         } catch (error) {
+            if (!useMock() && isAuthError(error)) return;
             // 실패해도 입력값은 그대로 두고, 다시 저장할 수 있게 합니다.
-            setSaveError(error instanceof UserError ? error.message : '저장하지 못했어요. 다시 시도해 주세요.');
+            setSaveError(userErrorMessage(error, '저장하지 못했어요. 다시 시도해 주세요.'));
             setFailNext(false);
             setSaving(false);
         }
@@ -471,8 +480,10 @@ function ConfirmSheet({
             await onConfirm();
             if (successText) setDone(true);
         } catch (caught) {
+            // 인증 무효화는 공통 클라이언트가 이동까지 처리하므로 시트에서 다시 안내하지 않아요.
+            if (!useMock() && isAuthError(caught)) return;
             // 실패하면 시트를 닫지 않고 안내 + 다시 시도
-            setError(caught instanceof UserError ? caught.message : failText ?? '처리하지 못했어요. 다시 시도해 주세요.');
+            setError(userErrorMessage(caught, failText ?? '처리하지 못했어요. 다시 시도해 주세요.'));
         } finally {
             setBusy(false);
         }

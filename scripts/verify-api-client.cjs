@@ -236,9 +236,11 @@ test('mock 역 검색의 정규화·정렬·미제공·노선·페이지와 서�
 });
 
 /** 화면 상태와 효과만 구동하는 검사 장치입니다. 브라우저 육안 검사를 대신하지 않습니다. */
-function createScreenRuntime(env = {}) {
+function createScreenRuntime(env = {}, screenPath = 'src/app/station-search.tsx') {
     let cursor = 0;
-    const slots = [];
+    let slots = [];
+    const rootSlots = slots;
+    const componentSlots = new Map();
     const effects = [];
     const react = {
         useState(initial) {
@@ -261,12 +263,18 @@ function createScreenRuntime(env = {}) {
         },
     };
     const runtime = createRuntime(env, react);
-    const screen = runtime.load('src/app/station-search.tsx');
+    const screen = runtime.load(screenPath);
     return {
         ...runtime,
         screen,
-        render() { cursor = 0; const view = screen.default(); effects.splice(0).forEach(effect => effect()); return view; },
-        unmount() { slots.forEach(slot => slot?.cleanup?.()); },
+        render() { slots = rootSlots; cursor = 0; const view = screen.default(); effects.splice(0).forEach(effect => effect()); return view; },
+        renderComponent(element) {
+            if (!componentSlots.has(element.type)) componentSlots.set(element.type, []);
+            slots = componentSlots.get(element.type); cursor = 0;
+            const view = element.type(element.props); effects.splice(0).forEach(effect => effect());
+            return view;
+        },
+        unmount() { [rootSlots, ...componentSlots.values()].forEach(values => values.forEach(slot => slot?.cleanup?.())); },
     };
 }
 
@@ -837,6 +845,293 @@ const fail = (code, status = 401) => jsonResponse({ success: false, error: { cod
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 
+const userData = () => ({ id: 'user-1', nickname: '새닉네임', createdAt: '2026-11-11T00:00:00Z' });
+
+async function myScreenRuntime() {
+    const r = createScreenRuntime(serverEnv, 'src/app/my.tsx');
+    r.load('src/stores/auth-store.ts').signIn({ userId: 'user-1', nickname: '이전이름' });
+    r.context.fetch = async () => ok(userData());
+    r.render(); await flush();
+    return r;
+}
+
+test('서버 마이 화면은 조회한 닉네임을 표시하고 수정·탈퇴 시트를 열어요', async () => {
+    const r = await myScreenRuntime(); let view = r.render();
+    assert.ok(findElement(view, element => element.props?.children === '새닉네임'));
+    const pressText = text => {
+        findElement(view, element => element.type === 'Pressable' && findElement(element.props.children, child => child.props?.children === text)).props.onPress();
+        view = r.render();
+    };
+    pressText('닉네임 수정');
+    assert.ok(findElement(view, element => element.props?.current === '새닉네임'));
+    pressText('회원 탈퇴');
+    const sheet = findElement(view, element => element.props?.title === '회원 탈퇴');
+    assert.ok(sheet);
+    assert.equal(sheet.props.successText, undefined);
+    assert.equal(sheet.props.onDone, undefined);
+    assert.ok(sheet.props.details.some(text => text.includes('모든 약속방에서 나가요')));
+    r.unmount();
+});
+
+test('닉네임 시트는 서버 검증·락 경합의 안내와 입력을 유지하고 401을 중복 안내하지 않아요', async () => {
+    for (const [code, status] of [['VALIDATION_ERROR', 400], ['ROOM_BUSY', 409], ['TOKEN_INVALID', 401]]) {
+        const r = await myScreenRuntime(); let view = r.render();
+        findElement(view, element => element.type === 'Pressable' && findElement(element.props.children, child => child.props?.children === '닉네임 수정')).props.onPress();
+        const sheet = findElement(r.render(), element => element.props?.current === '새닉네임');
+        let form = r.renderComponent(sheet);
+        findElement(form, element => element.type === 'TextInput').props.onChangeText('  유지할이름  ');
+        form = r.renderComponent(sheet);
+        r.context.fetch = async () => fail(code, status);
+        await findElement(form, element => element.type === 'TextInput').props.onSubmitEditing();
+        form = r.renderComponent(sheet);
+        assert.equal(findElement(form, element => element.type === 'TextInput').props.value, '  유지할이름  ');
+        const messages = r.load('src/services/api/errors.ts').API_ERROR_MESSAGES;
+        assert.equal(!!findElement(form, element => element.props?.children === messages[code]), status !== 401);
+        r.unmount();
+    }
+});
+
+test('탈퇴 시트는 ROOM_BUSY 재시도를 안내하고 인증 오류에는 안내·이동을 추가하지 않아요', async () => {
+    for (const [code, status] of [['ROOM_BUSY', 409], ['TOKEN_INVALID', 401]]) {
+        const r = await myScreenRuntime(); const view = r.render();
+        findElement(view, element => element.type === 'Pressable' && findElement(element.props.children, child => child.props?.children === '회원 탈퇴')).props.onPress();
+        const sheet = findElement(r.render(), element => element.props?.title === '회원 탈퇴');
+        r.context.fetch = async () => fail(code, status);
+        let redirects = 0; r.external['expo-router'].router.replace = () => redirects++;
+        let form = r.renderComponent(sheet);
+        await findElement(form, element => element.type === 'Pressable' && findElement(element.props.children, child => child.props?.children === '탈퇴하기')).props.onPress();
+        form = r.renderComponent(sheet);
+        const message = r.load('src/services/api/errors.ts').API_ERROR_MESSAGES[code];
+        assert.equal(!!findElement(form, element => element.props?.children === message), status !== 401);
+        assert.equal(redirects, status === 401 ? 1 : 0);
+        r.unmount();
+    }
+});
+
+function selectedRoute(runtime) {
+    const routes = runtime.load('src/stores/route-store.ts');
+    routes.setSelectedRoute({ route: { routeId: 'route-1' } });
+    return routes;
+}
+
+test('내 정보 GET은 인증을 보내고 응답으로 복원된 세션을 갱신해요', async () => {
+    const r = authRuntime(); r.disk.set('linkro.refresh', 'token-1');
+    r.respond(async () => ok(tokenData())); await r.auth.refreshSession();
+    assert.equal(r.store.getSession().nickname, null);
+    r.respond(async () => ok(userData()));
+    const user = await r.load('src/services/user.ts').fetchMe(true);
+    assert.deepEqual(plain(user), userData());
+    assert.deepEqual(plain(r.store.getSession()), { userId: 'user-1', nickname: '새닉네임' });
+    assert.equal(r.store.getAuthStatus(), 'signedIn');
+    assert.equal(r.calls.at(-1).url, 'https://example.test/api/v1/users/me');
+    assert.equal(r.calls.at(-1).options.method, 'GET');
+    assert.equal(r.calls.at(-1).options.headers.Authorization, 'Bearer token-2');
+    assert.equal(r.redirects(), 0);
+});
+
+test('내 정보 GET의 필수 문자열 누락·잘못된 타입은 세션을 바꾸지 않고 UNKNOWN_ERROR예요', async () => {
+    const r = authRuntime(); await r.auth.loginWithKakao();
+    const service = r.load('src/services/user.ts');
+    const before = plain(r.store.getSession());
+    const broken = [null, [], {}, ...['id', 'nickname', 'createdAt'].flatMap(key => {
+        const missing = userData(); delete missing[key];
+        return [missing, { ...userData(), [key]: null }, { ...userData(), [key]: 1 }];
+    })];
+    for (const data of broken) {
+        r.respond(async () => ok(data));
+        await assert.rejects(service.fetchMe(), { code: 'UNKNOWN_ERROR' });
+        assert.deepEqual(plain(r.store.getSession()), before);
+    }
+});
+
+test('닉네임 PATCH는 공백을 빼고 보내며 가입 시각 없는 응답으로 세션을 갱신해요', async () => {
+    const r = authRuntime(); await r.auth.loginWithKakao();
+    const profile = { id: 'user-1', nickname: '서버닉네임' };
+    r.respond(async () => ok(profile));
+    const user = await r.load('src/services/user.ts').updateNickname('  요청닉네임 \t', true);
+    assert.deepEqual(plain(user), profile);
+    assert.deepEqual(plain(r.store.getSession()), { userId: profile.id, nickname: profile.nickname });
+    const call = r.calls.at(-1);
+    assert.equal(call.url, 'https://example.test/api/v1/users/me');
+    assert.equal(call.options.method, 'PATCH');
+    assert.deepEqual(JSON.parse(call.options.body), { nickname: '요청닉네임' });
+    assert.equal(call.options.headers.Authorization, 'Bearer token-2');
+    for (const data of [null, [], {}, { id: 1, nickname: '이름' }, { id: 'user-1' }, { id: 'user-1', nickname: null }]) {
+        r.respond(async () => ok(data));
+        await assert.rejects(r.load('src/services/user.ts').updateNickname('이름'), { code: 'UNKNOWN_ERROR' });
+        assert.equal(r.store.getSession().nickname, profile.nickname);
+    }
+});
+
+test('닉네임은 이모지 포함 코드 포인트 1·2·20·21자 경계를 요청 전에 검사해요', async () => {
+    const r = authRuntime(); await r.auth.loginWithKakao();
+    const service = r.load('src/services/user.ts');
+    for (const character of ['가', '😀']) {
+        for (const length of [1, 2, 20, 21]) {
+            const nickname = `  ${character.repeat(length)}  `;
+            assert.equal(service.nicknameLength(nickname), length);
+            const valid = length === 2 || length === 20;
+            assert.equal(service.validateNickname(nickname) === null, valid);
+            const count = r.calls.length;
+            r.respond(async () => ok({ id: 'user-1', nickname: nickname.trim() }));
+            if (valid) await service.updateNickname(nickname);
+            else await assert.rejects(service.updateNickname(nickname), { code: 'VALIDATION_ERROR' });
+            assert.equal(r.calls.length - count, valid ? 1 : 0);
+        }
+    }
+    for (const value of ['', '  ']) await assert.rejects(service.updateNickname(value), { code: 'VALIDATION_ERROR' });
+});
+
+test('사용자 API는 VALIDATION_ERROR·ROOM_BUSY·TOKEN_INVALID 코드를 그대로 전달해요', async () => {
+    for (const [method, invoke] of [
+        ['GET', service => service.fetchMe()],
+        ['PATCH', service => service.updateNickname('새이름')],
+        ['DELETE', service => service.withdraw()],
+    ]) {
+        for (const [code, status] of [['VALIDATION_ERROR', 400], ['ROOM_BUSY', 409], ['TOKEN_INVALID', 401]]) {
+            const r = authRuntime(); await r.auth.loginWithKakao();
+            r.respond(async () => fail(code, status));
+            await assert.rejects(invoke(r.load('src/services/user.ts')), error => error.code === code && error.status === status);
+            assert.equal(r.calls.at(-1).options.method, method);
+            assert.equal(r.store.getAuthStatus(), status === 401 ? 'signedOut' : 'signedIn');
+            assert.equal(r.redirects(), status === 401 ? 1 : 0);
+        }
+    }
+});
+
+test('탈퇴 성공은 로컬 인증·선택 경로만 지우고 로그인으로 한 번 이동해요', async () => {
+    const r = authRuntime(); await r.auth.loginWithKakao();
+    const routes = selectedRoute(r);
+    r.respond(async () => ok(null));
+    await r.load('src/services/user.ts').withdraw(true);
+    assert.equal(r.calls.at(-1).options.method, 'DELETE');
+    assert.equal(r.calls.at(-1).url, 'https://example.test/api/v1/users/me');
+    assert.equal(r.calls.at(-1).options.body, undefined);
+    assert.equal(r.storage.getAccessToken(), null);
+    assert.equal(await r.storage.readRefreshToken(), null);
+    assert.equal(r.disk.size, 0);
+    assert.equal(r.store.getAuthStatus(), 'signedOut');
+    assert.equal(r.store.getSession(), null);
+    assert.equal(routes.getSelectedRoute(), null);
+    assert.equal(r.redirects(), 1);
+    assert.equal(r.calls.filter(call => call.url.endsWith('/auth/logout')).length, 0);
+});
+
+test('사용자 조회의 만료 응답은 기존 클라이언트가 한 번 갱신한 뒤 세션을 갱신해요', async () => {
+    const r = authRuntime(); await r.auth.loginWithKakao(); let refreshes = 0;
+    r.respond(async (url, options) => {
+        if (url.endsWith('/auth/refresh')) { refreshes++; return ok({ ...tokenData(), accessToken: 'token-4' }); }
+        return options.headers.Authorization === 'Bearer token-4' ? ok(userData()) : fail('TOKEN_EXPIRED');
+    });
+    await r.load('src/services/user.ts').fetchMe();
+    assert.equal(refreshes, 1);
+    assert.equal(r.store.getSession().nickname, '새닉네임');
+    assert.equal(r.redirects(), 0);
+});
+
+test('탈퇴 후 기기 저장값 삭제 실패도 로그인과 경로를 해제하고 기존 경고로 알려요', async () => {
+    const r = authRuntime(); await r.auth.loginWithKakao(); const routes = selectedRoute(r);
+    r.faults.remove = true; r.respond(async () => ok(null));
+    await r.load('src/services/user.ts').withdraw();
+    assert.equal(r.store.getAuthStatus(), 'signedOut');
+    assert.equal(routes.getSelectedRoute(), null);
+    assert.equal(r.storage.getAccessToken(), null);
+    assert.equal(await r.storage.readRefreshToken(), null);
+    assert.equal(r.storage.hasTokenDeletionFailed(), true);
+    assert.equal(r.redirects(), 1);
+});
+
+test('탈퇴 ROOM_BUSY·네트워크·시간 초과는 인증과 선택 경로를 유지해요', async () => {
+    for (const failure of ['busy', 'network', 'timeout']) {
+        const r = authRuntime(); await r.auth.loginWithKakao();
+        const routes = selectedRoute(r);
+        const before = plain(r.store.getSession());
+        r.respond(async (_url, options) => {
+            if (failure === 'busy') return fail('ROOM_BUSY', 409);
+            if (failure === 'network') throw Error();
+            return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(Error())));
+        });
+        const pending = r.load('src/services/user.ts').withdraw();
+        const rejected = assert.rejects(pending, { code: failure === 'busy' ? 'ROOM_BUSY' : 'NETWORK_ERROR' });
+        if (failure === 'timeout') { await flush(); r.advance(10000); }
+        await rejected;
+        assert.deepEqual(plain(r.store.getSession()), before);
+        assert.equal(r.store.getAuthStatus(), 'signedIn');
+        assert.notEqual(r.storage.getAccessToken(), null);
+        assert.equal(r.disk.size, 1);
+        assert.notEqual(routes.getSelectedRoute(), null);
+        assert.equal(r.redirects(), 0);
+    }
+});
+
+test('탈퇴 응답 유실 뒤 재시도 401은 공통 처리로 한 번만 정리해요', async () => {
+    const r = authRuntime(); await r.auth.loginWithKakao(); const routes = selectedRoute(r);
+    const service = r.load('src/services/user.ts');
+    r.respond(async () => { throw Error(); });
+    await assert.rejects(service.withdraw(), { code: 'NETWORK_ERROR' });
+    assert.equal(r.redirects(), 0);
+    r.respond(async () => fail('TOKEN_INVALID'));
+    await assert.rejects(service.withdraw(), { code: 'TOKEN_INVALID' });
+    assert.equal(r.store.getAuthStatus(), 'signedOut');
+    assert.equal(routes.getSelectedRoute(), null);
+    assert.equal(r.disk.size, 0);
+    assert.equal(r.redirects(), 1);
+    assert.equal(r.calls.filter(call => call.url.endsWith('/auth/logout') || call.url.endsWith('/auth/refresh')).length, 0);
+});
+
+test('탈퇴 중이던 갱신 응답이 늦게 와도 인증을 되살리지 않아요', async () => {
+    const r = authRuntime(); await r.auth.loginWithKakao(); const late = deferred();
+    r.respond(async url => url.endsWith('/auth/refresh') ? late.promise : ok(null));
+    const refresh = r.auth.refreshSession();
+    const rejected = assert.rejects(refresh, { code: 'AUTH_REQUIRED' });
+    await flush();
+    await r.load('src/services/user.ts').withdraw();
+    late.resolve(ok(tokenData())); await rejected;
+    assert.equal(r.store.getAuthStatus(), 'signedOut');
+    assert.equal(r.storage.getAccessToken(), null);
+    assert.equal(r.disk.size, 0);
+    assert.equal(r.redirects(), 1);
+});
+
+test('이전 사용자의 늦은 조회·수정·탈퇴 응답은 새 로그인을 바꾸지 않아요', async () => {
+    for (const invoke of [service => service.fetchMe(), service => service.updateNickname('이전이름'), service => service.withdraw()]) {
+        const r = authRuntime(); await r.auth.loginWithKakao(); const late = deferred();
+        r.respond(async () => late.promise);
+        const pending = invoke(r.load('src/services/user.ts'));
+        const rejected = assert.rejects(pending, { code: 'AUTH_REQUIRED' }); await flush();
+        r.respond(async () => ok(loginData())); await r.auth.loginWithKakao();
+        late.resolve(ok(userData())); await rejected;
+        assert.equal(r.store.getAuthStatus(), 'signedIn');
+        assert.equal(r.store.getSession().nickname, '사용자');
+        assert.equal(r.storage.getAccessToken(), 'token-2');
+        assert.equal(r.redirects(), 0);
+    }
+});
+
+test('mock 내 정보·수정·로그아웃·탈퇴와 실패 플래그는 서버를 호출하지 않아요', async () => {
+    const r = authRuntime(true); const service = r.load('src/services/user.ts');
+    const run = async pending => { r.advance(700); await flush(); return pending; };
+    for (const invoke of [() => service.fetchMe(true), () => service.updateNickname('새이름', true), () => service.logout(true), () => service.withdraw(true)]) {
+        service.mockKakaoLogin();
+        const pending = invoke();
+        const rejected = assert.rejects(pending, { code: 'NETWORK_ERROR' });
+        r.advance(700); await rejected;
+        assert.equal(r.store.getAuthStatus(), 'signedIn');
+    }
+    const original = await run(service.fetchMe());
+    const saved = await run(service.updateNickname('  모크이름  '));
+    assert.equal(saved.nickname, '모크이름');
+    assert.equal((await run(service.fetchMe())).nickname, '모크이름');
+    await run(service.updateNickname(original.nickname));
+    for (const invoke of [() => service.logout(), () => service.withdraw()]) {
+        service.mockKakaoLogin(); const routes = selectedRoute(r);
+        await run(invoke());
+        assert.equal(r.store.getAuthStatus(), 'signedOut');
+        assert.equal(routes.getSelectedRoute(), null);
+    }
+    assert.equal(r.calls.length, 0);
+});
+
 test('카카오 본문·비인증 헤더·저장 후 Bearer 주입', async () => {
     const r = authRuntime(); await r.auth.loginWithKakao(); await r.api.get('/stations');
     assert.deepEqual(JSON.parse(r.calls[0].options.body), { kakaoAccessToken: 'token-1' });
@@ -940,9 +1235,8 @@ test('SecureStore 저장·읽기·삭제 실패와 복원 사용자 미확인', 
     const unreadable = authRuntime(); unreadable.faults.read = true; await assert.rejects(unreadable.auth.refreshSession(), { code: 'AUTH_REQUIRED' }); assert.equal(unreadable.calls.length, 0);
 });
 
-test('mock 로그인·갱신·로그아웃은 서버 호출 없음, 서버 탈퇴 차단', async () => {
+test('mock 로그인·갱신·로그아웃은 서버를 호출하지 않아요', async () => {
     const r = authRuntime(true); await r.auth.loginWithKakao(); await r.auth.refreshSession(); await r.auth.logoutSession(); assert.equal(r.calls.length, 0);
-    const real = authRuntime(); await assert.rejects(real.load('src/services/user.ts').withdraw(), /준비 중/); assert.equal(real.calls.length, 0);
 });
 
 test('카카오 취소와 웹 미지원, 웹 저장소는 네이티브 모듈 접근 없음', async () => {
