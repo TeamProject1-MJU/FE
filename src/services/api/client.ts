@@ -1,5 +1,5 @@
 import { requireApiBaseUrl } from '@/services/api/config';
-import { ApiError } from '@/services/api/errors';
+import { ApiError, isAuthError } from '@/services/api/errors';
 
 export const REQUEST_TIMEOUT_MS = 10000;
 
@@ -13,10 +13,18 @@ type AccessTokenProvider = () => string | null | undefined | Promise<string | nu
 
 let accessTokenProvider: AccessTokenProvider | null = null;
 
-/** 토큰 조회 함수만 주입합니다. 저장·로그인·갱신·재시도는 여기서 처리하지 않습니다. */
+/** 인증 서비스의 현재 토큰 조회 함수를 연결해요. */
 export function setAccessTokenProvider(provider: AccessTokenProvider | null) {
     accessTokenProvider = provider;
 }
+
+let tokenRefresher: (() => Promise<void>) | null = null;
+let authFailureHandler: (() => Promise<void> | void) | null = null;
+let generationProvider = () => 0;
+let refreshing: { generation: number; promise: Promise<void> } | null = null;
+export function setTokenRefresher(fn: typeof tokenRefresher) { tokenRefresher = fn; }
+export function setAuthFailureHandler(fn: typeof authFailureHandler) { authFailureHandler = fn; }
+export function setSessionGenerationProvider(fn: () => number) { generationProvider = fn; }
 
 function buildUrl(path: string, query?: QueryParams) {
     const url = `${requireApiBaseUrl()}/${path.replace(/^\/+/, '')}`;
@@ -31,13 +39,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-async function request<T>(method: string, path: string, body: unknown, options: RequestOptions): Promise<T> {
+async function request<T>(method: string, path: string, body: unknown, options: RequestOptions, retried = false): Promise<T> {
     const url = buildUrl(path, options.query);
     const headers: Record<string, string> = {
         Accept: 'application/json',
         'Content-Type': 'application/json; charset=utf-8',
     };
-    // TODO: 토큰 조회 실패·시간 제한 범위는 A-1(로그인)에서 확정합니다.
+    const generation = generationProvider();
     const token = options.auth === false ? null : await accessTokenProvider?.();
     if (token) headers.Authorization = `Bearer ${token}`;
     const serializedBody = body === undefined ? undefined : JSON.stringify(body);
@@ -82,6 +90,29 @@ async function request<T>(method: string, path: string, body: unknown, options: 
             }
         }
         throw new ApiError('UNKNOWN_ERROR', null, null, response.status);
+    } catch (error) {
+        if (options.auth === false || !(error instanceof ApiError) || !isAuthError(error)) throw error;
+        if (generation !== generationProvider()) throw error;
+        if (error.status === 401 && error.code === 'TOKEN_EXPIRED' && !retried && tokenRefresher) {
+            try {
+                // 같은 세대의 늦은 응답은 이미 갱신된 인증으로 한 번만 재시도해요.
+                if (token === await accessTokenProvider?.()) {
+                    if (!refreshing || refreshing.generation !== generation) {
+                        const pending = tokenRefresher();
+                        refreshing = { generation, promise: pending };
+                        void pending.finally(() => { if (refreshing?.promise === pending) refreshing = null; }).catch(() => {});
+                    }
+                    await refreshing.promise;
+                }
+            } catch (refreshError) {
+                if (generation === generationProvider() && isAuthError(refreshError)) await authFailureHandler?.();
+                throw refreshError;
+            }
+            if (generation !== generationProvider()) throw error;
+            return request<T>(method, path, body, options, true);
+        }
+        await authFailureHandler?.();
+        throw error;
     } finally {
         clearTimeout(timeout);
     }

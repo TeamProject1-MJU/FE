@@ -1,10 +1,13 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import LinkRoLogo, { LinkRoColors } from '@/components/linkro-logo';
-import { mockKakaoLogin } from '@/services/user';
+import { loginWithKakao } from '@/services/auth';
+import { isKakaoLoginCancelled } from '@/services/kakao';
+import { ApiError, API_ERROR_MESSAGES } from '@/services/api/errors';
 
 const BACKGROUND = '#f3f5f8';
 const SECONDARY = '#6b7488';
@@ -19,10 +22,18 @@ const HOME_ROUTE = '/home';
 export default function LoginScreen() {
     const insets = useSafeAreaInsets();
 
-    const handleKakaoLogin = () => {
-        // 카카오 로그인 API 연동은 별도 이슈에서 진행 (지금은 mock 로그인 상태로만 전환)
-        mockKakaoLogin();
-        router.replace(HOME_ROUTE);
+    const [loading, setLoading] = useState(false);
+    const [message, setMessage] = useState('');
+    const busy = useRef(false);
+    const handleKakaoLogin = async () => {
+        if (busy.current) return;
+        busy.current = true; setLoading(true); setMessage('');
+        try { await loginWithKakao(); router.replace(HOME_ROUTE); }
+        catch (error) {
+            if (!isKakaoLoginCancelled(error)) setMessage(error instanceof ApiError
+                ? (error.code === 'NETWORK_ERROR' ? '네트워크 연결을 확인해 주세요' : API_ERROR_MESSAGES[error.code] ?? API_ERROR_MESSAGES.UNKNOWN_ERROR)
+                : API_ERROR_MESSAGES.UNKNOWN_ERROR);
+        } finally { busy.current = false; setLoading(false); }
     };
 
     return (
@@ -43,14 +54,16 @@ export default function LoginScreen() {
                         styles.kakaoButton,
                         pressed && styles.kakaoButtonPressed,
                     ]}
+                    disabled={loading}
                     onPress={handleKakaoLogin}
                     accessibilityRole="button"
                     accessibilityLabel="카카오로 시작하기"
                 >
-                    <KakaoChatIcon />
+                    {loading ? <ActivityIndicator color={KAKAO_BLACK} /> : <KakaoChatIcon />}
                     <Text style={styles.kakaoButtonText}>카카오로 시작하기</Text>
                 </Pressable>
 
+                {message ? <Text accessibilityRole="alert">{message}</Text> : null}
                 <View style={styles.kakaoNote}>
                     <LockIcon />
                     <Text style={styles.kakaoNoteText}>

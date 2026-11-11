@@ -1,3 +1,5 @@
+import AuthGate from '@/components/auth-gate';
+import type { ReactNode } from 'react';
 import { Stack } from 'expo-router';
 import {
     Platform,
@@ -8,6 +10,7 @@ import {
 
 const DESIGN_WIDTH = 393;
 const DESIGN_HEIGHT = 852;
+const screenLayout = ({ children }: { children: ReactNode }) => <AuthGate>{children}</AuthGate>;
 
 export default function RootLayout() {
     const { width, height } = useWindowDimensions();
@@ -17,7 +20,7 @@ export default function RootLayout() {
     if (!isWeb) {
         return (
             <View style={styles.nativePage}>
-                <Stack screenOptions={{ headerShown: false }} />
+                <Stack screenOptions={{ headerShown: false }} screenLayout={screenLayout} />
             </View>
         );
     }
@@ -50,7 +53,7 @@ export default function RootLayout() {
                         },
                     ]}
                 >
-                    <Stack screenOptions={{ headerShown: false }} />
+                    <Stack screenOptions={{ headerShown: false }} screenLayout={screenLayout} />
                 </View>
             </View>
         </View>

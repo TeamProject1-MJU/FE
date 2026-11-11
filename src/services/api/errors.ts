@@ -1,5 +1,10 @@
 /** 서버 문구가 없을 때 사용할 기본 안내입니다. 필요한 서버 코드를 여기에 추가합니다. */
 export const API_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+    KAKAO_AUTH_FAILED: '카카오 로그인에 실패했어요. 다시 시도해 주세요',
+    EXTERNAL_API_ERROR: '카카오 서버와 연결이 불안정해요. 잠시 후 다시 시도해 주세요',
+    KAKAO_UNSUPPORTED: '이 환경에서는 카카오 로그인을 쓸 수 없어요',
+    TOKEN_STORAGE_ERROR: '로그인 정보를 안전하게 저장하지 못했어요. 다시 로그인해 주세요.',
+    REFRESH_UNCERTAIN: '로그인 갱신 결과를 확인하지 못했어요. 카카오로 다시 로그인해 주세요.',
     NETWORK_ERROR: '서버에 연결하지 못했어요. 인터넷 연결을 확인하고 다시 시도해 주세요.',
     UNKNOWN_ERROR: '서버 응답을 확인하지 못했어요. 잠시 후 다시 시도해 주세요.',
     VALIDATION_ERROR: '입력한 내용을 확인해 주세요.',
