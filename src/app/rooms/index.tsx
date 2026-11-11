@@ -1,3 +1,4 @@
+import { formatStationName } from '@/utils/station-name';
 import { useCallback, useRef, useState } from 'react';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -203,7 +204,7 @@ function RoomCard({ room, onPress }: { room: RoomSummary; onPress: () => void })
     const label = [
         room.name,
         room.myRole === 'OWNER' ? '방장' : '',
-        confirmed ? `약속역 ${room.selectedStation?.name}` : '약속역 미정',
+        confirmed ? `약속역 ${formatStationName(room.selectedStation?.name)}` : '약속역 미정',
         at ? `${formatMonthDay(at)} ${formatTime(at)}` : '약속 시각 미정',
         `${room.memberCount}명 참여`,
     ]
@@ -254,7 +255,7 @@ function RoomCard({ room, onPress }: { room: RoomSummary; onPress: () => void })
                                 </View>
                             ))}
                             <Text style={styles.station} numberOfLines={1}>
-                                {room.selectedStation?.name}
+                                {formatStationName(room.selectedStation?.name)}
                             </Text>
                         </>
                     ) : (

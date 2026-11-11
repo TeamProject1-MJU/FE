@@ -74,6 +74,24 @@ const serverEnv = { EXPO_PUBLIC_API_BASE_URL: ' https://example.test/api/v1/// '
 const jsonResponse = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(payload) });
 const plain = value => JSON.parse(JSON.stringify(value));
 
+test('역 표시 이름은 공백과 빈 값을 정리하고 접미사를 한 번만 붙여요', () => {
+    const { formatStationName } = createRuntime().load('src/utils/station-name.ts');
+    for (const [name, expected] of [
+        ['시청', '시청역'],
+        ['서울역', '서울역'],
+        ['총신대입구(이수)', '총신대입구(이수)역'],
+        ['  시청 \t', '시청역'],
+        ['  서울역  ', '서울역'],
+        ['역삼', '역삼역'],
+        ['', ''],
+        [' \t\n', ''],
+        [null, ''],
+        [undefined, ''],
+    ]) {
+        assert.equal(formatStationName(name), expected);
+    }
+});
+
 test('환경변수 기본값·정확한 true 비교·끝 슬래시·주소 누락', () => {
     const defaults = createRuntime().load('src/services/api/config.ts');
     assert.equal(defaults.USE_MOCK, true);

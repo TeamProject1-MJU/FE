@@ -1,3 +1,4 @@
+import { formatStationName } from '@/utils/station-name';
 import { useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -105,7 +106,7 @@ export default function ProposalPanel({
         setNotice(null);
         // 명세 7.14: 중복·미제공·상한은 서버가 최종 판단, 프론트 사전 차단은 UX 용
         if (items.some(item => item.station.id === station.id)) {
-            setNotice({ tone: 'error', text: `${station.name}역은 이미 후보에 있어요. 목록에서 투표해 주세요.` });
+            setNotice({ tone: 'error', text: `${formatStationName(station.name)}은 이미 후보에 있어요. 목록에서 투표해 주세요.` });
             return;
         }
         setProposing(station);
@@ -114,7 +115,7 @@ export default function ProposalPanel({
             proposeFailNext.current = false; // 다시 시도하면 성공하도록
             await createProposal(roomId, station.id, undefined, failNow ? 'error' : undefined);
             await onReload();
-            setNotice({ tone: 'info', text: `${station.name}역을 약속역 후보로 제안했어요.` });
+            setNotice({ tone: 'info', text: `${formatStationName(station.name)}을 약속역 후보로 제안했어요.` });
         } catch (error) {
             fail(error, '후보를 제안하지 못했어요. 다시 시도해 주세요.');
         } finally {
@@ -139,15 +140,15 @@ export default function ProposalPanel({
                 voteFailNext.current = false;
                 await voteProposal(roomId, proposal.id, failNow ? 'error' : undefined);
                 await onReload();
-                setNotice({ tone: 'info', text: `${proposal.station.name}역에 투표했어요. 결과는 참고용이에요.` });
+                setNotice({ tone: 'info', text: `${formatStationName(proposal.station.name)}에 투표했어요. 결과는 참고용이에요.` });
             } else {
                 await deleteProposal(roomId, proposal.id);
                 await onReload();
                 setNotice({
                     tone: 'info',
                     text: proposal.votedByMe
-                        ? `${proposal.station.name}역 후보를 삭제했어요. 내 표도 사라져 다른 후보에 다시 투표할 수 있어요.`
-                        : `${proposal.station.name}역 후보를 삭제했어요.`,
+                        ? `${formatStationName(proposal.station.name)} 후보를 삭제했어요. 내 표도 사라져 다른 후보에 다시 투표할 수 있어요.`
+                        : `${formatStationName(proposal.station.name)} 후보를 삭제했어요.`,
                 });
             }
             setDialog(null);
@@ -223,14 +224,14 @@ export default function ProposalPanel({
                                     disabled={!votable || working}
                                     accessibilityRole="button"
                                     accessibilityState={{ disabled: !votable, selected: item.votedByMe }}
-                                    accessibilityLabel={`${item.station.name}역 ${item.voteCount}표${item.votedByMe ? ', 내가 투표함' : votable ? ', 눌러서 투표' : ''}`}
+                                    accessibilityLabel={`${formatStationName(item.station.name)} ${item.voteCount}표${item.votedByMe ? ', 내가 투표함' : votable ? ', 눌러서 투표' : ''}`}
                                 >
                                     <View style={[styles.mark, item.votedByMe && styles.markOn, !votable && !item.votedByMe && styles.markOff]}>
                                         {item.votedByMe && <Ionicons name="checkmark" size={14} color={WHITE} />}
                                     </View>
                                     <View style={styles.itemBody}>
                                         <View style={styles.nameRow}>
-                                            <Text style={styles.name} numberOfLines={1}>{item.station.name}역</Text>
+                                            <Text style={styles.name} numberOfLines={1}>{formatStationName(item.station.name)}</Text>
                                             {item.station.lines?.map(line => (
                                                 <View key={line.lineId} style={[styles.lineDot, { backgroundColor: line.color }]}>
                                                     <Text style={styles.lineDotText}>{line.lineName.replace('호선', '')}</Text>
@@ -259,7 +260,7 @@ export default function ProposalPanel({
                                                 onPress={() => setDialog({ kind: 'delete', proposal: item })}
                                                 disabled={working}
                                                 accessibilityRole="button"
-                                                accessibilityLabel={`${item.station.name}역 후보 삭제`}
+                                                accessibilityLabel={`${formatStationName(item.station.name)} 후보 삭제`}
                                             >
                                                 <Text style={styles.deleteText}>후보 삭제</Text>
                                             </Pressable>
@@ -305,7 +306,7 @@ export default function ProposalPanel({
                     accessibilityState={{ disabled: full || !!proposing }}
                 >
                     {proposing ? <ActivityIndicator size="small" color={NAVY} /> : <Ionicons name="search" size={16} color={NAVY} />}
-                    <Text style={styles.proposeText}>{proposing ? `${proposing.name}역 제안 중` : '역 검색해서 제안'}</Text>
+                    <Text style={styles.proposeText}>{proposing ? `${formatStationName(proposing.name)} 제안 중` : '역 검색해서 제안'}</Text>
                 </Pressable>
                 <Pressable style={({ pressed }) => [styles.recommendButton, pressed && styles.pressed]} onPress={onOpenRecommendations} accessibilityRole="button">
                     <Ionicons name="sparkles" size={15} color={WHITE} />
@@ -341,7 +342,7 @@ export default function ProposalPanel({
                                 <Ionicons name={dialog.kind === 'vote' ? 'checkbox-outline' : 'trash-outline'} size={22} color={dialog.kind === 'vote' ? MINT_DEEP : RED} />
                             </View>
                             <Text style={styles.sheetTitle}>
-                                {dialog.kind === 'vote' ? `${dialog.proposal.station.name}역에 투표할까요?` : `${dialog.proposal.station.name}역 후보를 삭제할까요?`}
+                                {dialog.kind === 'vote' ? `${formatStationName(dialog.proposal.station.name)}에 투표할까요?` : `${formatStationName(dialog.proposal.station.name)} 후보를 삭제할까요?`}
                             </Text>
                             <Text style={styles.sheetBody}>{dialogBody(dialog)}</Text>
                             <View style={styles.sheetActions}>

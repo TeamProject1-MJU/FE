@@ -1,3 +1,4 @@
+import { formatStationName } from '@/utils/station-name';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
@@ -348,11 +349,11 @@ function StationField({
             style={({ pressed }) => [styles.stationField, pressed && styles.pressed]}
             onPress={onPress}
             accessibilityRole="button"
-            accessibilityLabel={`${label}역 ${station?.name ?? '선택'}`}
+            accessibilityLabel={`${label}역 ${station ? formatStationName(station.name) : '선택'}`}
         >
             <Text style={styles.stationLabel}>{label}</Text>
             {station ? (
-                <Text style={styles.stationName} numberOfLines={1}>{station.name}</Text>
+                <Text style={styles.stationName} numberOfLines={1}>{formatStationName(station.name)}</Text>
             ) : (
                 <Text style={styles.stationPlaceholder}>{placeholder}</Text>
             )}

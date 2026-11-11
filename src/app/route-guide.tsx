@@ -1,3 +1,4 @@
+import { formatStationName } from '@/utils/station-name';
 import { formatTotalTime } from '@/components/route/format';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -95,7 +96,7 @@ export default function RouteGuideScreen() {
 
                     <View style={styles.card}>
                         <Text style={styles.title} numberOfLines={1}>
-                            {selected.origin.name} → {selected.destination.name}
+                            {formatStationName(selected.origin.name)} → {formatStationName(selected.destination.name)}
                         </Text>
 
                         <View style={styles.timeRow}>

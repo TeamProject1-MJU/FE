@@ -1,3 +1,4 @@
+import { formatStationName } from '@/utils/station-name';
 import { useState } from 'react';
 import { LayoutChangeEvent, StyleSheet, Text, View } from 'react-native';
 
@@ -85,7 +86,7 @@ export default function RouteMapPreview({ route }: { route: Route }) {
                     return (
                         <View key={`pt-${index}`} style={[styles.pointWrap, { left: point.x - 40, top: point.y - 30 }]}>
                             <Text style={styles.pointLabel} numberOfLines={1}>
-                                {point.name}
+                                {formatStationName(point.name)}
                             </Text>
                             <View style={[styles.point, isEnd && styles.endPoint]}>
                                 {isEnd && <View style={styles.endInner} />}

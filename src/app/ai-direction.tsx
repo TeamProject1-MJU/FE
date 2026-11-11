@@ -1,3 +1,4 @@
+import { formatStationName } from '@/utils/station-name';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ActivityIndicator, Animated, Easing, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -151,7 +152,7 @@ export default function AiDirectionScreen() {
                 <Text style={styles.routeChipLabel}>{fromRoute ? '내 경로' : '예시 경로'}</Text>
                 <LineBadge line={line} size={18} />
                 <Text style={styles.routeChipText} numberOfLines={1}>
-                    {expected.stationName}역 · {expected.lineName} {expected.headsign}
+                    {formatStationName(expected.stationName)} · {expected.lineName} {expected.headsign}
                 </Text>
             </View>
 
@@ -353,7 +354,7 @@ function ResultPanel({
 
             {/* 인식 결과 vs 내 경로 */}
             <View style={styles.grid}>
-                <Cell label="현재 역" value={data.recognized.stationName ?? '-'} />
+                <Cell label="현재 역" value={formatStationName(data.recognized.stationName) || '-'} />
                 <Cell label="인식한 노선" value={data.recognized.lineName ?? '-'} bad={wrongLine} />
                 <Cell label="인식한 방면" value={data.recognized.headsign ?? '-'} bad={!correct && !wrongLine} good={correct} />
                 <Cell label="내 경로 방면" value={`${data.expected.lineName ?? ''} ${data.expected.headsign ?? ''}`} />
@@ -373,7 +374,7 @@ function ResultPanel({
                             </View>
                             {ride && (
                                 <Text style={styles.guideSub}>
-                                    {ride.stops}개역 · {ride.minutes}분 후 {ride.alightName}에서 하차
+                                    {ride.stops}개역 · {ride.minutes}분 후 {formatStationName(ride.alightName)}에서 하차
                                 </Text>
                             )}
                         </>

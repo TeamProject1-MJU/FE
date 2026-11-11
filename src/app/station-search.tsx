@@ -1,3 +1,4 @@
+import { formatStationName } from '@/utils/station-name';
 /**
  * 역 검색·선택 화면 (이슈 #33)
  *
@@ -575,7 +576,7 @@ function StationRow({
             ]}
             onPress={onPress}
             accessibilityRole="button"
-            accessibilityLabel={supported ? station.name : `${station.name}, 미제공 역`}
+            accessibilityLabel={supported ? formatStationName(station.name) : `${formatStationName(station.name)}, 미제공 역`}
         >
             {/* 노선색 레일 (환승역은 분할, 미제공은 점선) */}
             <View style={styles.rail}>
@@ -637,12 +638,14 @@ function DashedRail() {
 /** 검색어와 일치하는 부분을 민트로 강조 */
 function HighlightedName({ name, keyword, muted }: { name: string; keyword: string; muted: boolean }) {
     const base = [styles.name, muted && styles.nameMuted];
+    name = name.trim();
+    const suffix = formatStationName(name).slice(name.length);
     const q = normalizeStationName(keyword);
     const lower = name.toLowerCase();
     const index = q ? lower.indexOf(q) : -1;
 
     if (index < 0) {
-        return <Text style={base} numberOfLines={1}>{name}</Text>;
+        return <Text style={base} numberOfLines={1}>{name}{suffix}</Text>;
     }
 
     return (
@@ -650,6 +653,7 @@ function HighlightedName({ name, keyword, muted }: { name: string; keyword: stri
             {name.slice(0, index)}
             <Text style={muted ? undefined : styles.nameHit}>{name.slice(index, index + q.length)}</Text>
             {name.slice(index + q.length)}
+            {suffix}
         </Text>
     );
 }
@@ -744,7 +748,7 @@ function UnsupportedSheet({
                     </View>
                     <View style={styles.sheetStationBody}>
                         <View style={styles.nameRow}>
-                            <Text style={styles.sheetStationName}>{station?.name}</Text>
+                            <Text style={styles.sheetStationName}>{formatStationName(station?.name)}</Text>
                             <View style={styles.naBadge}>
                                 <Text style={styles.naBadgeText}>미제공</Text>
                             </View>
@@ -769,10 +773,10 @@ function UnsupportedSheet({
                                     style={styles.nearbyChip}
                                     onPress={() => onPickNearby(near)}
                                     accessibilityRole="button"
-                                    accessibilityLabel={`${near.name} 선택, 도보 ${walkMinutes}분`}
+                                    accessibilityLabel={`${formatStationName(near.name)} 선택, 도보 ${walkMinutes}분`}
                                 >
                                     <LineBadge line={near.lines[0]} size={18} />
-                                    <Text style={styles.suggestText}>{near.name}</Text>
+                                    <Text style={styles.suggestText}>{formatStationName(near.name)}</Text>
                                     <Text style={styles.nearbyWalk}>도보 {walkMinutes}분</Text>
                                 </Pressable>
                             ))}

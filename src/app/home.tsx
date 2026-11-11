@@ -1,3 +1,4 @@
+import { formatStationName } from '@/utils/station-name';
 import { ComponentProps, useState } from 'react';
 import {
     Alert,
@@ -228,7 +229,7 @@ export default function HomeScreen() {
                                 <Text style={styles.meetingMeta} numberOfLines={1}>
                                     {[
                                         formatTime(meeting.appointmentAt),
-                                        meeting.stationName ? `${meeting.stationName}역` : '약속역 미정',
+                                        meeting.stationName ? formatStationName(meeting.stationName) : '약속역 미정',
                                         `${meeting.memberCount}/${meeting.maxMembers}명`,
                                     ].join(' · ')}
                                 </Text>
@@ -447,7 +448,7 @@ function Station({
             </View>
 
             <Text style={styles.stationName}>
-                {name}
+                {formatStationName(name)}
             </Text>
         </View>
     );

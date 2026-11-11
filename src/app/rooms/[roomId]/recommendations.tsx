@@ -1,3 +1,4 @@
+import { formatStationName } from '@/utils/station-name';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import {
@@ -249,7 +250,7 @@ export default function RoomRecommendationsScreen() {
         setNotice('');
         try {
             await createProposal(detail.id, item.recommendedStation.id, item.resultId);
-            setNotice(`${item.recommendedStation.name}역을 약속역 후보로 올렸어요. 약속방의 '약속역 후보' 탭에서 투표할 수 있어요.`);
+            setNotice(`${formatStationName(item.recommendedStation.name)}을 약속역 후보로 올렸어요. 약속방의 '약속역 후보' 탭에서 투표할 수 있어요.`);
         } catch (error) {
             setNotice(error instanceof RoomError ? error.message : '후보를 올리지 못했어요. 다시 시도해 주세요.');
         } finally {
@@ -379,7 +380,7 @@ export default function RoomRecommendationsScreen() {
                                         </View>
                                         {member.departureStation ? (
                                             <View style={styles.memberStationRow}>
-                                                <Text style={styles.memberStation}>{member.departureStation.name}</Text>
+                                                <Text style={styles.memberStation}>{formatStationName(member.departureStation.name)}</Text>
                                                 <View style={styles.lineRow}>
                                                     {member.departureStation.lines?.map(line => <LineDot key={line.lineId} color={line.color} name={line.lineName} />)}
                                                 </View>
@@ -576,7 +577,7 @@ export default function RoomRecommendationsScreen() {
                         <View style={styles.card}>
                             <View style={styles.cardBadge}><Text style={styles.cardBadgeText}>{CRITERIA.find(c => c.key === result.criterion)?.label} 최적 중간역</Text></View>
                             <View style={styles.stationRow}>
-                                <Text style={styles.stationName}>{result.recommendedStation.name}역</Text>
+                                <Text style={styles.stationName}>{formatStationName(result.recommendedStation.name)}</Text>
                                 <View style={styles.lineRow}>{result.recommendedStation.lines?.map(line => <LineDot key={line.lineId} color={line.color} name={line.lineName} size={22} />)}</View>
                             </View>
 
@@ -631,7 +632,7 @@ export default function RoomRecommendationsScreen() {
                                     {result.nearbyAlternatives.map(alt => (
                                         <View key={`${alt.station.id}-${alt.relation}`} style={styles.nearbyCard}>
                                             <View style={styles.rowBetween}>
-                                                <Text style={styles.nearbyName}>{alt.station.name}역</Text>
+                                                <Text style={styles.nearbyName}>{formatStationName(alt.station.name)}</Text>
                                                 <LineDot color={result.recommendedStation.lines?.find(l => l.lineId === alt.lineId)?.color ?? NAVY} name={`${alt.lineId}호선`} />
                                             </View>
                                             <View style={styles.nearbyTag}><Text style={styles.nearbyTagText}>{alt.relationLabel}</Text></View>
@@ -696,7 +697,7 @@ function ParticipantRow({ participant: p, color, maxMinutes, mine, opened, onPre
             </View>
             {opened && (
                 <View style={styles.participantDetail}>
-                    <Text style={styles.detailTitle}>{p.nickname}님의 경로 · {p.departureStation.name} 출발</Text>
+                    <Text style={styles.detailTitle}>{p.nickname}님의 경로 · {formatStationName(p.departureStation.name)} 출발</Text>
                     {p.segments.map((seg, i) => (
                         <View key={i} style={styles.segmentRow}>
                             <LineDot color={seg.color} name={seg.lineName} />

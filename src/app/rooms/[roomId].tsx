@@ -1,3 +1,4 @@
+import { formatStationName } from '@/utils/station-name';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import {
@@ -267,7 +268,7 @@ export default function RoomDetailScreen() {
             await updateMyDeparture(detail.id, { departureStationId: station.id }, fail);
             setDepartureSaving(null);
             await load(); // 방 상세·멤버 목록에 반영 (7.4/7.6 재조회)
-            setDepartureSaved(`${station.name}으로 설정했어요`);
+            setDepartureSaved(`${formatStationName(station.name)}으로 설정했어요`);
             setTimeout(() => setDepartureSaved(null), 2500);
         } catch (error) {
             const message = error instanceof RoomError ? error.message : '출발역을 저장하지 못했어요. 다시 시도해 주세요.';
@@ -396,7 +397,7 @@ export default function RoomDetailScreen() {
                                                 <Text style={styles.lineText}>{line.lineName.replace('호선', '')}</Text>
                                             </View>
                                         ))}
-                                        <Text style={styles.stationName}>{station.name}</Text>
+                                        <Text style={styles.stationName}>{formatStationName(station.name)}</Text>
                                     </View>
                                 </View>
                             </>
@@ -408,7 +409,7 @@ export default function RoomDetailScreen() {
                                         {proposalItems.length === 0
                                             ? '아직 약속역을 정하지 않았어요'
                                             : leaders.length === 1
-                                                ? `후보 ${proposalItems.length}개 · ${leaders[0].station.name}역 ${topVotes}표로 검토 중`
+                                                ? `후보 ${proposalItems.length}개 · ${formatStationName(leaders[0].station.name)} ${topVotes}표로 검토 중`
                                                 : `후보 ${proposalItems.length}개 검토 중`}
                                     </Text>
                                 </View>
@@ -450,10 +451,10 @@ export default function RoomDetailScreen() {
                                         {mine && <Text style={styles.meTag}>나</Text>}
                                     </View>
                                     {mine && departureSaving ? (
-                                        <Text style={styles.departureSaving} numberOfLines={1}>{departureSaving.name}으로 저장하는 중…</Text>
+                                        <Text style={styles.departureSaving} numberOfLines={1}>{formatStationName(departureSaving.name)}으로 저장하는 중…</Text>
                                     ) : member.departureStation ? (
                                         <View style={styles.departureRow}>
-                                            <Text style={styles.departure}>출발 · {member.departureStation.name}</Text>
+                                            <Text style={styles.departure}>출발 · {formatStationName(member.departureStation.name)}</Text>
                                             {/* 노선 표시: 7.4 members[].departureStation.lines 의 color 그대로 */}
                                             {member.departureStation.lines?.map(line => (
                                                 <View key={line.lineId} style={[styles.lineDot, { backgroundColor: line.color }]} accessibilityLabel={line.lineName}>

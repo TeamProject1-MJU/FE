@@ -1,3 +1,4 @@
+import { formatStationName } from '@/utils/station-name';
 import { useEffect, useRef, useState } from 'react';
 
 import { openStationPicker } from '@/app/station-search';
@@ -24,7 +25,7 @@ type Notice = {
 };
 
 export function selectedStationName(station: RoomStation) {
-    return station.name.endsWith('역') ? station.name : `${station.name}역`;
+    return formatStationName(station.name);
 }
 
 /** 기존 조회 실패 쿼리는 유지하고, 저장 실패를 별도로 제어해요. */
