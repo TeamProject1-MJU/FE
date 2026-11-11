@@ -8,6 +8,7 @@ export const API_ERROR_MESSAGES: Readonly<Record<string, string>> = {
     NETWORK_ERROR: '서버에 연결하지 못했어요. 인터넷 연결을 확인하고 다시 시도해 주세요.',
     UNKNOWN_ERROR: '서버 응답을 확인하지 못했어요. 잠시 후 다시 시도해 주세요.',
     VALIDATION_ERROR: '입력한 내용을 확인해 주세요.',
+    ROOM_BUSY: '다른 요청을 처리하고 있어요. 잠시 후 다시 시도해 주세요.',
     AUTH_REQUIRED: '로그인이 필요해요.',
     TOKEN_EXPIRED: '로그인이 만료됐어요. 다시 로그인해 주세요.',
     TOKEN_INVALID: '로그인 정보를 확인할 수 없어요. 다시 로그인해 주세요.',

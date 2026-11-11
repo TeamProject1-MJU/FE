@@ -2,7 +2,7 @@
 
 `.env.example`을 `.env`로 복사합니다. `EXPO_PUBLIC_USE_MOCK`은 생략하면 `true`이고, 정확히 `true`일 때만 mock입니다. 서버를 쓰려면 `false`와 `/api/v1`까지 포함한 `EXPO_PUBLIC_API_BASE_URL`을 설정하고 앱을 완전히 새로고침합니다. 환경변수는 빌드에 포함되므로 토큰은 넣지 않습니다.
 
-현재 인증, 역 검색·역 상세·노선 목록(`services/station.ts`), 혼잡도 조회(`services/congestion.ts`)가 서버 모드를 지원해요. `/users/me`는 A-2에서 연결해요.
+현재 인증, 내 정보·닉네임 수정·탈퇴(`services/user.ts`), 역 검색·역 상세·노선 목록(`services/station.ts`), 혼잡도 조회(`services/congestion.ts`)가 서버 모드를 지원해요.
 
 ```ts
 import { get, post, delete as apiDelete } from '@/services/api/client';
@@ -56,7 +56,7 @@ setAccessTokenProvider(null);
 
 - `loginWithKakao()`는 SDK `login()` 결과를 `/auth/kakao`에 보내고 응답을 검사한 뒤 저장과 `signIn`을 수행해요. 취소는 `isKakaoLoginCancelled`로 구분해요. SDK가 카카오톡 미설치 시 계정 로그인으로 폴백해요.
 - `auth.ts`를 앱 시작 시 불러오면 `setAccessTokenProvider`, `setTokenRefresher`, `setAuthFailureHandler`, `setSessionGenerationProvider`를 등록해요. 클라이언트는 인증 서비스를 import하지 않아요.
-- 서버 모드에서는 `AuthGate`가 `restoring` 동안 화면을 가리고 `refreshSession()`으로 복원해요. 사용자 정보는 `{ userId: null, nickname: null }`로 미확인 상태예요. 마이페이지는 확인된 세션 닉네임 또는 `사용자`를 표시하고 닉네임 변경·탈퇴 완료는 A-2 전까지 막아요. 사용자 서비스의 조회·수정 mock은 유지해요.
+- 서버 모드에서는 `AuthGate`가 `restoring` 동안 화면을 가리고 `refreshSession()`으로 복원해요. 사용자 정보는 `{ userId: null, nickname: null }`로 시작하고, 마이페이지의 `fetchMe()`가 서버에서 확인해 세션을 갱신해요.
 - Access Token은 메모리, Refresh Token만 SecureStore에 저장해요. 웹은 모두 메모리에만 보관하므로 새로고침하면 로그아웃돼요. 웹에서 실제 카카오 로그인은 지원하지 않아요.
 - 인증이 필요한 요청마다 사용한 토큰과 세대를 기록해요. 401 `TOKEN_EXPIRED`는 같은 세대에서 토큰이 이미 바뀌었다면 현재 토큰으로, 아니라면 갱신 후 원래 요청을 한 번만 재시도해요. client의 진행 중 Promise와 서비스의 세대별 Promise를 공유하므로 앱 복원과 요청 갱신이 겹쳐도 refresh는 한 번이에요. 완료 후 Promise를 비워 다음 만료를 처리해요.
 - 갱신 응답의 새 Refresh Token 저장에 성공해야 로그인 상태로 전환해요. 만료 시간은 응답 검사에만 사용하고 선제 갱신하지 않아요. 로그인·로그아웃과 인증 무효화 때 세대를 바꿔 이전 응답이 새 상태를 바꾸지 못하게 해요.
@@ -114,5 +114,13 @@ const congestion = toCongestion(data); // 6.1과 같은 { supported, kind, pct, 
 - mock은 영업일 규칙(05:30~다음 날 00:30, 30분 칸 39개, 01:00~05:29는 첫차 05:30 칸)을 따르며 막차 이후 대체는 하지 않습니다. 둘째 인자 `'error'`·`'network'`로 서버 오류·네트워크 실패를 흉내 낼 수 있고, 서버 모드에서는 무시합니다.
 
 401 처리는 공통 클라이언트와 인증 서비스에서 담당해요. 화면에서는 `isAuthError(error)`로 구분할 수 있어요.
+
+## 내 정보·닉네임·탈퇴 (#90, v1.12 4.4~4.6)
+
+- `fetchMe()`는 `GET /users/me`의 문자열 `id`, `nickname`, `createdAt`을 검사하고 인증 상태를 유지한 채 세션 정보를 갱신해요. 앱 재시작 후에도 마이페이지에서 다시 조회해요.
+- `updateNickname(value)`는 앞뒤 공백을 뺀 코드 포인트 2~20자를 검사한 뒤 `PATCH /users/me`에 `{ nickname }`을 보내요. 응답은 `{ id, nickname }`이며 가입 시각을 만들지 않아요. 응답으로 화면과 세션을 갱신해요. 실패하면 입력을 유지하고, `ROOM_BUSY`는 잠시 후 다시 시도하도록 안내해요.
+- `withdraw()`는 `DELETE /users/me` 성공 후 로컬 인증·저장값·선택 경로를 지우고 이전 화면 기록 없이 로그인으로 이동해요. 서버가 이미 인증을 폐기하므로 `/auth/logout`은 부르지 않아요. 서버에서는 모든 방에서 나가고 방장이 승계되며, 마지막 참여자의 방은 삭제돼요. 같은 계정 재로그인 시 방은 복구되지 않아요.
+- 탈퇴의 `ROOM_BUSY`·네트워크 실패·시간 초과는 로그인과 선택 경로를 유지해요. 응답 유실 뒤 재시도한 `TOKEN_INVALID`는 기존 공통 인증 처리에 맡기고 시트에서 중복 안내·이동을 하지 않아요. 탈퇴 성공과 인증 무효화는 진행 중인 갱신도 무효화해 늦은 응답이 로그인 상태를 되살리지 못하게 해요.
+- 서버 오류는 `ApiError`의 코드를 그대로 전달해요. `UserError`는 기존 mock 실패와 호출 전 닉네임 검사용으로 유지해요. mock 모드와 화면 테스트 플래그는 서버를 호출하지 않아요.
 
 실행 검사는 프로젝트 루트에서 `node --test scripts/verify-api-client.cjs`로 돌립니다. 실제 서버와 추가 패키지 없이 응답·오류·인증 헤더·시간 초과·mock 검색을 확인합니다.

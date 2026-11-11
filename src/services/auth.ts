@@ -5,8 +5,11 @@ import { getKakaoAccessToken } from '@/services/kakao';
 import { clearTokens, getAccessToken, readRefreshToken, saveTokens } from '@/services/token-storage';
 import { getSession, resetToLogin, signIn, signOut } from '@/stores/auth-store';
 import { mockUser } from '@/mocks/user';
+import { clearSelectedRoute } from '@/stores/route-store';
 
 let generation = 0;
+/** 이전 로그인에서 시작한 사용자 요청의 늦은 응답을 구분해요. */
+export function getSessionGeneration() { return generation; }
 let pending: { generation: number; promise: Promise<void> } | null = null;
 let uncertain = false;
 const stale = () => new ApiError('AUTH_REQUIRED');
@@ -25,8 +28,13 @@ async function invalidate(expected: number, navigate: boolean) {
     generation++; uncertain = false;
     const cleared = clearTokens();
     signOut();
+    clearSelectedRoute();
     if (navigate) resetToLogin();
     await cleared;
+}
+/** 서버가 탈퇴를 완료한 뒤 로컬 인증만 정리해요. 로그아웃 API는 호출하지 않아요. */
+export function clearLocalSession(expected: number = generation): Promise<void> {
+    return invalidate(expected, true);
 }
 export async function loginWithKakao(): Promise<void> {
     const current = ++generation;

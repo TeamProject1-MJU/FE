@@ -1,15 +1,13 @@
 import { useMock } from '@/services/api/config';
-import { logoutSession } from '@/services/auth';
+import { get, patch, delete as apiDelete } from '@/services/api/client';
+import { ApiError } from '@/services/api/errors';
+import { clearLocalSession, getSessionGeneration, logoutSession } from '@/services/auth';
 import { mockUser, setMockUser } from '@/mocks/user';
 /**
  * 사용자 서비스 (#38, API 명세 v1.12 4.3~4.6)
  *
- * TODO: 백엔드 연동 시 아래 API 호출로 교체합니다.
- * - GET    /users/me     내 정보 { id, nickname, createdAt }
- * - PATCH  /users/me     닉네임 수정 { nickname } (2~20자, 중복 허용, 오류 VALIDATION_ERROR)
- * - DELETE /users/me     회원 탈퇴
- *
- * 로그아웃은 인증 서비스로 연결해요. 사용자 조회·수정은 mock을 유지하고 서버 모드 탈퇴는 막아요.
+ * 서버 모드는 /users/me 조회·수정·탈퇴를 호출하고, mock 모드는 기존 동작을 유지해요.
+ * 인증 오류와 재발급은 공통 클라이언트에서 처리해요.
  */
 
 import {
@@ -17,13 +15,35 @@ import {
     NICKNAME_MIN,
     UserError,
     type User,
+    type UserProfile,
 } from '@/types/user';
-import { signIn, signOut } from '@/stores/auth-store';
+import { signIn, signOut, updateSession } from '@/stores/auth-store';
 import { clearSelectedRoute } from '@/stores/route-store';
 
 const MOCK_DELAY_MS = 700;
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+function parseProfile(value: unknown): UserProfile {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        const profile = value as Record<string, unknown>;
+        if (typeof profile.id === 'string' && typeof profile.nickname === 'string') {
+            return { id: profile.id, nickname: profile.nickname };
+        }
+    }
+    throw new ApiError('UNKNOWN_ERROR');
+}
+
+function parseUser(value: unknown): User {
+    const profile = parseProfile(value);
+    const createdAt = (value as Record<string, unknown>).createdAt;
+    if (typeof createdAt !== 'string') throw new ApiError('UNKNOWN_ERROR');
+    return { ...profile, createdAt };
+}
+
+function syncProfile(profile: UserProfile, generation: number) {
+    if (generation !== getSessionGeneration()) throw new ApiError('AUTH_REQUIRED');
+    updateSession({ userId: profile.id, nickname: profile.nickname });
+}
 
 /**
  * 닉네임 글자 수 (백엔드와 같은 기준)
@@ -44,8 +64,14 @@ export function validateNickname(value: string): string | null {
     return null;
 }
 
-/** 4.4 내 정보. failForTest 가 true 면 조회 실패를 흉내 냅니다(실패·재시도 화면 확인용). */
+/** 4.4 내 정보. failForTest는 mock 모드의 조회 실패·재시도 확인에만 사용해요. */
 export async function fetchMe(failForTest = false): Promise<User> {
+    if (!useMock()) {
+        const generation = getSessionGeneration();
+        const user = parseUser(await get<unknown>('/users/me'));
+        syncProfile(user, generation);
+        return user;
+    }
     await wait(MOCK_DELAY_MS);
     if (failForTest) throw new UserError('NETWORK_ERROR', '내 정보를 불러오지 못했어요.');
     return mockUser;
@@ -53,12 +79,19 @@ export async function fetchMe(failForTest = false): Promise<User> {
 
 /**
  * 4.5 닉네임 수정 (앞뒤 공백을 뺀 값을 보냅니다)
- * failForTest 가 true 면 저장 실패를 흉내 냅니다(실패 시 입력값 유지 확인용).
+ * failForTest는 mock 모드의 저장 실패·입력값 유지 확인에만 사용해요.
  */
-export async function updateNickname(nickname: string, failForTest = false): Promise<User> {
+export async function updateNickname(nickname: string, failForTest = false): Promise<UserProfile> {
+    const message = validateNickname(nickname);
+    if (!useMock()) {
+        if (message) throw new UserError('VALIDATION_ERROR', message);
+        const generation = getSessionGeneration();
+        const profile = parseProfile(await patch<unknown>('/users/me', { nickname: nickname.trim() }));
+        syncProfile(profile, generation);
+        return profile;
+    }
     await wait(MOCK_DELAY_MS);
     if (failForTest) throw new UserError('NETWORK_ERROR', '저장하지 못했어요. 잠시 후 다시 시도해 주세요.');
-    const message = validateNickname(nickname);
     if (message) throw new UserError('VALIDATION_ERROR', message);
     setMockUser({ ...mockUser, nickname: nickname.trim() });
     return mockUser;
@@ -71,7 +104,7 @@ export function mockKakaoLogin() {
 
 /**
  * 4.3 로그아웃 (#40)
- * 성공하면 mock 로그인 상태와 이전 사용자의 화면 데이터(선택 경로)를 지웁니다.
+ * 성공하면 로그인 상태와 이전 사용자의 선택 경로를 지워요.
  * failForTest 가 true 면 네트워크 실패를 흉내 냅니다(실패 상태 확인용).
  */
 export async function logout(failForTest = false): Promise<void> {
@@ -89,12 +122,17 @@ export async function logout(failForTest = false): Promise<void> {
 /**
  * 4.6 회원 탈퇴 (#41)
  * 서버: 참여 중인 모든 방에서 나가기(방장이면 승계, 마지막 멤버면 방 삭제) → soft delete → Refresh Token 모두 폐기.
- * 성공하면 mock 로그인 상태와 이전 사용자의 화면 데이터(선택 경로)를 지웁니다.
- * failForTest 가 true 면 실패를 흉내 냅니다(실패 상태 확인용).
- * TODO: DELETE /users/me 호출, 저장한 Access·Refresh Token 삭제
+ * 성공하면 로컬 인증과 이전 사용자의 선택 경로를 지워요.
+ * failForTest는 mock 모드의 탈퇴 실패 확인에만 사용해요.
  */
 export async function withdraw(failForTest = false): Promise<void> {
-    if (!useMock()) throw new UserError('VALIDATION_ERROR', '회원 탈퇴는 아직 준비 중이에요.');
+    if (!useMock()) {
+        const generation = getSessionGeneration();
+        await apiDelete('/users/me');
+        if (generation !== getSessionGeneration()) throw new ApiError('AUTH_REQUIRED');
+        await clearLocalSession(generation);
+        return;
+    }
     await wait(MOCK_DELAY_MS);
     if (failForTest) throw new UserError('NETWORK_ERROR', '탈퇴하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.');
     signOut();
