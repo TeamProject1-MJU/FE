@@ -1,22 +1,30 @@
 /**
- * 중간역 추천 서비스 (#49, API 명세 v1.12 8.1~8.3)
+ * 중간역 추천 서비스 (#49, #99, API 명세 v1.12 8.1~8.3 · BE 코드 기준)
  *
- * TODO: 백엔드 연동 시 아래 API 호출로 교체합니다.
- * - POST /rooms/{roomId}/recommendations            { conditionText?, filter? }  → 8.1
- * - GET  /rooms/{roomId}/recommendations/latest     → 8.2 (실행 기록 없으면 data: null)
- * - GET  /rooms/{roomId}/recommendations/{runId}    → 8.3 (최근 실행이 아니면 isStale·staleReasons = null)
+ * 서버 모드 (EXPO_PUBLIC_USE_MOCK=false, #99)
+ * - POST /rooms/{roomId}/recommendations            { conditionText?, filter? }  → 8.1 (제한 시간 RECOMMENDATION_TIMEOUT_MS)
+ * - GET  /rooms/{roomId}/recommendations/latest     → 8.2 (실행 기록 없으면 data: null → null 반환)
+ * - GET  /rooms/{roomId}/recommendations/{runId}    → 8.3 (최근 실행이 아니면 isStale·staleReasons = null 그대로)
+ * - 응답은 unknown 으로 받아 화면이 읽는 값만 필수로 검사하고, 형식 오류는 UNKNOWN_ERROR 예요.
+ * - 추천역·주변 대안역 ID 는 서버 값을 그대로 써요. mock 역 목록(MOCK_STATIONS)과 방 mock 을 읽지 않아요.
+ * - recommendedStation.lines 는 응답에 없어서 역 상세(5.3)로 채우고, 실패하면 배지만 숨겨요.
+ * - 서버에 이전 실행 목록 API 가 없어서 listRecommendationRuns 는 이 앱 세션에서 본 실행(8.1 성공·8.2 결과)만 돌려줘요.
+ * - 인증 오류(TOKEN_*·401)는 A-1 공통 처리에 맡기고 ApiError 그대로 던져요.
+ * - TODO(범위 밖): WS RECOMMENDATION_CREATED / MEMBER_JOINED / MEMBER_LEFT / DEPARTURE_UPDATED / ROOM_UPDATED 수신 시 8.2 재조회 (11장, BE #43 이후)
  *
- * 지금은 방 mock(services/room.ts)의 멤버·출발역·약속 시각을 읽어 메모리에서 추천을 흉내 냅니다.
- * - 실제 다익스트라·요금 계산·OpenAI 호출은 범위 밖. 거리 기반의 단순 추정치로 대체 (값에는 화면에서 "예상" 라벨)
- * - 실행마다 criteria 스냅샷(appointmentAt, participants)을 남기고, 조회할 때 현재 방 상태와 비교해 isStale 을 계산합니다 (명세 8.1)
- * - 방 정보가 바뀌어도 자동으로 다시 추천하지 않습니다. 사용자가 "다시 추천받기"로 8.1 을 다시 호출합니다
- * - TODO: WS RECOMMENDATION_CREATED / MEMBER_JOINED / MEMBER_LEFT / DEPARTURE_UPDATED / ROOM_UPDATED 수신 시 8.2 재조회 (11장)
+ * mock 모드 (기본)
+ * - 방 mock(services/room.ts)의 멤버·출발역·약속 시각을 읽어 메모리에서 추천을 흉내 내요.
+ * - 실제 다익스트라·요금 계산·OpenAI 호출 대신 거리 기반의 단순 추정치를 써요 (값에는 화면에서 "예상" 라벨)
+ * - 실행마다 criteria 스냅샷(appointmentAt, participants)을 남기고, 조회할 때 현재 방 상태와 비교해 isStale 을 계산해요 (명세 8.1)
+ * - 방 정보가 바뀌어도 자동으로 다시 추천하지 않아요. 사용자가 "다시 추천받기"로 8.1 을 다시 호출해요
  */
 
 import { MOCK_STATIONS } from '@/mocks/stations';
 import type { Station } from '@/types/station';
 import { getMockMembers, getMockRoom } from '@/services/room';
+import { get, post } from '@/services/api/client';
 import { useMock as isMockMode } from '@/services/api/config';
+import { ApiError, isAuthError } from '@/services/api/errors';
 import { fetchStation } from '@/services/station';
 import { assertRoomCacheScope, getRoomCacheScope, subscribeRoomCacheReset } from '@/services/room-cache';
 import { subscribeRoomMockChanges } from '@/stores/room-mock-events';
@@ -26,10 +34,12 @@ import {
     type NearbyAlternative,
     type ParticipantTime,
     type RecommendationCriterion,
+    type RecommendationErrorCode,
     type RecommendationFilter,
     type RecommendationRequest,
     type RecommendationResult,
     type RecommendationRun,
+    type RecommendedStation,
     type StaleReason,
 } from '@/types/recommendation';
 import type { RoomMember } from '@/types/room';
@@ -108,6 +118,8 @@ export async function fetchLatestRecommendation(
     roomId: string,
     mock?: 'error',
 ): Promise<RecommendationRun | null> {
+    // 서버 모드에서는 mock 인자를 무시해요.
+    if (!isMockMode()) return fetchServerLatest(roomId);
     await wait(MOCK_DELAY_MS * 0.6);
 
     if (!getMockRoom(roomId)) {
@@ -140,6 +152,7 @@ export async function fetchRecommendation(
     roomId: string,
     runId: string,
 ): Promise<RecommendationRun> {
+    if (!isMockMode()) return fetchServerRun(roomId, runId);
     await wait(MOCK_DELAY_MS * 0.6);
 
     if (!getMockRoom(roomId)) {
@@ -168,10 +181,14 @@ export async function fetchRecommendation(
     );
 }
 
-/** 이 방의 실행 목록을 최근 순으로 반환해요. */
+/**
+ * 이 방의 실행 목록을 최근 순으로 반환해요.
+ * 서버 모드: 서버에 목록 API 가 없어서 이 앱 세션에서 본 실행(8.1 성공·8.2 결과)만 돌려줘요. 화면은 2건 이상일 때만 목록을 보여요.
+ */
 export function listRecommendationRuns(
     roomId: string,
 ): { runId: string; createdAt: string }[] {
+    if (!isMockMode()) return listServerRuns(roomId);
     if (!getMockRoom(roomId)) return [];
 
     return [...(runsByRoom.get(roomId) ?? [])]
@@ -292,9 +309,9 @@ export async function createRecommendation(
     request: RecommendationRequest,
     mock?: 'error',
 ): Promise<RecommendationRun> {
-    const scope = isMockMode() ? null : getRoomCacheScope();
+    // 서버 모드에서는 mock 인자를 무시하고 mock 계산(MOCK_STATIONS·방 mock)을 타지 않아요.
+    if (!isMockMode()) return createServerRecommendation(roomId, request);
     await wait(MOCK_DELAY_MS * 1.6);
-    if (scope) assertRoomCacheScope(scope);
     if (mock) createFailOnce.add(roomId);
 
     const room = getMockRoom(roomId);
@@ -319,15 +336,11 @@ export async function createRecommendation(
         if (applied[key] === undefined) delete applied[key];
     }
 
-    const departures = await Promise.all(members.map(async member => {
-        // 추천 계산은 mock을 유지해요. 서버 ID를 mock 역 목록의 다른 역으로 해석하지 않아요.
-        const station = isMockMode()
-            ? MOCK_STATIONS.find(item => item.id === member.departureStation!.id)
-            : await fetchStation(member.departureStation!.id);
+    const departures = members.map(member => {
+        const station = MOCK_STATIONS.find(item => item.id === member.departureStation!.id);
         if (!station || !station.isSupported || !station.lines.length) throw new RecommendationError('STATION_UNSUPPORTED', `${member.nickname}님의 출발역은 지원하지 않는 역이에요.`);
         return { member, station };
-    }));
-    if (scope) assertRoomCacheScope(scope);
+    });
 
     // 후보 집합: 지원 역 전체 − 제외 역, 각 참여자 추정 이동 정보 계산
     // TODO(백엔드 확인): 참여자 출발역 자체를 후보에서 빼는지. mock 은 "중간"역 취지로 제외
@@ -423,8 +436,283 @@ export async function createRecommendation(
     return withStale(roomId, stored, true);
 }
 
+/* ───────────── 서버 모드 (#99) ───────────── */
+
+/**
+ * 8.1 요청 제한 시간. 조건 해석·설명 생성에 AI 호출이 있어 기본 10초보다 길게 둬요.
+ * 30초는 실서버에서 재지 않은 임시값이에요. TODO: 실서버 측정 후 조정
+ */
+export const RECOMMENDATION_TIMEOUT_MS = 30000;
+
+/** 8.1 시간 초과·연결 실패: 서버는 계산을 끝내고 저장했을 수 있어요. 화면에 다시 들어오면 8.2 로 확인돼요. */
+const CREATE_NETWORK_MESSAGE = '추천 결과를 받지 못했어요. 결과가 저장됐을 수 있어요. 최근 결과를 확인해 보세요.';
+const READ_NETWORK_MESSAGE = '추천 결과를 불러오지 못했어요. 잠시 후 다시 시도해 주세요.';
+
+const SERVER_ERROR_MESSAGES: Record<Exclude<RecommendationErrorCode, 'NETWORK_ERROR'>, string> = {
+    TOO_FEW_MEMBERS: '중간역을 추천하려면 멤버가 2명 이상이어야 해요.',
+    DEPARTURE_MISSING: '출발역을 설정하지 않은 멤버가 있어요.',
+    STATION_UNSUPPORTED: '지원하지 않는 출발역이 있어요. 출발역을 확인해 주세요.',
+    NOT_ROOM_MEMBER: '참여하지 않은 약속방이에요.',
+    ROOM_NOT_FOUND: '약속방을 찾을 수 없어요.',
+    RUN_NOT_FOUND: '추천 결과를 찾을 수 없어요.',
+    APPOINTMENT_PASSED: '약속 시각이 이미 지나서 추천할 수 없어요. 약속 시각을 바꿔 주세요.',
+    NO_SERVICE_TIME: '약속 시각 전에 도착하는 열차가 없어요. 약속 시각을 조정해 주세요.',
+    RECOMMENDATION_IN_PROGRESS: '다른 멤버가 추천을 계산하고 있어요. 잠시 후 다시 시도해 주세요.',
+    VALIDATION_ERROR: '추천 조건을 확인해 주세요.',
+    UNKNOWN_ERROR: '추천 결과를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.',
+};
+
+const isAuthFailure = (error: unknown) => error instanceof ApiError && (error.code.startsWith('TOKEN_') || isAuthError(error));
+
+/** 서버 오류 → RecommendationError. 인증 오류는 A-1 처리에 맡기려고 ApiError 그대로 던져요. 모르는 코드는 UNKNOWN_ERROR 예요. */
+function toRecommendationError(error: unknown, action: 'create' | 'read'): never {
+    if (isAuthFailure(error) || error instanceof RecommendationError) throw error;
+    if (error instanceof ApiError && error.code === 'NETWORK_ERROR') {
+        throw new RecommendationError('NETWORK_ERROR', action === 'create' ? CREATE_NETWORK_MESSAGE : READ_NETWORK_MESSAGE);
+    }
+    const code = error instanceof ApiError && Object.prototype.hasOwnProperty.call(SERVER_ERROR_MESSAGES, error.code)
+        ? error.code as keyof typeof SERVER_ERROR_MESSAGES : 'UNKNOWN_ERROR';
+    // DEPARTURE_MISSING 은 error.details.missingUserIds 가 문자열 배열일 때만 넘겨요.
+    const details = error instanceof ApiError ? error.details : null;
+    const missing = code === 'DEPARTURE_MISSING' && isRecord(details) && Array.isArray(details.missingUserIds)
+        && details.missingUserIds.every(id => typeof id === 'string') ? [...details.missingUserIds as string[]] : undefined;
+    throw new RecommendationError(code, SERVER_ERROR_MESSAGES[code], missing);
+}
+
+/* ---------- 응답 검사: 화면이 읽는 값만 필수로 보고, 안 쓰는 값은 없거나 달라도 통과시켜요 ---------- */
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
+const isDate = (value: unknown): value is string => typeof value === 'string' && Number.isFinite(Date.parse(value));
+const invalid = (): never => { throw new ApiError('UNKNOWN_ERROR'); };
+const CRITERION_VALUES: readonly RecommendationCriterion[] = ['TIME', 'FARE', 'DISTANCE'];
+
+/** null·undefined 는 null, 문자열은 그대로, 그 밖은 형식 오류예요. */
+function parseOptionalText(value: unknown): string | null {
+    if (value === null || value === undefined) return null;
+    return typeof value === 'string' ? value : invalid();
+}
+
+/** null 인 값과 빈 배열은 "조건 없음"으로 빼서, 화면의 "적용된 제약 없음" 판단과 표시가 그대로 동작하게 해요. */
+function parseConstraints(value: unknown): AppliedConstraints {
+    if (value === null || value === undefined) return {};
+    if (!isRecord(value)) return invalid();
+    const constraints: AppliedConstraints = {};
+    for (const key of ['maxMinutes', 'maxTransfers', 'maxFareWon'] as const) {
+        const item = value[key];
+        if (isNumber(item)) constraints[key] = item;
+    }
+    const excluded = Array.isArray(value.excludeStationIds) ? value.excludeStationIds.filter(isNumber) : [];
+    if (excluded.length) constraints.excludeStationIds = excluded;
+    const limits = Array.isArray(value.memberLimits)
+        ? value.memberLimits.flatMap(limit => isRecord(limit) && typeof limit.userId === 'string' && isNumber(limit.maxMinutes)
+            ? [{ userId: limit.userId, maxMinutes: limit.maxMinutes }] : [])
+        : [];
+    if (limits.length) constraints.memberLimits = limits;
+    return constraints;
+}
+
+function parseSegment(value: unknown) {
+    if (!isRecord(value) || !isNumber(value.lineId) || typeof value.lineName !== 'string' || typeof value.color !== 'string'
+        || typeof value.fromStationName !== 'string' || typeof value.toStationName !== 'string' || !isNumber(value.stationCount)) return invalid();
+    return { ...value } as ParticipantTime['segments'][number];
+}
+
+/** boardingTrain·legs·source·arriveAt·slackSeconds 같은 추가 값은 화면에 쓰지 않고 그대로 통과시켜요. */
+function parseParticipant(value: unknown): ParticipantTime {
+    if (!isRecord(value) || typeof value.userId !== 'string' || typeof value.nickname !== 'string'
+        || !isRecord(value.departureStation) || !isNumber(value.departureStation.id) || typeof value.departureStation.name !== 'string'
+        || !isNumber(value.travelMinutes) || !isNumber(value.transferCount) || !isNumber(value.fareWon) || !isNumber(value.distanceM)
+        || !isDate(value.departureAt)) return invalid();
+    let congestion: ParticipantTime['congestion'] = null;
+    if (value.congestion !== null && value.congestion !== undefined) {
+        const raw = value.congestion;
+        if (!isRecord(raw) || typeof raw.level !== 'string' || typeof raw.levelLabel !== 'string') return invalid();
+        congestion = { level: raw.level as NonNullable<ParticipantTime['congestion']>['level'], levelLabel: raw.levelLabel, ...(isNumber(raw.pct) ? { pct: raw.pct } : {}) };
+    }
+    const segments = value.segments === null || value.segments === undefined ? []
+        : Array.isArray(value.segments) ? value.segments.map(parseSegment) : invalid();
+    return {
+        ...value,
+        userId: value.userId,
+        nickname: value.nickname,
+        departureStation: { id: value.departureStation.id, name: value.departureStation.name },
+        travelMinutes: value.travelMinutes,
+        transferCount: value.transferCount,
+        fareWon: value.fareWon,
+        distanceM: value.distanceM,
+        departureAt: value.departureAt,
+        congestion,
+        segments,
+    };
+}
+
+function parseNearby(value: unknown): NearbyAlternative {
+    if (!isRecord(value) || !isRecord(value.station) || !isNumber(value.station.id) || typeof value.station.name !== 'string'
+        || !isNumber(value.lineId) || typeof value.relation !== 'string' || typeof value.relationLabel !== 'string'
+        || !isNumber(value.maxMinutes) || !isNumber(value.totalFareWon)) return invalid();
+    return {
+        station: { id: value.station.id, name: value.station.name },
+        lineId: value.lineId,
+        relation: value.relation as NearbyAlternative['relation'],
+        relationLabel: value.relationLabel,
+        maxMinutes: value.maxMinutes,
+        totalFareWon: value.totalFareWon,
+    };
+}
+
+function parseResult(value: unknown): RecommendationResult {
+    if (!isRecord(value) || typeof value.resultId !== 'string'
+        || !CRITERION_VALUES.includes(value.criterion as RecommendationCriterion)
+        || typeof value.explanation !== 'string' || !Array.isArray(value.participantTimes)) return invalid();
+    const station = value.recommendedStation;
+    if (!isRecord(station) || !isNumber(station.id) || typeof station.name !== 'string') return invalid();
+    const metrics = value.metrics;
+    if (!isRecord(metrics) || !isNumber(metrics.averageMinutes) || !isNumber(metrics.maxDifferenceMinutes)
+        || !isNumber(metrics.maxMinutes) || !isNumber(metrics.averageFare)) return invalid();
+    const nearby = value.nearbyAlternatives === null || value.nearbyAlternatives === undefined ? []
+        : Array.isArray(value.nearbyAlternatives) ? value.nearbyAlternatives.map(parseNearby) : invalid();
+    // 서버 응답에 lines 가 없어요. 노선 배지는 attachStationLines 가 역 상세로 채워요.
+    const recommendedStation: RecommendedStation = {
+        id: station.id,
+        name: station.name,
+        ...(isNumber(station.latitude) ? { latitude: station.latitude } : {}),
+        ...(isNumber(station.longitude) ? { longitude: station.longitude } : {}),
+        ...(typeof station.isSupported === 'boolean' ? { isSupported: station.isSupported } : {}),
+    };
+    return {
+        resultId: value.resultId,
+        criterion: value.criterion as RecommendationCriterion,
+        recommendedStation,
+        metrics: {
+            averageMinutes: metrics.averageMinutes,
+            maxDifferenceMinutes: metrics.maxDifferenceMinutes,
+            maxMinutes: metrics.maxMinutes,
+            averageFare: metrics.averageFare,
+            ...(isNumber(metrics.totalTransfers) ? { totalTransfers: metrics.totalTransfers } : {}),
+        },
+        participantTimes: value.participantTimes.map(parseParticipant),
+        nearbyAlternatives: nearby,
+        explanation: value.explanation,
+        explanationSource: value.explanationSource === 'AI' ? 'AI' : 'TEMPLATE',
+    };
+}
+
+/** 8.1·8.2·8.3 공통 응답. isStale·staleReasons 의 null 은 null 그대로 둬요(false·빈 배열로 바꾸지 않아요). */
+function parseRun(value: unknown): RecommendationRun {
+    if (!isRecord(value) || typeof value.runId !== 'string' || !value.runId || !isDate(value.createdAt)
+        || !(value.isStale === null || typeof value.isStale === 'boolean')
+        || !(value.staleReasons === null || value.staleReasons === undefined
+            || (Array.isArray(value.staleReasons) && value.staleReasons.every(reason => typeof reason === 'string')))
+        || !Array.isArray(value.results)) return invalid();
+    return {
+        runId: value.runId,
+        createdAt: value.createdAt,
+        isStale: value.isStale,
+        staleReasons: Array.isArray(value.staleReasons) ? [...value.staleReasons] as StaleReason[] : null,
+        conditionText: parseOptionalText(value.conditionText),
+        appliedConstraints: parseConstraints(value.appliedConstraints),
+        message: parseOptionalText(value.message),
+        results: value.results.map(parseResult),
+    };
+}
+
+/**
+ * 추천역 노선 배지: 결과 최대 3곳을 역 상세(5.3)로 병렬 조회하고, 같은 역은 한 번만 불러요.
+ * 실패하면 그 역의 배지만 숨겨요(lines 없음). 인증 오류는 A-1 처리에 맡기려고 그대로 던져요.
+ */
+async function attachStationLines(run: RecommendationRun): Promise<RecommendationRun> {
+    const ids = [...new Set(run.results.map(item => item.recommendedStation.id))].slice(0, 3);
+    const found = new Map<number, NonNullable<RecommendedStation['lines']>>();
+    await Promise.all(ids.map(async id => {
+        try {
+            const station = await fetchStation(id);
+            found.set(id, station.lines.map(line => ({ lineId: line.lineId, lineName: line.lineName, color: line.color })));
+        } catch (error) {
+            if (isAuthFailure(error)) throw error;
+        }
+    }));
+    return {
+        ...run,
+        results: run.results.map(item => {
+            const lines = found.get(item.recommendedStation.id);
+            return lines ? { ...item, recommendedStation: { ...item.recommendedStation, lines: lines.map(line => ({ ...line })) } } : item;
+        }),
+    };
+}
+
+/** 서버 모드에서 이 앱 세션 안에서 본 실행이에요. 방 id → runId → createdAt (계정이 바뀌면 비워요) */
+const serverRunsByRoom = new Map<string, Map<string, string>>();
+
+function rememberServerRun(roomId: string, run: RecommendationRun) {
+    const runs = serverRunsByRoom.get(roomId) ?? new Map<string, string>();
+    runs.set(run.runId, run.createdAt);
+    serverRunsByRoom.set(roomId, runs);
+}
+
+function listServerRuns(roomId: string) {
+    return [...(serverRunsByRoom.get(roomId) ?? new Map<string, string>()).entries()]
+        .map(([runId, createdAt]) => ({ runId, createdAt }))
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+
+const recommendationsPath = (roomId: string) => `/rooms/${encodeURIComponent(roomId)}/recommendations`;
+
+/** 요청 전 계정·방 캐시 범위를 잡고, 응답 뒤 계정이 바뀌었으면 늦은 응답을 버려요(AUTH_REQUIRED). */
+async function requestServerRun(action: 'create' | 'read', call: () => Promise<unknown>, allowEmpty: boolean): Promise<RecommendationRun | null> {
+    try {
+        const scope = getRoomCacheScope();
+        const raw = await call();
+        assertRoomCacheScope(scope);
+        if (raw === null && allowEmpty) return null;
+        const run = await attachStationLines(parseRun(raw));
+        assertRoomCacheScope(scope);
+        return run;
+    } catch (error) {
+        return toRecommendationError(error, action);
+    }
+}
+
+async function fetchServerLatest(roomId: string): Promise<RecommendationRun | null> {
+    if (!roomId) throw new RecommendationError('ROOM_NOT_FOUND', SERVER_ERROR_MESSAGES.ROOM_NOT_FOUND);
+    const run = await requestServerRun('read', () => get<unknown>(`${recommendationsPath(roomId)}/latest`), true);
+    if (run) rememberServerRun(roomId, run);
+    return run;
+}
+
+async function fetchServerRun(roomId: string, runId: string): Promise<RecommendationRun> {
+    if (!roomId) throw new RecommendationError('ROOM_NOT_FOUND', SERVER_ERROR_MESSAGES.ROOM_NOT_FOUND);
+    if (!runId) throw new RecommendationError('RUN_NOT_FOUND', SERVER_ERROR_MESSAGES.RUN_NOT_FOUND);
+    const run = await requestServerRun('read', () => get<unknown>(`${recommendationsPath(roomId)}/${encodeURIComponent(runId)}`), false);
+    return run!;
+}
+
+/** 8.1 body: 값이 있는 항목만 보내고, 둘 다 없으면 빈 객체 {} 예요. */
+function buildServerBody(request: RecommendationRequest): RecommendationRequest {
+    const body: RecommendationRequest = {};
+    const conditionText = request.conditionText?.trim();
+    if (conditionText) body.conditionText = conditionText;
+    const filter: RecommendationFilter = {};
+    for (const [key, value] of Object.entries(request.filter ?? {}) as [keyof RecommendationFilter, unknown][]) {
+        if (value === undefined || value === null || (Array.isArray(value) && value.length === 0)) continue;
+        (filter as Record<string, unknown>)[key] = value;
+    }
+    if (Object.keys(filter).length) body.filter = filter;
+    return body;
+}
+
+async function createServerRecommendation(roomId: string, request: RecommendationRequest): Promise<RecommendationRun> {
+    if (!roomId) throw new RecommendationError('ROOM_NOT_FOUND', SERVER_ERROR_MESSAGES.ROOM_NOT_FOUND);
+    const run = await requestServerRun('create', () => post<unknown>(recommendationsPath(roomId), buildServerBody(request), { timeoutMs: RECOMMENDATION_TIMEOUT_MS }), false);
+    rememberServerRun(roomId, run!);
+    return run!;
+}
+
 subscribeRoomCacheReset(() => {
     runsByRoom.clear();
     createFailOnce.clear();
     latestFailOnce.clear();
+    serverRunsByRoom.clear();
 });

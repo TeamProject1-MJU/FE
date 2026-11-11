@@ -2028,6 +2028,51 @@ function roomQueryRuntime() {
     r.respond = handler => { r.context.fetch = async (url, options) => { r.calls.push({ url, options }); return handler(url, options); }; };
     return r;
 }
+/* ---------- 중간역 추천 서버 연동 (#99) ---------- */
+
+const RECO_EXTRA = { boardingTrain: { trainNo: '2123', departAt: '2026-11-20T18:40:00+09:00' }, legs: [{ lineId: 2, minutes: 21 }], source: 'TIMETABLE', arriveAt: '2026-11-20T18:58:00+09:00', slackSeconds: 120 };
+function recoParticipant(overrides = {}) {
+    return {
+        userId: ROOM_QUERY_ME, nickname: '서버 나', departureStation: { id: 88001, name: '서버 역 88001' },
+        travelMinutes: 21, transferCount: 1, fareWon: 1650, distanceM: 9800, departureAt: '2026-11-20T18:39:00+09:00',
+        congestion: { pct: 80, level: 'NORMAL', levelLabel: '보통' },
+        segments: [{ lineId: 2, lineName: '2호선', color: '#00a84d', direction: 'INNER', fromStationName: '서버 역 88001', toStationName: '서버 추천역', stationCount: 5 }],
+        ...RECO_EXTRA, ...overrides,
+    };
+}
+function recoResult(criterion, stationId, overrides = {}) {
+    return {
+        resultId: `result-${criterion}`, criterion,
+        recommendedStation: { id: stationId, name: `서버 추천역 ${stationId}`, latitude: 37.5, longitude: 127, isSupported: true },
+        metrics: { averageMinutes: 20.5, maxDifferenceMinutes: 3, maxMinutes: 22, averageFare: 1650, totalTransfers: 1 },
+        participantTimes: [
+            recoParticipant(),
+            recoParticipant({ userId: ROOM_QUERY_OTHER, nickname: '서버 동료', departureStation: { id: 99002, name: '서버 역 99002' }, congestion: null }),
+        ],
+        nearbyAlternatives: [{ station: { id: 77009, name: '서버 이웃역' }, lineId: 2, relation: 'PREV', relationLabel: '최적역에서 1정거장', maxMinutes: 24, totalFareWon: 3300 }],
+        explanation: '서버가 만든 설명이에요.', explanationSource: 'AI', ...overrides,
+    };
+}
+function recoRun(overrides = {}) {
+    return {
+        runId: 'server-run-1', createdAt: '2026-11-11T10:00:00+09:00', isStale: false, staleReasons: [], conditionText: null,
+        appliedConstraints: { maxMinutes: null, maxTransfers: null, maxFareWon: null, excludeStationIds: [], memberLimits: [] },
+        message: null, results: [recoResult('TIME', 77001), recoResult('FARE', 77002), recoResult('DISTANCE', 77001)], ...overrides,
+    };
+}
+const recoStation = id => ({ id, name: `서버 추천역 ${id}`, latitude: 37.5, longitude: 127, isSupported: true, lines: [{ lineId: 2, lineName: '2호선', color: '#00a84d', stationCode: String(id) }] });
+const recoFail = (code, status, details) => jsonResponse({ success: false, error: { code, message: '서버 문구', ...(details ? { details } : {}) } }, status);
+/** 방 상세·역 상세는 기본값으로 답하고, 추천 요청만 handler 로 넘겨요. */
+function recoRuntime() {
+    const r = roomQueryRuntime();
+    r.recoRespond = (handler, detail = roomQueryDetail()) => r.respond(async (url, options) => {
+        if (url.includes('/recommendations')) return handler(url, options);
+        if (url.includes('/stations/')) return ok(recoStation(Number(url.split('/').at(-1))));
+        return ok(detail);
+    });
+    return r;
+}
+
 async function finishRoomMock(r, pending) {
     let finished = false;
     pending.then(() => { finished = true; }, () => { finished = true; });
@@ -2241,22 +2286,19 @@ test('서버 방에서 후보·투표·채팅은 서버 UUID와 캐시를 사용
     assert.ok(!r.calls.some(call => /messages|station-proposals|recommendations/.test(call.url)));
 });
 
-test('서버 방 추천 화면은 실제 멤버 출발역 ID로 역 정보를 읽고 계산은 mock으로 유지해요', async () => {
-    const r = roomQueryRuntime(); const detail = roomQueryDetail(); detail.members[1].departureStation = roomQueryStation(99002);
-    r.respond(async url => {
-        const id = Number(url.split('/').at(-1));
-        return jsonResponse({ success: true, data: url.includes('/stations/')
-                ? { ...roomQueryStation(id), latitude: id === 88001 ? 37.5 : 37.6, longitude: id === 88001 ? 127 : 126.9, lines: [{ ...roomQueryStation().lines[0], stationCode: String(id) }] } : detail });
-    });
+test('서버 방 추천은 mock 계산·mock 역 목록 없이 서버 8.1·8.2 결과의 서버 역 ID를 그대로 써요', async () => {
+    const r = recoRuntime(); const detail = roomQueryDetail(); detail.members[1].departureStation = roomQueryStation(99002);
+    r.recoRespond(async url => (url.endsWith('/latest') ? ok(null) : ok(recoRun())), detail);
     await r.room.fetchRoomDetail(ROOM_QUERY_ID);
     const reco = r.load('src/services/recommendation.ts');
-    assert.equal(await finishRoomMock(r, reco.fetchLatestRecommendation(ROOM_QUERY_ID)), null);
-    const run = await finishRoomMock(r, reco.createRecommendation(ROOM_QUERY_ID, {}));
-    assert.ok(run.results.length);
+    assert.equal(await reco.fetchLatestRecommendation(ROOM_QUERY_ID), null);
+    const run = await reco.createRecommendation(ROOM_QUERY_ID, {});
+    assert.deepEqual(plain(run.results.map(item => item.recommendedStation.id)), [77001, 77002, 77001]);
+    const mockIds = new Set(r.load('src/mocks/stations.ts').MOCK_STATIONS.map(station => station.id));
+    assert.ok(run.results.every(item => !mockIds.has(item.recommendedStation.id)));
     assert.deepEqual(plain(run.results[0].participantTimes.map(member => member.departureStation.id)), [88001, 99002]);
-    assert.equal(r.calls.filter(call => call.url.includes('/stations/')).length, 2);
-    assert.ok(r.calls.every(call => call.options.method === 'GET'));
-    assert.ok(!r.calls.some(call => call.url.includes('/recommendations')));
+    // 출발역 상세는 부르지 않고, 추천역 노선 배지용 역 상세만 불러요.
+    assert.deepEqual(r.calls.filter(call => call.url.includes('/stations/')).map(call => call.url.split('/').at(-1)).sort(), ['77001', '77002']);
 });
 
 function roomQueryScreen(screenPath = 'src/app/rooms/index.tsx', params = {}) {
@@ -2385,5 +2427,383 @@ test('이전 방의 늦은 상세 응답은 새 방 화면을 덮지 않아요',
     const view = r.render();
     assert.ok(findElement(view, element => element.props?.children === '두 번째 방'));
     assert.equal(findElement(view, element => element.props?.children === '서버 모임'), null);
+    r.unmount();
+});
+
+test('추천 8.1·8.2·8.3 요청 URL·body·인증 헤더, mock 인자 무시', async () => {
+    const r = recoRuntime();
+    r.load('src/services/api/client.ts').setAccessTokenProvider(() => 'test-access');
+    r.recoRespond(async () => ok(recoRun()));
+    const reco = r.load('src/services/recommendation.ts');
+    const roomId = 'room/1 a';
+    const base = 'https://example.test/api/v1/rooms/room%2F1%20a/recommendations';
+    await reco.createRecommendation(roomId, {});
+    await reco.createRecommendation(roomId, { conditionText: '   ', filter: { maxMinutes: undefined, excludeStationIds: [], memberLimits: [] } });
+    await reco.createRecommendation(roomId, { conditionText: ' 환승 적게 ', filter: { maxMinutes: 30, maxTransfers: undefined, excludeStationIds: [101], memberLimits: [] } }, 'error');
+    await reco.fetchLatestRecommendation(roomId, 'error');
+    await reco.fetchRecommendation(roomId, 'run/2');
+    const calls = r.calls.filter(call => call.url.includes('/recommendations'));
+    assert.deepEqual(calls.map(call => [call.options.method, call.url]), [
+        ['POST', base], ['POST', base], ['POST', base], ['GET', `${base}/latest`], ['GET', `${base}/run%2F2`],
+    ]);
+    assert.deepEqual(calls.slice(0, 3).map(call => JSON.parse(call.options.body)), [
+        {}, {}, { conditionText: '환승 적게', filter: { maxMinutes: 30, excludeStationIds: [101] } },
+    ]);
+    assert.equal(calls[3].options.body, undefined);
+    assert.ok(r.calls.every(call => call.options.headers.Authorization === 'Bearer test-access'));
+});
+
+test('추천 8.1만 제한 시간 30초, 시간 초과는 결과 저장 가능 안내가 담긴 NETWORK_ERROR, 조회는 기본 10초', async () => {
+    const r = recoRuntime();
+    const reco = r.load('src/services/recommendation.ts');
+    const { RecommendationError } = r.load('src/types/recommendation.ts');
+    assert.equal(reco.RECOMMENDATION_TIMEOUT_MS, 30000);
+    r.recoRespond((_url, options) => new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(Error('중단')))));
+    const created = reco.createRecommendation(ROOM_QUERY_ID, {});
+    const createRejected = assert.rejects(created, error => error instanceof RecommendationError && error.code === 'NETWORK_ERROR'
+        && error.message === '추천 결과를 받지 못했어요. 결과가 저장됐을 수 있어요. 최근 결과를 확인해 보세요.');
+    await settle();
+    assert.equal([...r.timers.values()][0].ms, 30000);
+    r.advance(29999); await settle(); assert.equal(r.timers.size, 1);
+    r.advance(1); await createRejected;
+    const latest = reco.fetchLatestRecommendation(ROOM_QUERY_ID);
+    const latestRejected = assert.rejects(latest, error => error instanceof RecommendationError && error.code === 'NETWORK_ERROR'
+        && !error.message.includes('저장됐을'));
+    await settle();
+    assert.equal([...r.timers.values()][0].ms, 10000);
+    r.advance(10000); await latestRejected;
+    assert.equal(r.calls.filter(call => call.url.includes('/recommendations')).length, 2, '재시도하지 않아요');
+});
+
+test('추천 정상 응답 정리: 서버 역 ID·lines 없음→역 상세로 채움·congestion null·새 필드 통과·조건 null 정리', async () => {
+    const r = recoRuntime();
+    const data = recoRun({ conditionText: '30분 이내', message: '조건을 적용했어요.',
+        appliedConstraints: { maxMinutes: 30, maxTransfers: null, maxFareWon: 2000, excludeStationIds: [], memberLimits: [{ userId: ROOM_QUERY_OTHER, maxMinutes: 20 }] } });
+    r.recoRespond(async () => ok(data));
+    const run = plain(await r.load('src/services/recommendation.ts').createRecommendation(ROOM_QUERY_ID, {}));
+    assert.equal(run.runId, 'server-run-1'); assert.equal(run.isStale, false); assert.deepEqual(run.staleReasons, []);
+    assert.equal(run.conditionText, '30분 이내'); assert.equal(run.message, '조건을 적용했어요.');
+    assert.deepEqual(run.appliedConstraints, { maxMinutes: 30, maxFareWon: 2000, memberLimits: [{ userId: ROOM_QUERY_OTHER, maxMinutes: 20 }] });
+    assert.deepEqual(run.results.map(item => [item.criterion, item.recommendedStation.id]), [['TIME', 77001], ['FARE', 77002], ['DISTANCE', 77001]]);
+    assert.deepEqual(run.results[0].recommendedStation.lines, [{ lineId: 2, lineName: '2호선', color: '#00a84d' }]);
+    // 같은 역은 한 번만 불러요.
+    assert.deepEqual(r.calls.filter(call => call.url.includes('/stations/')).map(call => call.url.split('/').at(-1)).sort(), ['77001', '77002']);
+    const [mine, other] = run.results[0].participantTimes;
+    assert.deepEqual(mine.congestion, { level: 'NORMAL', levelLabel: '보통', pct: 80 });
+    assert.equal(other.congestion, null);
+    for (const key of Object.keys(RECO_EXTRA)) assert.deepEqual(mine[key], RECO_EXTRA[key], key);
+    assert.deepEqual(run.results[0].nearbyAlternatives.map(alt => alt.station.id), [77009]);
+    assert.equal(run.results[0].explanationSource, 'AI');
+
+    // 조건이 모두 null·빈 배열이거나 appliedConstraints 가 null 이면 "조건 없음"({})이에요.
+    for (const appliedConstraints of [recoRun().appliedConstraints, null]) {
+        r.recoRespond(async () => ok(recoRun({ appliedConstraints })));
+        assert.deepEqual(plain((await r.load('src/services/recommendation.ts').fetchLatestRecommendation(ROOM_QUERY_ID)).appliedConstraints), {});
+    }
+});
+
+test('추천 화면이 안 쓰는 값은 없거나 달라도 통과해요', async () => {
+    const r = recoRuntime();
+    const data = recoRun({ staleReasons: undefined });
+    const result = data.results[0];
+    delete result.recommendedStation.latitude; delete result.recommendedStation.longitude; delete result.recommendedStation.isSupported;
+    delete result.metrics.totalTransfers; delete result.nearbyAlternatives; result.explanationSource = 'OTHER';
+    delete result.participantTimes[0].congestion.pct; delete result.participantTimes[0].segments[0].direction;
+    delete result.participantTimes[1].segments;
+    for (const key of Object.keys(RECO_EXTRA)) delete result.participantTimes[1][key];
+    r.recoRespond(async () => ok(data));
+    const run = plain(await r.load('src/services/recommendation.ts').fetchLatestRecommendation(ROOM_QUERY_ID));
+    assert.equal(run.staleReasons, null);
+    assert.deepEqual(run.results[0].nearbyAlternatives, []);
+    assert.deepEqual(run.results[0].participantTimes[1].segments, []);
+    assert.equal(run.results[0].explanationSource, 'TEMPLATE');
+    assert.deepEqual(run.results[0].participantTimes[0].congestion, { level: 'NORMAL', levelLabel: '보통' });
+});
+
+test('추천역 노선 조회는 최대 3곳 병렬·실패하면 배지만 숨기고 결과 유지, 인증 오류는 그대로 던져요', async () => {
+    const r = recoRuntime();
+    const reco = r.load('src/services/recommendation.ts');
+    const pending = [];
+    r.respond(async url => {
+        if (url.includes('/recommendations')) return ok(recoRun({ results: [recoResult('TIME', 77001), recoResult('FARE', 77002), recoResult('DISTANCE', 77003)] }));
+        return new Promise(resolve => pending.push({ url, resolve }));
+    });
+    const running = reco.createRecommendation(ROOM_QUERY_ID, {});
+    await settle(); await settle();
+    assert.equal(pending.length, 3, '세 역을 동시에 불러요');
+    pending.find(item => item.url.endsWith('/77001')).resolve(ok(recoStation(77001)));
+    pending.find(item => item.url.endsWith('/77002')).resolve(jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR' } }, 500));
+    pending.find(item => item.url.endsWith('/77003')).resolve(ok({ id: 77003 }));
+    const run = plain(await running);
+    assert.equal(run.results.length, 3);
+    assert.deepEqual(run.results.map(item => !!item.recommendedStation.lines), [true, false, false]);
+
+    r.respond(async url => url.includes('/stations/') ? fail('TOKEN_INVALID') : ok(recoRun()));
+    await assert.rejects(reco.fetchLatestRecommendation(ROOM_QUERY_ID), error => error instanceof r.load('src/services/api/errors.ts').ApiError && error.code === 'TOKEN_INVALID');
+});
+
+test('추천 8.2 data:null 은 null, 8.3 isStale·staleReasons null 은 그대로, 빈 결과+message 는 정상', async () => {
+    const r = recoRuntime();
+    const reco = r.load('src/services/recommendation.ts');
+    r.recoRespond(async () => ok(null));
+    assert.equal(await reco.fetchLatestRecommendation(ROOM_QUERY_ID), null);
+    assert.deepEqual(plain(reco.listRecommendationRuns(ROOM_QUERY_ID)), []);
+    assert.equal(r.calls.filter(call => call.url.includes('/stations/')).length, 0);
+
+    r.recoRespond(async () => ok(recoRun({ runId: 'old-run', isStale: null, staleReasons: null })));
+    const old = plain(await reco.fetchRecommendation(ROOM_QUERY_ID, 'old-run'));
+    assert.strictEqual(old.isStale, null); assert.strictEqual(old.staleReasons, null);
+
+    r.recoRespond(async () => ok(recoRun({ isStale: true, staleReasons: ['APPOINTMENT_CHANGED', 'MEMBERS_CHANGED'] })));
+    const stale = plain(await reco.fetchLatestRecommendation(ROOM_QUERY_ID));
+    assert.equal(stale.isStale, true); assert.deepEqual(stale.staleReasons, ['APPOINTMENT_CHANGED', 'MEMBERS_CHANGED']);
+
+    // 8.2 의 null 은 8.3 에서는 정상이 아니에요(형식 오류).
+    r.recoRespond(async () => ok(null));
+    await assert.rejects(reco.fetchRecommendation(ROOM_QUERY_ID, 'run-x'), { code: 'UNKNOWN_ERROR' });
+
+    const before = r.calls.filter(call => call.url.includes('/stations/')).length;
+    r.recoRespond(async () => ok(recoRun({ results: [], message: '조건에 맞는 중간역이 없어요.' })));
+    const empty = plain(await reco.createRecommendation(ROOM_QUERY_ID, { filter: { maxMinutes: 5 } }));
+    assert.deepEqual(empty.results, []); assert.equal(empty.message, '조건에 맞는 중간역이 없어요.');
+    assert.equal(r.calls.filter(call => call.url.includes('/stations/')).length, before);
+});
+
+test('추천 서버 오류 코드 매핑: 새 코드 안내·DEPARTURE_MISSING 멤버·모르는 코드 UNKNOWN_ERROR·인증 오류는 그대로', async () => {
+    const r = recoRuntime();
+    const reco = r.load('src/services/recommendation.ts');
+    const { RecommendationError } = r.load('src/types/recommendation.ts');
+    const { ApiError } = r.load('src/services/api/errors.ts');
+    const expectCreate = async (response, code, message, missing) => {
+        r.recoRespond(async () => response);
+        await assert.rejects(reco.createRecommendation(ROOM_QUERY_ID, {}), error => {
+            assert.ok(error instanceof RecommendationError, `${code}: RecommendationError`);
+            assert.equal(error.code, code);
+            if (message) assert.equal(error.message, message);
+            assert.deepEqual(error.missingUserIds === undefined ? undefined : plain(error.missingUserIds), missing);
+            return true;
+        });
+    };
+    await expectCreate(recoFail('APPOINTMENT_PASSED', 422), 'APPOINTMENT_PASSED', '약속 시각이 이미 지나서 추천할 수 없어요. 약속 시각을 바꿔 주세요.');
+    await expectCreate(recoFail('NO_SERVICE_TIME', 422), 'NO_SERVICE_TIME', '약속 시각 전에 도착하는 열차가 없어요. 약속 시각을 조정해 주세요.');
+    await expectCreate(recoFail('RECOMMENDATION_IN_PROGRESS', 409), 'RECOMMENDATION_IN_PROGRESS', '다른 멤버가 추천을 계산하고 있어요. 잠시 후 다시 시도해 주세요.');
+    await expectCreate(recoFail('VALIDATION_ERROR', 400), 'VALIDATION_ERROR');
+    await expectCreate(recoFail('TOO_FEW_MEMBERS', 422), 'TOO_FEW_MEMBERS');
+    await expectCreate(recoFail('STATION_UNSUPPORTED', 422), 'STATION_UNSUPPORTED');
+    await expectCreate(recoFail('DEPARTURE_MISSING', 422, { missingUserIds: [ROOM_QUERY_OTHER] }), 'DEPARTURE_MISSING', undefined, [ROOM_QUERY_OTHER]);
+    await expectCreate(recoFail('DEPARTURE_MISSING', 422, { missingUserIds: [1] }), 'DEPARTURE_MISSING', undefined, undefined);
+    await expectCreate(recoFail('DEPARTURE_MISSING', 422), 'DEPARTURE_MISSING', undefined, undefined);
+    await expectCreate(recoFail('NOT_ROOM_MEMBER', 403), 'NOT_ROOM_MEMBER');
+    await expectCreate(recoFail('ROOM_NOT_FOUND', 404), 'ROOM_NOT_FOUND');
+    await expectCreate(recoFail('SOMETHING_NEW', 500), 'UNKNOWN_ERROR', '추천 결과를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.');
+    r.recoRespond(async () => recoFail('RUN_NOT_FOUND', 404));
+    await assert.rejects(reco.fetchRecommendation(ROOM_QUERY_ID, 'other-room-run'), error => error instanceof RecommendationError && error.code === 'RUN_NOT_FOUND');
+    r.recoRespond(async () => { throw new TypeError('연결 실패'); });
+    await assert.rejects(reco.fetchLatestRecommendation(ROOM_QUERY_ID), error => error instanceof RecommendationError && error.code === 'NETWORK_ERROR');
+    // 인증 오류는 A-1 처리에 맡겨요(마지막에 확인: 공통 처리가 로그인 상태를 지워요).
+    r.recoRespond(async () => fail('TOKEN_INVALID'));
+    await assert.rejects(reco.createRecommendation(ROOM_QUERY_ID, {}), error => error instanceof ApiError && !(error instanceof RecommendationError) && error.code === 'TOKEN_INVALID');
+});
+
+test('추천 응답의 화면 사용 값 누락·형식 오류는 UNKNOWN_ERROR', async () => {
+    const mutations = [
+        data => { delete data.runId; }, data => { data.createdAt = '시각 아님'; }, data => { data.isStale = 'false'; },
+        data => { delete data.isStale; }, data => { data.staleReasons = 'MEMBERS_CHANGED'; }, data => { data.results = {}; },
+        data => { data.conditionText = 3; }, data => { data.message = {}; }, data => { data.appliedConstraints = 'x'; },
+        data => { delete data.results[0].resultId; }, data => { data.results[0].criterion = 'OTHER'; },
+        data => { data.results[0].recommendedStation.id = '77001'; }, data => { delete data.results[0].recommendedStation.name; },
+        data => { delete data.results[0].metrics.maxMinutes; }, data => { data.results[0].metrics.averageFare = '1650'; },
+        data => { delete data.results[0].explanation; }, data => { data.results[0].participantTimes = null; },
+        data => { delete data.results[0].participantTimes[0].travelMinutes; }, data => { data.results[0].participantTimes[0].departureAt = 'x'; },
+        data => { data.results[0].participantTimes[0].departureStation = null; },
+        data => { data.results[0].participantTimes[0].congestion = { level: 1, levelLabel: '보통' }; },
+        data => { data.results[0].participantTimes[0].segments = 'x'; }, data => { delete data.results[0].participantTimes[0].segments[0].color; },
+        data => { data.results[0].nearbyAlternatives = 'x'; }, data => { delete data.results[0].nearbyAlternatives[0].maxMinutes; },
+    ];
+    const r = recoRuntime();
+    const reco = r.load('src/services/recommendation.ts');
+    const { RecommendationError } = r.load('src/types/recommendation.ts');
+    let current;
+    r.recoRespond(async () => ok(current));
+    for (let i = 0; i < mutations.length; i++) {
+        current = recoRun(); mutations[i](current);
+        await assert.rejects(reco.fetchLatestRecommendation(ROOM_QUERY_ID), error => error instanceof RecommendationError && error.code === 'UNKNOWN_ERROR', `변형 ${i}`);
+    }
+    current = 'html';
+    await assert.rejects(reco.createRecommendation(ROOM_QUERY_ID, {}), { code: 'UNKNOWN_ERROR' });
+});
+
+test('추천 이전 실행 목록은 이 세션의 8.1 성공·8.2 결과만 중복 없이 최근 순, 계정이 바뀌면 비워요', async () => {
+    const r = recoRuntime();
+    const reco = r.load('src/services/recommendation.ts');
+    let next = recoRun({ runId: 'run-a', createdAt: '2026-11-11T10:00:00+09:00' });
+    r.recoRespond(async () => ok(next));
+    await reco.fetchLatestRecommendation(ROOM_QUERY_ID);
+    assert.deepEqual(plain(reco.listRecommendationRuns(ROOM_QUERY_ID)).map(item => item.runId), ['run-a']);
+    next = recoRun({ runId: 'run-b', createdAt: '2026-11-11T10:05:00+09:00' });
+    await reco.createRecommendation(ROOM_QUERY_ID, {});
+    await reco.fetchLatestRecommendation(ROOM_QUERY_ID);
+    // 8.3 은 목록에 더하지 않아요.
+    next = recoRun({ runId: 'run-z', createdAt: '2026-11-11T09:00:00+09:00', isStale: null, staleReasons: null });
+    await reco.fetchRecommendation(ROOM_QUERY_ID, 'run-z');
+    assert.deepEqual(plain(reco.listRecommendationRuns(ROOM_QUERY_ID)), [
+        { runId: 'run-b', createdAt: '2026-11-11T10:05:00+09:00' }, { runId: 'run-a', createdAt: '2026-11-11T10:00:00+09:00' },
+    ]);
+    assert.deepEqual(plain(reco.listRecommendationRuns(ROOM_QUERY_ID2)), []);
+    await r.load('src/services/auth.ts').clearLocalSession();
+    r.load('src/stores/auth-store.ts').signIn({ userId: '33333333-3333-4333-8333-333333333333', nickname: '다음 사용자' });
+    r.load('src/services/room-cache.ts').getRoomCacheScope();
+    assert.deepEqual(plain(reco.listRecommendationRuns(ROOM_QUERY_ID)), []);
+});
+
+test('계정이 바뀐 뒤 도착한 이전 추천 응답은 버리고(AUTH_REQUIRED) 목록에도 남기지 않아요', async () => {
+    for (const action of ['create', 'latest']) {
+        const r = recoRuntime();
+        const reco = r.load('src/services/recommendation.ts');
+        let resolveOld;
+        r.recoRespond(() => new Promise(resolve => { resolveOld = resolve; }));
+        const old = action === 'create' ? reco.createRecommendation(ROOM_QUERY_ID, {}) : reco.fetchLatestRecommendation(ROOM_QUERY_ID);
+        const rejected = assert.rejects(old, { code: 'AUTH_REQUIRED' });
+        await settle();
+        await r.load('src/services/auth.ts').clearLocalSession();
+        r.load('src/stores/auth-store.ts').signIn({ userId: '33333333-3333-4333-8333-333333333333', nickname: '다음 사용자' });
+        resolveOld(ok(recoRun({ runId: 'previous-account-run' })));
+        await rejected;
+        assert.deepEqual(plain(reco.listRecommendationRuns(ROOM_QUERY_ID)), [], action);
+    }
+});
+
+test('mock 추천은 기존 동작(실패 한 번·성공·mock 역·출발역 미설정·이전 목록)을 유지하고 서버를 부르지 않아요', async () => {
+    const r = createRuntime();
+    let calls = 0;
+    r.context.fetch = async () => { calls++; throw Error(); };
+    const reco = r.load('src/services/recommendation.ts');
+    const mockIds = new Set(r.load('src/mocks/stations.ts').MOCK_STATIONS.map(station => station.id));
+    assert.equal(await finishRoomMock(r, reco.fetchLatestRecommendation('room-2')), null);
+    const failed = reco.createRecommendation('room-2', {}, 'error');
+    await finishRoomMock(r, assert.rejects(failed, { code: 'NETWORK_ERROR' }));
+    const run = await finishRoomMock(r, reco.createRecommendation('room-2', { conditionText: '30분 이내' }));
+    assert.deepEqual(plain(run.results.map(item => item.criterion)), ['TIME', 'FARE', 'DISTANCE']);
+    assert.ok(run.results.every(item => mockIds.has(item.recommendedStation.id) && item.recommendedStation.lines.length > 0));
+    assert.equal(run.isStale, false); assert.deepEqual(plain(run.appliedConstraints), { maxMinutes: 30 });
+    assert.ok(run.results[0].participantTimes.every(p => p.congestion && typeof p.congestion.levelLabel === 'string'));
+    assert.equal((await finishRoomMock(r, reco.fetchLatestRecommendation('room-2'))).runId, run.runId);
+    assert.equal(reco.listRecommendationRuns('room-2').length, 1);
+    const missing = reco.createRecommendation('room-4', {});
+    await finishRoomMock(r, assert.rejects(missing, error => error.code === 'DEPARTURE_MISSING' && error.missingUserIds.length === 1));
+    assert.equal(calls, 0);
+});
+
+/** 추천 화면만 구동해요. 실제 React·브라우저 렌더링을 대신하지 않아요. */
+function recoScreen(params = { roomId: ROOM_QUERY_ID }) {
+    const r = roomQueryScreen('src/app/rooms/[roomId]/recommendations.tsx', params);
+    r.calls = [];
+    r.recoRespond = handler => {
+        const detail = roomQueryDetail(); detail.members[1].departureStation = roomQueryStation(99002);
+        r.context.fetch = async (url, options) => {
+            r.calls.push({ url, options });
+            if (url.includes('/recommendations')) return handler(url, options);
+            if (url.includes('/stations/')) return ok(recoStation(Number(url.split('/').at(-1))));
+            return ok(detail);
+        };
+    };
+    return r;
+}
+async function pumpScreen(r) { for (let i = 0; i < 6; i++) { r.render(); await settle(); r.advance(1000); await settle(); } return r.render(); }
+const textOf = node => node == null || typeof node === 'boolean' ? '' : Array.isArray(node) ? node.map(textOf).join('') : typeof node === 'object' ? textOf(node.props?.children) : String(node);
+const findText = (view, text) => findElement(view, element => element.type === 'Text' && textOf(element) === text);
+const findTextIncluding = (view, text) => findElement(view, element => element.type === 'Text' && textOf(element).includes(text));
+
+test('추천 화면(서버): 빈 기록은 입력 보기, 계산 버튼 연타는 8.1 한 번, 결과의 혼잡도 null 은 점·라벨·문구만 숨겨요', async () => {
+    const r = recoScreen();
+    let resolveCreate;
+    let created = null; // 실서버처럼 8.1 이 끝나면 8.2 도 그 실행을 돌려줘요(화면은 실행 뒤 8.2 를 다시 불러요).
+    r.recoRespond((url, options) => options.method === 'POST'
+        ? new Promise(resolve => { resolveCreate = response => { created = recoRun(); resolve(response); }; })
+        : ok(created));
+    let view = await pumpScreen(r);
+    const button = findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '중간역 계산하기'));
+    assert.ok(button, '입력 보기의 계산 버튼');
+    button.props.onPress(); button.props.onPress(); await settle();
+    assert.equal(r.calls.filter(call => call.options.method === 'POST').length, 1);
+    resolveCreate(ok(recoRun()));
+    view = await pumpScreen(r);
+    assert.equal(r.calls.filter(call => call.options.method === 'POST').length, 1);
+    assert.ok(findText(view, '서버 추천역 77001역'), '서버 역 ID의 추천역 이름');
+    assert.equal(findText(view, '이전 추천 기록'), null, '다른 실행이 없으면 목록을 숨겨요');
+    const rows = [];
+    findElement(view, element => { if (typeof element.type === 'function' && element.type.name === 'ParticipantRow') rows.push(element); return false; });
+    assert.equal(rows.length, 2);
+    const opened = rows.map(row => row.type({ ...row.props, opened: true }));
+    assert.ok(findText(opened[0], '보통'));
+    assert.ok(findTextIncluding(opened[0], '기준 혼잡도'));
+    assert.equal(findText(opened[1], '보통'), null);
+    assert.equal(findTextIncluding(opened[1], '혼잡도'), null);
+    assert.ok(findTextIncluding(opened[1], '다익스트라 추정치예요'));
+    r.unmount();
+});
+
+test('추천 화면(서버): 새 오류 3종·DEPARTURE_MISSING 안내, 시간 초과 안내, 인증 오류는 화면 안내 없음', async () => {
+    const cases = [
+        [recoFail('APPOINTMENT_PASSED', 422), '약속 시각이 이미 지나서 추천할 수 없어요. 약속 시각을 바꿔 주세요.'],
+        [recoFail('NO_SERVICE_TIME', 422), '약속 시각 전에 도착하는 열차가 없어요. 약속 시각을 조정해 주세요.'],
+        [recoFail('RECOMMENDATION_IN_PROGRESS', 409), '다른 멤버가 추천을 계산하고 있어요. 잠시 후 다시 시도해 주세요.'],
+        [recoFail('DEPARTURE_MISSING', 422, { missingUserIds: [ROOM_QUERY_OTHER] }), '출발역을 설정하지 않은 멤버가 있어요. (서버 동료)'],
+        ['network', '추천 결과를 받지 못했어요. 결과가 저장됐을 수 있어요. 최근 결과를 확인해 보세요.'],
+        [fail('TOKEN_INVALID'), null],
+    ];
+    for (const [response, message] of cases) {
+        const r = recoScreen();
+        r.recoRespond(async (url, options) => {
+            if (options.method !== 'POST') return ok(null);
+            if (response === 'network') throw new TypeError('연결 실패');
+            return response;
+        });
+        let view = await pumpScreen(r);
+        findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '중간역 계산하기')).props.onPress();
+        view = await pumpScreen(r);
+        if (message) assert.ok(findText(view, message), message);
+        else {
+            assert.equal(findTextIncluding(view, '추천을 실행하지 못했어요'), null);
+            assert.equal(findElement(view, element => element.props?.name === 'warning-outline'), null, '인증 오류는 중복 안내하지 않아요');
+        }
+        r.unmount();
+    }
+});
+
+test('추천 화면(서버): isStale true 만 다시 추천받기 안내, null 은 판정하지 않고, 이전 기록은 2건 이상일 때 보여요', async () => {
+    let r = recoScreen();
+    r.recoRespond(async () => ok(recoRun({ isStale: true, staleReasons: ['MEMBERS_CHANGED'] })));
+    let view = await pumpScreen(r);
+    assert.ok(findText(view, '참여자나 출발역이 바뀌었어요'));
+    assert.ok(findText(view, '다시 추천받기'));
+    r.unmount();
+
+    r = recoScreen({ roomId: ROOM_QUERY_ID, runId: 'old-run' });
+    r.recoRespond(async () => ok(recoRun({ runId: 'old-run', isStale: null, staleReasons: null })));
+    view = await pumpScreen(r);
+    assert.equal(findText(view, '다시 추천받기'), null);
+    assert.ok(findTextIncluding(view, '최신 여부는 최근 결과에서만 확인할 수 있어요'));
+    assert.equal(findTextIncluding(view, '최신 결과예요'), null);
+    r.unmount();
+
+    // 조건이 모두 null 이면 "null" 글자 없이 "적용된 제약 없음"이에요. 최근 실행 하나뿐이면 이전 기록을 숨기고, 새로 실행하면 보여요.
+    r = recoScreen();
+    let latest = recoRun({ conditionText: '조건' });
+    r.recoRespond(async (url, options) => {
+        if (options.method === 'POST') latest = recoRun({ runId: 'new-run', createdAt: '2026-11-11T11:00:00+09:00', conditionText: '조건' });
+        return ok(latest);
+    });
+    view = await pumpScreen(r);
+    assert.ok(findText(view, '적용된 제약 없음'));
+    assert.equal(findTextIncluding(view, 'null'), null);
+    assert.equal(findText(view, '이전 추천 기록'), null);
+    // 결과 보기의 "조건 바꾸기" → 입력 보기의 "다시 추천받기"로 8.1 을 다시 불러요.
+    findElement(view, element => element.props?.accessibilityLabel === '조건 바꾸기').props.onPress();
+    view = r.render();
+    findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '다시 추천받기')).props.onPress();
+    view = await pumpScreen(r);
+    assert.ok(findText(view, '이전 추천 기록'));
+    assert.equal(r.calls.filter(call => call.options.method === 'POST').length, 1);
     r.unmount();
 });
