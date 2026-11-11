@@ -88,7 +88,11 @@ type LoadError = 'ROOM_NOT_FOUND' | 'NOT_ROOM_MEMBER' | 'RUN_NOT_FOUND' | 'UNKNO
  *   /rooms/room-4/recommendations?mock=error           → 첫 계산 실패(NETWORK_ERROR), 다시 시도하면 성공
  *   /rooms/room-4/recommendations?mock=latest-error    → 첫 8.2 조회 실패, 다시 시도하면 성공
  *   조건에 "5분" 처럼 아주 짧은 시간을 넣으면 "조건에 맞는 역 없음"(results: []) 을 볼 수 있어요
- * TODO(범위 밖): 실제 8.1~8.3 연동, OpenAI 조건 해석·설명, WS 수신 시 8.2 재조회
+ *
+ * 서버 모드(#99): services/recommendation.ts 가 8.1~8.3 을 불러요. ?mock= 은 무시돼요.
+ * - 인증 오류(TOKEN_*·401)는 A-1 공통 처리에 맡기고 이 화면에서 따로 안내하지 않아요.
+ * - 8.1 시간 초과·연결 실패는 "결과가 저장됐을 수 있어요" 안내를 보여주고, 화면 재진입 시 8.2 로 확인돼요.
+ * TODO(범위 밖): WS 수신 시 8.2 재조회, 후보 제안·투표 서버 연동
  */
 export default function RoomRecommendationsScreen() {
     const insets = useSafeAreaInsets();
@@ -111,6 +115,8 @@ export default function RoomRecommendationsScreen() {
     const [conditionText, setConditionText] = useState('');
     const [chips, setChips] = useState<Set<string>>(new Set());
     const [running, setRunning] = useState(false);
+    /** 상태 반영 전에 버튼이 두 번 눌려도 8.1 을 한 번만 보내도록 바로 바뀌는 값으로 막아요. */
+    const runningRef = useRef(false);
     const [runError, setRunError] = useState<{ message: string; missing?: string[] } | null>(null);
     const [openedParticipant, setOpenedParticipant] = useState<string | null>(null);
     const [departureSaving, setDepartureSaving] = useState(false);
@@ -210,7 +216,8 @@ export default function RoomRecommendationsScreen() {
 
     /** 8.1 실행 (처음 계산 · 다시 추천받기 둘 다 같은 호출) */
     const runRecommendation = async () => {
-        if (!detail || running || blockReason) return;
+        if (!detail || running || runningRef.current || blockReason) return;
+        runningRef.current = true;
         setRunning(true);
         setRunError(null);
         setNotice('');
@@ -223,12 +230,15 @@ export default function RoomRecommendationsScreen() {
             setView('result');
             if (runIdParam) router.setParams({ runId: '' }); // 이전 실행 화면에서 새로 실행했으면 최근 실행으로
         } catch (error) {
+            // 인증 오류는 A-1 공통 처리(갱신·로그인 이동)에 맡기고 중복 안내하지 않아요.
+            if (error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
             if (error instanceof RecommendationError) {
                 setRunError({ message: error.message, missing: error.missingUserIds });
             } else {
                 setRunError({ message: '추천을 실행하지 못했어요. 잠시 후 다시 시도해 주세요.' });
             }
         } finally {
+            runningRef.current = false;
             setRunning(false);
         }
     };
@@ -477,9 +487,9 @@ export default function RoomRecommendationsScreen() {
                         <Pressable
                             style={({ pressed }) => [styles.primaryButton, !!blockReason && styles.primaryDisabled, pressed && styles.pressed]}
                             onPress={runRecommendation}
-                            disabled={!!blockReason}
+                            disabled={!!blockReason || running}
                             accessibilityRole="button"
-                            accessibilityState={{ disabled: !!blockReason }}
+                            accessibilityState={{ disabled: !!blockReason || running }}
                         >
                             <Ionicons name="git-network-outline" size={18} color={WHITE} />
                             <Text style={styles.primaryText}>{runError ? '다시 시도' : run ? '다시 추천받기' : '중간역 계산하기'}</Text>
@@ -537,9 +547,19 @@ export default function RoomRecommendationsScreen() {
                             </Text>
                             <Text style={styles.staleBody}>{blockReason ?? '지금 조건으로 다시 추천받아 보세요. 기존 약속역 후보는 그대로 남아요.'}</Text>
                         </View>
-                        <Pressable style={[styles.staleButton, !!blockReason && styles.staleButtonOff]} onPress={runRecommendation} disabled={!!blockReason} accessibilityRole="button" accessibilityState={{ disabled: !!blockReason }}>
+                        <Pressable style={[styles.staleButton, !!blockReason && styles.staleButtonOff]} onPress={runRecommendation} disabled={!!blockReason || running} accessibilityRole="button" accessibilityState={{ disabled: !!blockReason || running }}>
                             <Text style={styles.staleButtonText}>다시 추천받기</Text>
                         </Pressable>
+                    </View>
+                )}
+                {/* 결과 보기의 "다시 추천받기"가 실패한 경우에도 안내해요 (APPOINTMENT_PASSED 등) */}
+                {runError && (
+                    <View style={styles.errorBox}>
+                        <Ionicons name="warning-outline" size={17} color={RED} />
+                        <Text style={styles.errorText}>
+                            {runError.message}
+                            {runError.missing?.length ? ` (${runError.missing.map(id => members.find(m => m.userId === id)?.nickname ?? id).join(', ')})` : ''}
+                        </Text>
                     </View>
                 )}
                 {run.isStale === false && (
@@ -694,7 +714,8 @@ function Metric({ label, value, accent }: { label: string; value: string; accent
 /** 그림 33 참여자 막대 + 그림 37 상세(탭) */
 function ParticipantRow({ participant: p, color, maxMinutes, mine, opened, onPress }: { participant: ParticipantTime; color: string; maxMinutes: number; mine: boolean; opened: boolean; onPress: () => void }) {
     const ratio = maxMinutes > 0 ? Math.max(0.08, p.travelMinutes / maxMinutes) : 0;
-    const congestionColor = CONGESTION_COLOR[p.congestion.level] ?? SECONDARY;
+    // 서버는 혼잡도 데이터가 없으면 congestion: null 이에요. 이때는 점·라벨과 안내의 혼잡도 부분만 숨겨요.
+    const congestionColor = p.congestion ? CONGESTION_COLOR[p.congestion.level] ?? SECONDARY : SECONDARY;
     return (
         <Pressable style={styles.participant} onPress={onPress} accessibilityRole="button" accessibilityState={{ expanded: opened }} accessibilityLabel={`${p.nickname} 예상 ${p.travelMinutes}분`}>
             <View style={styles.participantRow}>
@@ -715,9 +736,9 @@ function ParticipantRow({ participant: p, color, maxMinutes, mine, opened, onPre
                     ))}
                     <View style={styles.detailMeta}>
                         <Text style={styles.detailMetaText}>환승 {p.transferCount}회 · 예상 {p.fareWon.toLocaleString()}원 · {(p.distanceM / 1000).toFixed(1)}km</Text>
-                        <View style={styles.congestion}><View style={[styles.congestionDot, { backgroundColor: congestionColor }]} /><Text style={[styles.congestionText, { color: congestionColor }]}>{p.congestion.levelLabel}</Text></View>
+                        {p.congestion && <View style={styles.congestion}><View style={[styles.congestionDot, { backgroundColor: congestionColor }]} /><Text style={[styles.congestionText, { color: congestionColor }]}>{p.congestion.levelLabel}</Text></View>}
                     </View>
-                    <Text style={styles.detailHint}>출발 예정 {formatTime(new Date(p.departureAt))} 기준 혼잡도 · 다익스트라 추정치예요</Text>
+                    <Text style={styles.detailHint}>출발 예정 {formatTime(new Date(p.departureAt))}{p.congestion ? ' 기준 혼잡도' : ''} · 다익스트라 추정치예요</Text>
                 </View>
             )}
         </Pressable>

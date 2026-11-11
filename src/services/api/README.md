@@ -2,7 +2,7 @@
 
 `.env.example`을 `.env`로 복사합니다. `EXPO_PUBLIC_USE_MOCK`은 생략하면 `true`이고, 정확히 `true`일 때만 mock입니다. 서버를 쓰려면 `false`와 `/api/v1`까지 포함한 `EXPO_PUBLIC_API_BASE_URL`을 설정하고 앱을 완전히 새로고침합니다. 환경변수는 빌드에 포함되므로 토큰은 넣지 않습니다.
 
-현재 인증, 내 정보·닉네임 수정·탈퇴(`services/user.ts`), 역 검색·역 상세·노선 목록(`services/station.ts`), 혼잡도 조회(`services/congestion.ts`), 경로 검색(`services/route.ts`)이 서버 모드를 지원해요.
+현재 인증, 내 정보·닉네임 수정·탈퇴(`services/user.ts`), 역 검색·역 상세·노선 목록(`services/station.ts`), 혼잡도 조회(`services/congestion.ts`), 경로 검색(`services/route.ts`), 실시간 도착정보(`services/arrivals.ts`), 방 목록·상세·멤버 조회(`services/room.ts`), 중간역 추천(`services/recommendation.ts`)이 서버 모드를 지원해요.
 
 ```ts
 import { get, post, delete as apiDelete } from '@/services/api/client';
@@ -141,7 +141,40 @@ await searchRoute(origin, destination, { roomId });
 - 6.1 혼잡도의 출처는 `kind`예요(6.2만 `source`). `toCongestion`으로 정리하고 혼잡도가 `null`이면 미제공, `stations: null`이면 빈 배열로 처리해요. 도보의 `line: null`, `path: null`, `routeType: null`, 정차역의 `slotDate: null`을 허용해요.
 - 도착 시각·요금·소요시간·방향·혼잡도 단계와 라벨은 서버 값을 사용하며 재계산하거나 방면 문구를 만들지 않아요. 대기 필드는 없어도 정상이고 `totalWithWaitSec ?? totalTimeSec`로 표시해요. 미제공 혼잡도는 회색, 추정 요금은 "예상", `direction: null`인 방향은 `directionCode`로 표시해요.
 - `STATION_UNSUPPORTED`(422), `ROUTE_NOT_FOUND`·`STATION_NOT_FOUND`(404)는 같은 `RouteSearchError` 코드, 네트워크·시간 초과는 `NETWORK_ERROR`, 나머지는 `EXTERNAL_API_ERROR`로 전달해요. `TOKEN_*`과 공통 인증 오류는 `ApiError` 그대로 전달하고 화면에서 중복 안내하지 않아요.
-- mock 모드의 기존 경로·대기·도착 시각 생성은 유지해요. 방 화면 호출 연결, 실시간 도착정보 API, 출발 시각 선택, 지도와 추천 API는 이번 범위 밖이에요.
+- mock 모드의 기존 경로·대기·도착 시각 생성은 유지해요. 방 화면 호출 연결, 출발 시각 선택, 지도와 추천 API는 이번 범위 밖이에요. 실시간 도착정보는 아래 항목에서 다뤄요.
+
+## 실시간 도착정보 (#95, 명세 6.3)
+
+```ts
+import { fetchArrivals } from '@/services/arrivals';
+import { formatNextTrain } from '@/components/route/format';
+
+// GET /stations/222/arrivals?lineId=2&nextStationId=223&directionCode=INNER&limit=2
+const data = await fetchArrivals({ stationId: 222, lineId: 2, nextStationId: 223, directionCode: 'INNER', limit: 2 });
+if (data.available) {
+    const elapsed = Math.max(0, Math.floor((Date.now() - Date.parse(data.receivedAt!)) / 1000));
+    data.trains.map(train => formatNextTrain(train, elapsed)); // "성수행 2분 5초" · "성수행 곧 도착" · "성수행 · [2]번째 전역"
+}
+```
+
+- `lineId`는 항상 보내고 `nextStationId`·`directionCode`·`limit`은 값이 있을 때만 보내요. `limit`은 1~5로 맞춰요(BE 기본 3·최대 10). 역·노선·다음 역 ID가 양의 정수가 아니거나 방향 값이 다르면 서버를 부르지 않고 `VALIDATION_ERROR`(400)를 던져요(`/stations/NaN/arrivals` 방지).
+- `NextTrains`는 첫 승차 구간의 `stops[0].id`(역), `line.id`(노선), `stops[1].id`(`nextStationId`), `directionCode`, `limit: 2`로 불러요.
+- 응답은 BE `ArrivalResponse` 기준이에요. 서버는 `stationId`·`lineId`·`nextStationName`을 보내지 않아서 필수로 검사하지 않아요(숫자로 올 때만 담아요). `available`은 boolean이어야 해요.
+- `available: false`는 오류가 아닌 정상 응답이에요. BE는 이때도 `reason`(`UNSUPPORTED_STATION`·`NO_DATA`·`UPSTREAM_ERROR`·`DISABLED`)·`receivedAt`(null 가능)·`trains`(`[]`)를 항상 보내요. 앱은 `reason`만 확인하고 `trains`는 빈 배열로 돌려줘요. 화면은 "다음 열차" 줄만 숨겨요.
+- `available: true`이면 `reason`은 null이라 검사하지 않아요. `receivedAt`(`+09:00` 오프셋이 붙은 ISO 문자열, 시각으로 읽혀야 해요)과 `trains` 배열(빈 배열 허용)을 검사해요. 열차마다 아래를 검사하고, 맞지 않으면 `UNKNOWN_ERROR`예요.
+  - `destinationName`: 문자열. 이전 이름 `destinationLabel`도 같은 값으로 받아요.
+  - `secondsUntil`: 숫자 또는 null. "[N]번째 전역"처럼 알 수 없으면 null이에요.
+  - `message`: 문자열(null도 받아요). null이 아니라 항상 서울시 `arvlMsg2` 원문이에요. 예: "2분 50초 후", "전역 출발", "[2]번째 전역"
+  - `directionCode`: 5개 값 또는 null(매핑되지 않으면 null). 없으면 null로 받아요.
+  - 화면이 쓰지 않는 `stopsAway`("[N]번째 전역"이 아니면 null)·`lastTrain`·`express`는 형식이 맞을 때만 담고, 없거나 다르면 빼요.
+- 서버 오류 코드는 그대로 전달해요. 401 계열은 공통 클라이언트(A-1)가 갱신·로그인 이동을 처리한 뒤 던져요.
+- 표시 규칙(`formatNextTrain`):
+  - `secondsUntil`이 숫자이면 `message`와 상관없이 카운트다운해요. 남은 초 = max(0, `secondsUntil` − `receivedAt` 이후 지난 초). 60초 미만이면 "성수행 곧 도착", 그 밖에는 "성수행 N분 N초"예요(60초 → "1분 0초", 59초·0초 → "곧 도착").
+  - `secondsUntil`이 null일 때만 `message`를 시간 대신 "성수행 · [2]번째 전역"처럼 보여줘요. `message`가 이미 "성수행"으로 시작하면 행선지는 한 번만 나와요. `message`도 비어 있으면 "성수행"만 보여줘요.
+  - 행선지는 `formatDestination`으로 "성수" → "성수행"처럼 "행"을 붙여요. 이미 "행"으로 끝나면 붙이지 않아요.
+- `NextTrains`는 화면에 들어올 때 바로 한 번, 이후 20초마다 불러요(서버가 역·노선별 10~20초 캐시와 일일 한도가 있어 15~30초를 지켜요). 이전 요청이 끝나지 않았으면 다음 폴링을 건너뛰어요. `available: false`·열차 없음·`receivedAt`을 읽을 수 없음·호출 실패(`UNKNOWN_ERROR` 포함)는 줄을 숨기고, 인증 오류는 이전 값을 그대로 둬요. 토큰을 갱신하는 동안에는 요청이 끝나지 않아 이전 값이 계속 보여요.
+- mock 모드는 기존 동작을 유지하고 서버를 부르지 않아요. mock 응답도 실서버와 같은 필드 이름이고 `message`에 "3분 2초 후" 같은 문구를 채워요. 둘째 인자 `'none'`(available:false)·`'fail'`(호출 실패)은 mock 모드에서만 쓰고 서버 모드에서는 무시해요. 안내 화면 주소에 `&arrivals=none` 또는 `&arrivals=fail`을 붙여 확인해요.
+- 경로 검색(6.1)의 대기 필드(`waitSec`, `nextTrains`) 표시는 이번 범위가 아니에요.
 
 ## 방 목록·상세·멤버 조회 (#94, 명세 7.3·7.4·7.6)
 
@@ -157,10 +190,10 @@ await fetchRoomMembers(roomId); // GET /rooms/{roomId}/members
 - 목록(7.3)의 `memberCount`는 필수예요. 실서버 상세(7.4)는 이 필드 없이 전체 `members`를 보내므로, 검사한 `members.length`를 화면·공용 캐시의 인원수로 사용해요. 상세에 `memberCount`가 함께 오면 정수이고 멤버 수와 같은지도 검사해요.
 - `getMyUserId()`는 서버 모드에서 auth-store의 사용자 ID를 사용해요. Refresh Token 복원 직후 ID가 비어 있으면 기존 `fetchMe()`(4.4)로 한 번 확인하며 동시 조회는 공유해요. 로그인·사용자 서비스는 변경하지 않아요.
 - `room-cache.ts`는 마지막으로 받은 서버 목록·상세·멤버 정보를 메모리에 보관해요. 계정·로그인 세대를 구분하고 복사본을 반환해요. 로그아웃·계정 변경 후 조회나 늦은 응답으로 이전 계정의 캐시를 재사용하지 않아요. 목록에서 빠진 방이나 403·404로 거절된 방도 제거해요.
-- `getMockRoom`·`getMockMembers`는 서버 모드에서 캐시만 읽고 mock 방으로 대체하지 않아요. 후보·채팅·추천 API는 mock을 유지하며 이 방 정보를 읽어요. 채팅은 캐시 상세를 우선 사용하고 없으면 실제 상세 조회를 해요. 추천의 임시 계산에 필요한 출발역 좌표는 서버 역 ID로 기존 역 상세 API에서 가져와요. 추천 결과 자체는 실제 추천 결과가 아니에요.
+- `getMockRoom`·`getMockMembers`는 서버 모드에서 캐시만 읽고 mock 방으로 대체하지 않아요. 후보·채팅 API는 mock을 유지하며 이 방 정보를 읽어요. 채팅은 캐시 상세를 우선 사용하고 없으면 실제 상세 조회를 해요. 추천은 #99부터 서버 8.1~8.3을 불러요(아래 "중간역 추천" 항목).
 - ROOM_NOT_FOUND·NOT_ROOM_MEMBER·NETWORK_ERROR·VALIDATION_ERROR·ROOM_BUSY는 같은 RoomError 코드로 전달해요. 형식 오류와 그 밖의 서버 오류는 UNKNOWN_ERROR예요. TOKEN_*과 공통 인증 오류는 ApiError 그대로 A-1에 맡겨요.
 - 서버 모드의 `fetchMyRooms`·`fetchRoomDetail`은 mock 실패·빈 목록 플래그를 무시해요. 화면의 로딩·빈 목록·재시도·접근 불가 표시는 실제 응답에 따라 동작해요.
-- 생성·참여는 아래 #97에서 연동해요. 초대 코드 조회·수정·출발역 변경·나가기·승계·후보·투표·추천·채팅·WebSocket의 실제 API 연동은 범위 밖이에요. mock 데이터·이벤트를 서버 응답으로 표시하거나 저장하지 않아요.
+- 생성·참여는 아래 #97에서 연동해요. 초대 코드 조회·수정·출발역 변경·나가기·승계·후보·투표·채팅·WebSocket의 실제 API 연동은 범위 밖이에요. mock 데이터·이벤트를 서버 응답으로 표시하거나 저장하지 않아요.
 - 실서버 확인은 Swagger에서 같은 계정으로 방을 만든 뒤 웹에서 GET /rooms·상세·멤버 응답과 화면을 비교해요. 빈 계정, 일반 멤버/방장, 403·404도 확인해요. 테스트용 토큰 주입 코드와 `.env`는 커밋하지 않아요.
 
 
@@ -184,3 +217,29 @@ const joined = await joinRoom('a3k9pz ');
 - ALREADY_JOINED는 성공으로 바꾸거나 자동 이동하지 않아요. 서버 오류의 유효한 details.roomId 또는 이 계정에서 확인한 코드·ID가 있으면 사용자가 해당 방으로 이동할 수 있어요. Swagger 예시처럼 details가 비어 있고 코드·ID도 모르면 참여 중인 방 목록 버튼을 보여 줘요.
 - 버튼 상태와 즉시 적용되는 ref로 빠른 연타·키보드 제출의 중복 요청을 막아요. 실패하면 입력을 유지하고 다시 누를 수 있어요. 화면을 떠난 뒤 늦은 응답으로 완료 화면이나 상세 이동을 실행하지 않아요. 계정이 바뀐 뒤 늦은 쓰기 응답은 이전 계정의 캐시·코드를 갱신하지 못해요. 생성·참여 전에 시작한 조회도 새 캐시를 덮거나 제거하지 못하며, 참여 후 상세는 이전 요청과 공유하지 않아요.
 - 실서버 확인: 같은 계정으로 웹 로그인 후 POST /rooms 201과 응답 코드·목록·상세를 비교해요. 두 번째 계정으로 소문자·앞뒤 공백 코드를 입력해 POST /rooms/join 200과 2명 멤버를 확인해요. 404·정원 초과·이미 참여·처리 중은 자동 검사와 가능한 실서버 조건에서 확인해요. 임시 토큰 주입 코드는 확인 후 제거하며 커밋하지 않아요.
+
+## 중간역 추천 (#99, 명세 8.1·8.2·8.3)
+
+```ts
+import { createRecommendation, fetchLatestRecommendation, fetchRecommendation, listRecommendationRuns } from '@/services/recommendation';
+
+await createRecommendation(roomId, { conditionText: '환승 적게', filter: { maxMinutes: 30 } }); // POST /rooms/{roomId}/recommendations
+await createRecommendation(roomId, {}); // 값이 없으면 body 는 {} 예요.
+await fetchLatestRecommendation(roomId); // GET .../recommendations/latest, 실행 기록이 없으면 null
+await fetchRecommendation(roomId, runId); // GET .../recommendations/{runId}
+listRecommendationRuns(roomId); // 이 앱 세션에서 본 실행만, 최근 순
+```
+
+- 서버 모드는 BE 코드 기준 계약을 따라요. `roomId`·`runId`는 `encodeURIComponent`로 감싸요. 8.1 body는 공백을 뺀 `conditionText`와 값이 있는 `filter` 항목만 보내요(undefined·null·빈 배열 제외). 범위 검사는 서버가 해요(`VALIDATION_ERROR`).
+- 서버 모드에서는 mock 계산(`MOCK_STATIONS`, `getMockRoom`·`getMockMembers`)을 타지 않아요. 추천역·주변 대안역 ID는 서버 값 그대로예요. 둘째·셋째 인자의 mock 옵션(`'error'`)은 mock 모드에서만 써요.
+- 응답은 `unknown`으로 받아 화면이 읽는 값만 필수로 검사하고, 형식이 다르면 `UNKNOWN_ERROR`예요. 화면이 안 쓰는 값(`recommendedStation`의 좌표·`isSupported`, `metrics.totalTransfers`, `congestion.pct`, `segments[].direction`)은 없거나 달라도 통과해요. `segments`·`nearbyAlternatives`가 없으면 빈 배열이에요.
+- `isStale`·`staleReasons`의 `null`(8.3 이전 실행, 판정 안 함)은 그대로 둬요. 화면은 `isStale === true`일 때만 "다시 추천받기" 안내를 보여요. 8.2의 `data: null`은 오류가 아닌 `null`이에요. 8.3이 `null`을 주면 형식 오류예요.
+- `appliedConstraints`의 `null` 값·빈 배열은 빼서 정리해요. 모두 비면 `{}`이고 화면은 "적용된 제약 없음"을 보여요.
+- `participantTimes[].congestion`은 데이터가 없으면 `null`이에요. 화면은 혼잡도 점·라벨과 안내의 "기준 혼잡도" 부분만 숨겨요. `boardingTrain`·`legs`·`source`·`arriveAt`·`slackSeconds`는 화면에 쓰지 않고 그대로 통과시켜요.
+- 응답에 `recommendedStation.lines`가 없어서, 결과 최대 3곳을 역 상세(5.3 `fetchStation`)로 병렬 조회해 채워요(같은 역은 한 번). 실패하면 그 역의 노선 배지만 숨기고 결과는 그대로 보여요. 인증 오류는 그대로 던져요.
+- 8.1만 `RECOMMENDATION_TIMEOUT_MS`(30초, 실서버 측정 전 임시값)를 쓰고, 조회는 기본 10초예요. 공통 클라이언트의 `RequestOptions.timeoutMs`로 요청별 제한 시간을 줄 수 있어요(생략하면 10초). 시간 초과도 `NETWORK_ERROR`라서 8.1 안내에 "결과가 저장됐을 수 있어요. 최근 결과를 확인해 보세요"를 넣어요. 화면에 다시 들어오면 8.2로 확인돼요.
+- 오류는 `RecommendationError`로 바꿔요: `TOO_FEW_MEMBERS`·`DEPARTURE_MISSING`(`error.details.missingUserIds`가 문자열 배열일 때만 `missingUserIds`로 전달)·`STATION_UNSUPPORTED`·`APPOINTMENT_PASSED`·`NO_SERVICE_TIME`(422), `RECOMMENDATION_IN_PROGRESS`(409), `NOT_ROOM_MEMBER`(403), `ROOM_NOT_FOUND`·`RUN_NOT_FOUND`(404), `VALIDATION_ERROR`(400), `NETWORK_ERROR`. 모르는 코드와 형식 오류는 `UNKNOWN_ERROR`예요. `TOKEN_*`·401은 `ApiError` 그대로 A-1에 맡기고 화면에서 따로 안내하지 않아요.
+- 서버에 이전 실행 목록 API가 없어서 `listRecommendationRuns`는 이 앱 세션의 8.1 성공·8.2 결과만 중복 없이 최근 순으로 돌려줘요. 화면은 2건 이상일 때만 "이전 추천 기록"을 보여요.
+- 요청 전 `getRoomCacheScope()`로 계정 범위를 잡고 응답 뒤 `assertRoomCacheScope()`로 확인해요. 계정이 바뀐 뒤의 늦은 응답은 `AUTH_REQUIRED`로 버려요. 계정이 바뀌면(`subscribeRoomCacheReset`) 이전 실행 목록도 비워요.
+- 화면은 8.1 요청 중 계산 버튼과 "다시 추천받기"를 막고, 상태가 반영되기 전 연타도 한 번만 보내요.
+- 후보 제안·투표(추천 → 후보 올리기 포함)는 mock 유지, WS 수신 재조회와 새 필드 화면 표시는 범위 밖이에요.
