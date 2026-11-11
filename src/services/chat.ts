@@ -1,4 +1,6 @@
 import { fetchRoomDetail, getMyUserId } from '@/services/room';
+import { useMock as isMockMode } from '@/services/api/config';
+import { assertRoomCacheScope, getRoomCacheScope, readCachedRoomDetail, subscribeRoomCacheReset } from '@/services/room-cache';
 import { RoomError, type RoomDetail } from '@/types/room';
 import { subscribeRoomMockChanges } from '@/stores/room-mock-events';
 import type {
@@ -107,7 +109,10 @@ function shouldFail(
 }
 
 async function requireChatMember(roomId: string) {
-    const detail = await fetchRoomDetail(roomId);
+    const cached = isMockMode() ? undefined : readCachedRoomDetail(roomId);
+    const scope = cached ? getRoomCacheScope() : null;
+    const detail = cached ?? await fetchRoomDetail(roomId);
+    if (scope) assertRoomCacheScope(scope);
 
     if (!detail.members.some(member => member.userId === getMyUserId())) {
         throw new RoomError(
@@ -433,3 +438,9 @@ export async function sendChatMessage(
         message: { ...message },
     };
 }
+subscribeRoomCacheReset(() => {
+    messagesByRoom.clear();
+    pendingAiByRoom.clear();
+    completedRequests.clear();
+    failedOnce.clear();
+});

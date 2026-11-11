@@ -9,6 +9,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import BottomTabBar, { useTabBarHeight } from '@/components/bottom-tab-bar';
 import { formatAppointmentParam, formatDday, formatMonthDay, formatTime } from '@/constants/home-mock';
 import { fetchMyRooms } from '@/services/room';
+import { ApiError, isAuthError } from '@/services/api/errors';
 import type { RoomSummary } from '@/types/room';
 
 const NAVY = '#0f1c3f';
@@ -52,14 +53,17 @@ export default function RoomsScreen() {
                     : '';
     // useFocusEffect 안에서도 최신 값을 읽도록 ref 로 둡니다.
     const failNext = useRef(mock === 'error');
+    const requestId = useRef(0);
     const [load, setLoad] = useState<Load>({ kind: 'loading' });
 
     const loadRooms = useCallback(async () => {
+        const id = ++requestId.current;
         setLoad(prev => (prev.kind === 'done' ? prev : { kind: 'loading' }));
         try {
             const rooms = await fetchMyRooms(failNext.current ? 'error' : mock === 'empty' ? 'empty' : undefined);
-            setLoad({ kind: 'done', rooms });
-        } catch {
+            if (id === requestId.current) setLoad({ kind: 'done', rooms });
+        } catch (error) {
+            if (id !== requestId.current || error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
             setLoad({ kind: 'error' });
         } finally {
             failNext.current = false; // 다시 시도하면 성공하도록
@@ -69,7 +73,9 @@ export default function RoomsScreen() {
     // 이 화면으로 돌아올 때마다 목록을 다시 불러옵니다.
     useFocusEffect(
         useCallback(() => {
-            loadRooms();
+            void loadRooms();
+            // 화면을 떠난 뒤의 응답을 무효화하는 요청 카운터예요.
+            return () => { requestId.current++; };
         }, [loadRooms]),
     );
 

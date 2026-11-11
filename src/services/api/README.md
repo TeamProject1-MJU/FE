@@ -142,3 +142,23 @@ await searchRoute(origin, destination, { roomId });
 - 도착 시각·요금·소요시간·방향·혼잡도 단계와 라벨은 서버 값을 사용하며 재계산하거나 방면 문구를 만들지 않아요. 대기 필드는 없어도 정상이고 `totalWithWaitSec ?? totalTimeSec`로 표시해요. 미제공 혼잡도는 회색, 추정 요금은 "예상", `direction: null`인 방향은 `directionCode`로 표시해요.
 - `STATION_UNSUPPORTED`(422), `ROUTE_NOT_FOUND`·`STATION_NOT_FOUND`(404)는 같은 `RouteSearchError` 코드, 네트워크·시간 초과는 `NETWORK_ERROR`, 나머지는 `EXTERNAL_API_ERROR`로 전달해요. `TOKEN_*`과 공통 인증 오류는 `ApiError` 그대로 전달하고 화면에서 중복 안내하지 않아요.
 - mock 모드의 기존 경로·대기·도착 시각 생성은 유지해요. 방 화면 호출 연결, 실시간 도착정보 API, 출발 시각 선택, 지도와 추천 API는 이번 범위 밖이에요.
+
+## 방 목록·상세·멤버 조회 (#94, 명세 7.3·7.4·7.6)
+
+```ts
+import { fetchMyRooms, fetchRoomDetail, fetchRoomMembers } from '@/services/room';
+
+await fetchMyRooms(); // GET /rooms, 약속 시각 순 정렬·시각 미정은 맨 뒤예요.
+await fetchRoomDetail(roomId); // GET /rooms/{roomId}
+await fetchRoomMembers(roomId); // GET /rooms/{roomId}/members
+```
+
+- 서버 응답을 `unknown`으로 받아 UUID·역·노선·상태·역할·시각·멤버 필드를 검사해요. `selectedStation`·`departureStation`은 `{ id, name, isSupported, lines: [{ lineId, lineName, color }] } | null`이에요. 상세의 ownerId·myRole·멤버 역할도 일치해야 해요.
+- 목록(7.3)의 `memberCount`는 필수예요. 실서버 상세(7.4)는 이 필드 없이 전체 `members`를 보내므로, 검사한 `members.length`를 화면·공용 캐시의 인원수로 사용해요. 상세에 `memberCount`가 함께 오면 정수이고 멤버 수와 같은지도 검사해요.
+- `getMyUserId()`는 서버 모드에서 auth-store의 사용자 ID를 사용해요. Refresh Token 복원 직후 ID가 비어 있으면 기존 `fetchMe()`(4.4)로 한 번 확인하며 동시 조회는 공유해요. 로그인·사용자 서비스는 변경하지 않아요.
+- `room-cache.ts`는 마지막으로 받은 서버 목록·상세·멤버 정보를 메모리에 보관해요. 계정·로그인 세대를 구분하고 복사본을 반환해요. 로그아웃·계정 변경 후 조회나 늦은 응답으로 이전 계정의 캐시를 재사용하지 않아요. 목록에서 빠진 방이나 403·404로 거절된 방도 제거해요.
+- `getMockRoom`·`getMockMembers`는 서버 모드에서 캐시만 읽고 mock 방으로 대체하지 않아요. 후보·채팅·추천 API는 mock을 유지하며 이 방 정보를 읽어요. 채팅은 캐시 상세를 우선 사용하고 없으면 실제 상세 조회를 해요. 추천의 임시 계산에 필요한 출발역 좌표는 서버 역 ID로 기존 역 상세 API에서 가져와요. 추천 결과 자체는 실제 추천 결과가 아니에요.
+- ROOM_NOT_FOUND·NOT_ROOM_MEMBER·NETWORK_ERROR·VALIDATION_ERROR·ROOM_BUSY는 같은 RoomError 코드로 전달해요. 형식 오류와 그 밖의 서버 오류는 UNKNOWN_ERROR예요. TOKEN_*과 공통 인증 오류는 ApiError 그대로 A-1에 맡겨요.
+- 서버 모드의 `fetchMyRooms`·`fetchRoomDetail`은 mock 실패·빈 목록 플래그를 무시해요. 화면의 로딩·빈 목록·재시도·접근 불가 표시는 실제 응답에 따라 동작해요.
+- 생성·참여·초대 코드·수정·출발역 변경·나가기·승계·후보·투표·추천·채팅·WebSocket의 실제 API 연동은 범위 밖이에요. mock 데이터·이벤트를 서버 응답으로 표시하거나 저장하지 않아요.
+- 실서버 확인은 Swagger에서 같은 계정으로 방을 만든 뒤 웹에서 GET /rooms·상세·멤버 응답과 화면을 비교해요. 빈 계정, 일반 멤버/방장, 403·404도 확인해요. 테스트용 토큰 주입 코드와 `.env`는 커밋하지 않아요.

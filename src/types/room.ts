@@ -12,15 +12,12 @@ export type SelectedStationMock =
     | 'missing'
     | 'owner-lost';
 
-/**
- * 확정된 약속역
- * 명세 7.3 예시는 null 만 있어 모양이 정해지지 않았습니다. 7.4 departureStation 과 같은 모양으로 가정합니다.
- * TODO: 백엔드와 selectedStation 모양 확인
- */
+/** 서버 확인 완료: 7.3·7.4·7.6의 약속역과 출발역은 같은 모양이에요. */
 export type RoomStation = {
     id: number;
     name: string;
-    lines?: { lineId: number; lineName: string; color: string }[];
+    isSupported: boolean;
+    lines: { lineId: number; lineName: string; color: string }[];
 };
 
 /** 7.3 GET /rooms 목록 항목 (초대 코드는 목록에 없음) */
@@ -45,7 +42,7 @@ export type RoomMember = {
     /** ISO-8601 */
     joinedAt: string;
     /** 출발역을 아직 정하지 않았으면 null */
-    departureStation: (RoomStation & { isSupported: boolean }) | null;
+    departureStation: RoomStation | null;
 };
 
 /** 7.1 POST /rooms 요청 */
@@ -134,7 +131,8 @@ export type RoomErrorCode =
     | 'STATION_NOT_FOUND'
     | 'STATION_UNSUPPORTED'
     | 'VALIDATION_ERROR'
-    | 'NETWORK_ERROR';
+    | 'NETWORK_ERROR'
+    | 'UNKNOWN_ERROR';
 
 export class RoomError extends Error {
     code: RoomErrorCode;

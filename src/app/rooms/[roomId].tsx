@@ -39,6 +39,8 @@ import {
     prepareLeaveMock,
 } from '@/services/room';
 import { RoomError, type RoomDetail } from '@/types/room';
+import { useMock as isMockMode } from '@/services/api/config';
+import { ApiError, isAuthError } from '@/services/api/errors';
 
 const NAVY = '#0f1c3f';
 const MINT = '#2bcf9a';
@@ -87,11 +89,11 @@ export default function RoomDetailScreen() {
     const params = useLocalSearchParams<{ roomId: string; mock?: string; tab?: string }>();
     // 홈 '다가오는 약속' 카드(roomId: preview)는 같은 mock 방(room-2)으로 엽니다.
     const baseRoomId =
-        params.roomId === 'preview'
+        isMockMode() && params.roomId === 'preview'
             ? 'room-2'
             : String(params.roomId);
 
-    const leaveScenario = parseLeaveRoomScenario(params.mock);
+    const leaveScenario = isMockMode() ? parseLeaveRoomScenario(params.mock) : undefined;
 
     const roomId = getLeaveMockRoomId(
         baseRoomId,
@@ -118,6 +120,8 @@ export default function RoomDetailScreen() {
     const proposalsFailNext = useRef(params.mock === 'proposals-error');
     const proposalsFillApplied = useRef(false);
     const myUserId = getMyUserId();
+    const requestId = useRef(0);
+    const proposalsRequestId = useRef(0);
 
     const [detail, setDetail] = useState<RoomDetail | null>(null);
     const [loadError, setLoadError] = useState<LoadError | null>(null);
@@ -131,6 +135,7 @@ export default function RoomDetailScreen() {
 
     /** 7.15 후보 목록 재조회 (제안·삭제·투표·확정 후, 화면 복귀 시) */
     const loadProposals = useCallback(async () => {
+        const id = ++proposalsRequestId.current;
         try {
             if (!proposalsFillApplied.current && params.mock === 'proposals-full') {
                 proposalsFillApplied.current = true;
@@ -139,8 +144,9 @@ export default function RoomDetailScreen() {
             const fail = proposalsFailNext.current;
             proposalsFailNext.current = false; // 다시 시도하면 성공하도록
             const list = await fetchProposals(roomId, fail ? 'error' : undefined);
-            setProposals({ status: 'ready', list });
+            if (id === proposalsRequestId.current) setProposals({ status: 'ready', list });
         } catch (error) {
+            if (id !== proposalsRequestId.current) return;
             setProposals({ status: 'error', message: error instanceof RoomError ? error.message : '네트워크 상태를 확인하고 다시 시도해 주세요.' });
         }
     }, [roomId, params.mock]);
@@ -151,6 +157,7 @@ export default function RoomDetailScreen() {
     }, [loadProposals]);
 
     const load = useCallback(async () => {
+        const id = ++requestId.current;
         setLoadError(null);
         try {
             prepareLeaveMock(roomId, leaveScenario);
@@ -158,24 +165,27 @@ export default function RoomDetailScreen() {
             const fail = failNext.current;
             failNext.current = false; // 다시 시도하면 성공하도록
             // 방장 변경 mock (#47): 진입 시 한 번만 적용. 실제로는 7.8 승계·탈퇴로만 바뀝니다
-            if (!ownerMockApplied.current && (params.mock === 'owner-give' || params.mock === 'owner-take')) {
+            if (isMockMode() && !ownerMockApplied.current && (params.mock === 'owner-give' || params.mock === 'owner-take')) {
                 ownerMockApplied.current = true;
                 mockTransferOwner(roomId, params.mock === 'owner-give' ? 'give' : 'take');
             }
             const room = await fetchRoomDetail(roomId, fail ? 'error' : undefined);
+            if (id !== requestId.current) return;
             setDetail(room);
             loadProposals();
             // 초대 코드는 현재 OWNER 일 때만 7.9 로 따로 조회 (상세 응답엔 없음). 실패해도 상세는 그대로 보여줍니다
             if (room.myRole === 'OWNER') {
                 try {
-                    setInviteCode((await fetchInviteCode(roomId)).roomCode);
+                    const code = (await fetchInviteCode(roomId)).roomCode;
+                    if (id === requestId.current) setInviteCode(code);
                 } catch {
-                    setInviteCode(null);
+                    if (id === requestId.current) setInviteCode(null);
                 }
             } else {
                 setInviteCode(null);
             }
         } catch (error) {
+            if (id !== requestId.current || error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
             setDetail(null);
             const code = error instanceof RoomError ? error.code : null;
             setLoadError(code === 'ROOM_NOT_FOUND' || code === 'NOT_ROOM_MEMBER' ? code : 'UNKNOWN');
@@ -227,7 +237,9 @@ export default function RoomDetailScreen() {
 
     useFocusEffect(
         useCallback(() => {
-            load();
+            void load();
+            // 화면을 떠나거나 다른 방을 열면 이전 조회를 무효화해요.
+            return () => { requestId.current++; proposalsRequestId.current++; };
         }, [load]),
     );
 
@@ -438,7 +450,7 @@ export default function RoomDetailScreen() {
                             <View key={member.userId} style={styles.memberRow}>
                                 <View style={[styles.avatar, mine && styles.avatarMine]}>
                                     <Text style={styles.avatarText}>{Array.from(member.nickname)[0]}</Text>
-                                    {member.role === 'OWNER' && (
+                                    {member.userId === detail.ownerId && (
                                         <View style={styles.crown}>
                                             <Ionicons name="star" size={9} color={WHITE} />
                                         </View>
@@ -447,7 +459,7 @@ export default function RoomDetailScreen() {
                                 <View style={styles.flex}>
                                     <View style={styles.nameRow}>
                                         <Text style={styles.memberName}>{member.nickname}</Text>
-                                        {member.role === 'OWNER' && <Text style={styles.ownerTag}>방장</Text>}
+                                        {member.userId === detail.ownerId && <Text style={styles.ownerTag}>방장</Text>}
                                         {mine && <Text style={styles.meTag}>나</Text>}
                                     </View>
                                     {mine && departureSaving ? (
