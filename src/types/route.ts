@@ -46,7 +46,7 @@ export type RouteStationCongestion = {
     id: number;
     name: string;
     slotStart: string;
-    slotDate: string;
+    slotDate: string | null;
     firstTrain: boolean;
     congestion: Congestion;
 };

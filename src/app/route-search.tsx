@@ -17,6 +17,9 @@ import { openStationPicker, type Station } from '@/app/station-search';
 import { MOCK_STATIONS } from '@/mocks/stations';
 import RouteCard from '@/components/route/RouteCard';
 import { searchRoute } from '@/services/route';
+import { searchStations } from '@/services/station';
+import { useMock as isMockMode } from '@/services/api/config';
+import { ApiError, isAuthError } from '@/services/api/errors';
 import { setSelectedRoute } from '@/stores/route-store';
 import {
     RouteSearchError,
@@ -91,9 +94,11 @@ export default function RouteSearchScreen() {
     const [inputError, setInputError] = useState('');
 
     const requestId = useRef(0);
+    const initialLookupId = useRef({ departure: 0, destination: 0 });
 
     // 역 검색 화면(/station-search, #33)을 열고, 고른 역을 출발 또는 도착에 넣습니다.
     const openPicker = useCallback((field: Field, current: StationSummary | null) => {
+        initialLookupId.current[field]++;
         openStationPicker(
             { purpose: field === 'departure' ? 'origin' : 'destination', selectedStationId: current?.id },
             station => {
@@ -104,21 +109,44 @@ export default function RouteSearchScreen() {
         );
     }, []);
 
-    // 홈 화면 등에서 넘겨받은 역 이름을 채우고, focus 가 있으면 역 검색 화면을 엽니다 (#32).
+    // 이름으로 넘어온 초기값은 서버 모드에서 서버 역 ID로 찾아요.
     useEffect(() => {
-        // TODO(B-3 경로 탐색 연동): 서버 모드에서도 mock 역 ID 를 이름으로 찾아요. 서버 역 검색으로 바꿔야 해요(#84 보고).
-        const find = (name?: string) => {
-            const station = MOCK_STATIONS.find(s => s.name === name?.trim());
-            return station ? toStationSummary(station) : null;
+        let active = true;
+        const find = async (name: string): Promise<StationSummary | null> => {
+            if (isMockMode()) {
+                const station = MOCK_STATIONS.find(s => s.name === name.trim());
+                return station ? toStationSummary(station) : null;
+            }
+            const normalized = name.trim().replace(/역$/, '');
+            try {
+                const result = await searchStations(normalized);
+                const station = result.items.find(item => item.isSupported && item.name.trim().replace(/역$/, '') === normalized);
+                return station ? toStationSummary(station) : null;
+            } catch {
+                // 못 찾거나 조회에 실패한 초기값은 비워 둬요. 인증 처리는 A-1이 담당해요.
+                return null;
+            }
         };
-        if (params.departure) setDeparture(find(params.departure));
-        if (params.destination) setDestination(find(params.destination));
+        const fill = async (field: Field, name: string) => {
+            const id = ++initialLookupId.current[field];
+            const station = await find(name);
+            if (!active || id !== initialLookupId.current[field]) return;
+            if (field === 'departure') setDeparture(station);
+            else setDestination(station);
+        };
+        if (params.departure) void fill('departure', params.departure);
+        if (params.destination) void fill('destination', params.destination);
+        return () => { active = false; };
+    }, [params.departure, params.destination]);
+
+    useEffect(() => {
         if (params.focus) openPicker(params.focus, null);
         // 화면에 처음 들어올 때 한 번만 반영합니다.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const runSearch = useCallback(async (from: StationSummary | null, to: StationSummary | null) => {
+        const id = ++requestId.current;
         if (!from || !to) {
             setSearch({ status: 'idle' });
             return;
@@ -131,7 +159,6 @@ export default function RouteSearchScreen() {
         }
 
         setInputError('');
-        const id = ++requestId.current;
         setSearch({ status: 'loading' });
 
         try {
@@ -140,14 +167,21 @@ export default function RouteSearchScreen() {
             setSearch({ status: 'success', data });
         } catch (error) {
             if (id !== requestId.current) return;
-            const code = error instanceof RouteSearchError ? error.code : 'NETWORK_ERROR';
+            if (error instanceof ApiError && (error.code.startsWith('TOKEN_') || isAuthError(error))) {
+                setSearch({ status: 'idle' });
+                return;
+            }
+            const code = error instanceof RouteSearchError ? error.code : 'EXTERNAL_API_ERROR';
             setSearch({ status: 'error', code });
         }
     }, []);
 
     // 두 역이 정해지면 바로 검색합니다 (별도 검색 버튼 없음).
     useEffect(() => {
-        runSearch(departure, destination);
+        void runSearch(departure, destination);
+        // DOM ref가 아닌 요청 카운터라서 이탈 시 최신 재시도까지 무효화해요.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        return () => { requestId.current++; };
     }, [departure, destination, runSearch]);
 
     const sortedRoutes = useMemo(
@@ -169,6 +203,8 @@ export default function RouteSearchScreen() {
     };
 
     const swapStations = () => {
+        initialLookupId.current.departure++;
+        initialLookupId.current.destination++;
         setDeparture(destination);
         setDestination(departure);
     };
