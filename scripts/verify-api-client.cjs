@@ -27,12 +27,12 @@ function createRuntime(env = {}, react = require('react')) {
         Platform: { OS: 'web', select: value => value.web },
         Keyboard: { dismiss() {} },
     };
-    for (const name of ['FlatList', 'KeyboardAvoidingView', 'Modal', 'Pressable', 'Text', 'TextInput', 'View']) native[name] = name;
+    for (const name of ['ActivityIndicator', 'FlatList', 'KeyboardAvoidingView', 'Modal', 'Pressable', 'Text', 'TextInput', 'View']) native[name] = name;
     const external = {
         react,
         'react/jsx-runtime': require('react/jsx-runtime'),
         'react-native': native,
-        'expo-router': { router: { canGoBack: () => false, replace() {}, push() {} }, useLocalSearchParams: () => ({}) },
+        'expo-router': { router: { canDismiss: () => false, canGoBack: () => false, replace() {}, push() {} }, useLocalSearchParams: () => ({}) },
         'expo-status-bar': { StatusBar: 'StatusBar' },
         'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
         '@expo/vector-icons/Ionicons': 'Ionicons',
@@ -67,7 +67,7 @@ function createRuntime(env = {}, react = require('react')) {
         }
         now = target;
     }
-    return { load, context, timers, advance };
+    return { load, context, timers, advance, external, native };
 }
 
 const serverEnv = { EXPO_PUBLIC_API_BASE_URL: ' https://example.test/api/v1/// ', EXPO_PUBLIC_USE_MOCK: 'false' };
@@ -789,4 +789,184 @@ test('mock 혼잡도: slotDate·dayType 규칙, 여러 단계·데이터 없음�
     await assert.rejects(mockCongestion(runtime, service, { ...base, time: '14:00', dayType: 'WEEKDAY' }, 'error'), error => error instanceof ApiError && error.code === 'INTERNAL_ERROR' && error.status === 500);
     await assert.rejects(mockCongestion(runtime, service, { ...base, time: '14:00', dayType: 'WEEKDAY' }, 'network'), error => error instanceof ApiError && error.code === 'NETWORK_ERROR');
     assert.equal(runtime.timers.size, 0);
+});
+function authRuntime(mock = false) {
+    const r = createRuntime({ ...serverEnv, EXPO_PUBLIC_USE_MOCK: String(mock) });
+    r.native.Platform.OS = 'android';
+    const disk = new Map();
+    const faults = { read: false, write: false, remove: false };
+    r.external['expo-secure-store'] = {
+        getItemAsync: async key => { if (faults.read) throw Error(); return disk.get(key) ?? null; },
+        setItemAsync: async (key, value) => { if (faults.write) throw Error(); disk.set(key, value); },
+        deleteItemAsync: async key => { if (faults.remove) throw Error(); disk.delete(key); },
+    };
+    r.external['@react-native-seoul/kakao-login'] = { login: async () => ({ accessToken: 'token-1' }) };
+    let redirects = 0;
+    r.external['expo-router'].router.replace = () => redirects++;
+    const auth = r.load('src/services/auth.ts');
+    const api = r.load('src/services/api/client.ts');
+    const storage = r.load('src/services/token-storage.ts');
+    const store = r.load('src/stores/auth-store.ts');
+    const calls = [];
+    let responder = async url => url.endsWith('/auth/kakao') ? ok(loginData()) : ok(null);
+    r.context.fetch = async (url, options) => { calls.push({ url, options }); return responder(url, options); };
+    return { ...r, auth, api, storage, store, disk, faults, calls, redirects: () => redirects, respond: fn => { responder = fn; } };
+}
+const tokenData = () => ({ accessToken: 'token-2', refreshToken: 'token-3', accessTokenExpiresIn: 1800 });
+const loginData = () => ({ ...tokenData(), user: { id: 'user-1', nickname: '사용자' }, isNewUser: false });
+const ok = data => jsonResponse({ success: true, data });
+const fail = (code, status = 401) => jsonResponse({ success: false, error: { code } }, status);
+const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
+
+test('카카오 본문·비인증 헤더·저장 후 Bearer 주입', async () => {
+    const r = authRuntime(); await r.auth.loginWithKakao(); await r.api.get('/stations');
+    assert.deepEqual(JSON.parse(r.calls[0].options.body), { kakaoAccessToken: 'token-1' });
+    assert.equal(r.calls[0].options.headers.Authorization, undefined);
+    assert.equal(r.calls[1].options.headers.Authorization, 'Bearer token-2');
+    assert.equal([...r.disk.values()][0], 'token-3');
+    assert.equal(r.store.getAuthStatus(), 'signedIn');
+});
+
+test('로그인 응답 필수 필드 검사와 서버 오류 코드 보존', async () => {
+    for (const key of ['accessToken', 'refreshToken', 'accessTokenExpiresIn', 'user', 'isNewUser']) {
+        const r = authRuntime(); const data = loginData(); delete data[key]; r.respond(async () => ok(data));
+        await assert.rejects(r.auth.loginWithKakao(), { code: 'UNKNOWN_ERROR' });
+        assert.notEqual(r.store.getAuthStatus(), 'signedIn');
+    }
+    for (const code of ['KAKAO_AUTH_FAILED', 'EXTERNAL_API_ERROR']) {
+        const r = authRuntime(); r.respond(async () => fail(code, code === 'EXTERNAL_API_ERROR' ? 502 : 401));
+        await assert.rejects(r.auth.loginWithKakao(), { code });
+    }
+});
+
+test('만료 후 한 번 갱신·새 헤더로 재시도·Refresh 회전·모든 진입점 Promise 공유', async () => {
+    const r = authRuntime(); await r.auth.loginWithKakao(); let count = 0;
+    r.respond(async (url, options) => {
+        if (url.endsWith('/auth/refresh')) { count++; assert.equal(options.headers.Authorization, undefined); assert.deepEqual(JSON.parse(options.body), { refreshToken: 'token-3' }); return ok({ ...tokenData(), accessToken: 'token-4', refreshToken: 'token-5' }); }
+        return options.headers.Authorization === 'Bearer token-4' ? ok('성공') : fail('TOKEN_EXPIRED');
+    });
+    assert.deepEqual(await Promise.all([r.api.get('/one'), r.api.get('/two'), r.api.get('/three')]), ['성공', '성공', '성공']);
+    assert.equal(count, 1); assert.equal([...r.disk.values()][0], 'token-5');
+    r.respond(async () => { count++; return ok(tokenData()); });
+    const first = r.auth.refreshSession(); assert.equal(first, r.auth.refreshSession());
+    await first; assert.equal(count, 2); // 요청의 회전값 검사가 이전 값 재사용도 잡아요.
+});
+
+test('재시도 요청이 다시 401이면 추가 갱신 없이 실패 처리', async () => {
+    const r = authRuntime(); await r.auth.loginWithKakao(); let count = 0;
+    r.respond(async url => url.endsWith('/auth/refresh') ? (count++, ok({ ...tokenData(), accessToken: 'token-4' })) : fail('TOKEN_EXPIRED'));
+    await assert.rejects(r.api.get('/stations'), { code: 'TOKEN_EXPIRED' });
+    assert.equal(count, 1); assert.equal(r.store.getAuthStatus(), 'signedOut'); assert.equal(r.redirects(), 1);
+});
+
+test('늦은 이전 토큰의 401은 갱신 없이 현재 토큰으로 한 번 재시도', async () => {
+    const r = authRuntime(); await r.auth.loginWithKakao(); const late = deferred(); let count = 0;
+    r.respond(async (url, options) => {
+        if (url.endsWith('/auth/refresh')) { count++; return ok({ ...tokenData(), accessToken: 'token-4' }); }
+        if (options.headers.Authorization === 'Bearer token-4') return ok('성공');
+        return url.endsWith('/late') ? late.promise : fail('TOKEN_EXPIRED');
+    });
+    const old = r.api.get('/late'); await flush(); await r.api.get('/now');
+    late.resolve(fail('TOKEN_EXPIRED')); assert.equal(await old, '성공'); assert.equal(count, 1);
+});
+
+test('갱신 401은 토큰 삭제·로그인 이동, 네트워크·409·5xx는 보존', async () => {
+    for (const [code, status] of [['TOKEN_INVALID', 401], ['AUTH_REQUIRED', 401], ['ROOM_BUSY', 409], ['EXTERNAL_API_ERROR', 502], ['NETWORK_ERROR', 0]]) {
+        const r = authRuntime(); await r.auth.loginWithKakao();
+        r.respond(async url => {
+            if (!url.endsWith('/auth/refresh')) return fail('TOKEN_EXPIRED');
+            if (!status) throw Error(); return fail(code, status);
+        });
+        await assert.rejects(r.api.get('/stations'), { code });
+        if (status === 401) { assert.equal(r.disk.size, 0); assert.equal(r.storage.getAccessToken(), null); assert.equal(r.store.getAuthStatus(), 'signedOut'); assert.equal(r.redirects(), 1); }
+        else { assert.equal(r.disk.size, 1); assert.equal(r.storage.getAccessToken(), 'token-2'); }
+        if (!status) { const count = r.calls.length; await assert.rejects(r.auth.refreshSession(), { code: 'REFRESH_UNCERTAIN' }); assert.equal(r.calls.length, count); }
+    }
+});
+
+test('auth:false 재귀 방지와 TOKEN_INVALID·AUTH_REQUIRED 즉시 실패 이동', async () => {
+    for (const code of ['TOKEN_INVALID', 'AUTH_REQUIRED', 'TOKEN_EXPIRED']) {
+        const r = authRuntime(); await r.auth.loginWithKakao(); r.respond(async () => fail(code));
+        await assert.rejects(r.api.post('/auth/refresh', {}, { auth: false }), { code }); assert.equal(r.redirects(), 0);
+        if (code !== 'TOKEN_EXPIRED') { const count = r.calls.length; await assert.rejects(r.api.get('/stations'), { code }); assert.equal(r.calls.length, count + 1); assert.equal(r.redirects(), 1); }
+    }
+});
+
+test('로그아웃 서버 실패도 삭제·signedOut, 갱신 중 로그아웃의 늦은 응답 무시', async () => {
+    const r = authRuntime(); await r.auth.loginWithKakao(); const late = deferred();
+    r.respond(async url => { if (url.endsWith('/auth/refresh')) return late.promise; throw Error(); });
+    const refresh = r.auth.refreshSession(); const rejection = assert.rejects(refresh, { code: 'AUTH_REQUIRED' }); await flush();
+    await r.auth.logoutSession(); late.resolve(ok({ ...tokenData(), accessToken: 'token-4' })); await rejection;
+    assert.equal(r.store.getAuthStatus(), 'signedOut'); assert.equal(r.storage.getAccessToken(), null); assert.equal(r.disk.size, 0);
+    const logout = r.calls.find(call => call.url.endsWith('/auth/logout')); assert.ok(logout); assert.equal(logout.options.headers.Authorization, undefined);
+});
+
+test('이전 세션의 늦은 401·로그인 성공이 새 세션을 변경하지 않음', async () => {
+    const r = authRuntime(); await r.auth.loginWithKakao(); const late = deferred();
+    r.respond(async () => late.promise); const old = r.api.get('/stations'); const rejected = assert.rejects(old, { code: 'TOKEN_INVALID' }); await flush();
+    r.respond(async () => ok(loginData())); await r.auth.loginWithKakao(); late.resolve(fail('TOKEN_INVALID')); await rejected;
+    assert.equal(r.store.getAuthStatus(), 'signedIn'); assert.equal(r.storage.getAccessToken(), 'token-2'); assert.equal(r.redirects(), 0);
+    const loginLate = deferred(); r.respond(async () => loginLate.promise); const login = r.auth.loginWithKakao(); const loginRejected = assert.rejects(login, { code: 'AUTH_REQUIRED' }); await flush();
+    r.respond(async () => ok(loginData())); await r.auth.loginWithKakao(); loginLate.resolve(ok({ ...loginData(), accessToken: 'token-4' })); await loginRejected;
+    assert.equal(r.storage.getAccessToken(), 'token-2');
+});
+
+test('SecureStore 저장·읽기·삭제 실패와 복원 사용자 미확인', async () => {
+    const r = authRuntime(); r.faults.write = true;
+    await assert.rejects(r.auth.loginWithKakao(), { code: 'TOKEN_STORAGE_ERROR' }); assert.equal(r.store.getAuthStatus(), 'signedOut'); assert.equal(r.storage.getAccessToken(), null);
+    r.faults.write = false; await r.auth.loginWithKakao(); r.faults.remove = true;
+    await r.auth.logoutSession(); assert.equal(r.store.getAuthStatus(), 'signedOut'); assert.equal(r.storage.getAccessToken(), null); assert.equal(r.storage.hasTokenDeletionFailed(), true); assert.equal(r.disk.size, 1); assert.equal(await r.storage.readRefreshToken(), null);
+    const restored = authRuntime(); restored.disk.set('linkro.refresh', 'token-1'); restored.respond(async () => ok(tokenData()));
+    await restored.auth.refreshSession(); assert.deepEqual(plain(restored.store.getSession()), { userId: null, nickname: null });
+    const unreadable = authRuntime(); unreadable.faults.read = true; await assert.rejects(unreadable.auth.refreshSession(), { code: 'AUTH_REQUIRED' }); assert.equal(unreadable.calls.length, 0);
+});
+
+test('mock 로그인·갱신·로그아웃은 서버 호출 없음, 서버 탈퇴 차단', async () => {
+    const r = authRuntime(true); await r.auth.loginWithKakao(); await r.auth.refreshSession(); await r.auth.logoutSession(); assert.equal(r.calls.length, 0);
+    const real = authRuntime(); await assert.rejects(real.load('src/services/user.ts').withdraw(), /준비 중/); assert.equal(real.calls.length, 0);
+});
+
+test('카카오 취소와 웹 미지원, 웹 저장소는 네이티브 모듈 접근 없음', async () => {
+    const r = authRuntime(); const kakao = r.load('src/services/kakao.ts');
+    r.external['@react-native-seoul/kakao-login'].login = async () => { throw { code: 'RNKakaoLogins', message: 'ClientFailed(Cancelled)' }; };
+    await assert.rejects(kakao.getKakaoAccessToken(), error => kakao.isKakaoLoginCancelled(error));
+    r.native.Platform.OS = 'web'; delete r.external['@react-native-seoul/kakao-login']; delete r.external['expo-secure-store'];
+    await assert.rejects(kakao.getKakaoAccessToken(), { code: 'KAKAO_UNSUPPORTED' });
+    await r.storage.saveTokens('token-1', 'token-2', () => true); assert.equal(await r.storage.readRefreshToken(), 'token-2'); await r.storage.clearTokens(); assert.equal(await r.storage.readRefreshToken(), null);
+});
+test('사용자 서비스 로그아웃도 서버 모드 인증 서비스를 호출', async () => {
+    const r = authRuntime(); await r.auth.loginWithKakao();
+    r.respond(async () => { throw Error(); });
+    await r.load('src/services/user.ts').logout(true);
+    assert.equal(r.store.getAuthStatus(), 'signedOut'); assert.equal(r.storage.getAccessToken(), null); assert.equal(r.disk.size, 0);
+    assert.equal(r.calls.filter(call => call.url.endsWith('/auth/logout')).length, 1);
+});
+
+test('복원 진입점과 만료 요청이 겹쳐도 갱신은 한 번', async () => {
+    const r = authRuntime(); await r.auth.loginWithKakao(); const late = deferred(); let count = 0;
+    r.respond(async (url, options) => {
+        if (url.endsWith('/auth/refresh')) { count++; return late.promise; }
+        return options.headers.Authorization === 'Bearer token-4' ? ok(null) : fail('TOKEN_EXPIRED');
+    });
+    const restore = r.auth.refreshSession(); const request = r.api.get('/stations'); await flush();
+    assert.equal(count, 1); late.resolve(ok({ ...tokenData(), accessToken: 'token-4' }));
+    await Promise.all([restore, request]); assert.equal(count, 1);
+});
+test('서버 모드는 복원 중 보호 화면을 가리고 signedOut은 로그인으로 이동, unknown은 mock 전용', () => {
+    for (const mock of [false, true]) {
+        const r = createRuntime({ ...serverEnv, EXPO_PUBLIC_USE_MOCK: String(mock) }, {
+            useEffect() {}, useState: () => ['', () => {}], useSyncExternalStore: (_, get) => get(),
+        });
+        r.external['expo-router'].usePathname = () => '/home';
+        r.external['expo-router'].Redirect = 'Redirect';
+        const gate = r.load('src/components/auth-gate.tsx').default;
+        const store = r.load('src/stores/auth-store.ts');
+        if (mock) { assert.equal(store.getAuthStatus(), 'unknown'); assert.equal(gate({ children: '보호 화면' }), '보호 화면'); }
+        else {
+            assert.equal(store.getAuthStatus(), 'restoring');
+            assert.equal(findElement(gate({ children: '보호 화면' }), element => element.type === 'ActivityIndicator').props.accessibilityLabel, '로그인을 복원하고 있어요');
+            store.signOut(); const view = gate({ children: '보호 화면' }); assert.equal(view.type, 'Redirect'); assert.equal(view.props.href, '/login');
+        }
+    }
 });

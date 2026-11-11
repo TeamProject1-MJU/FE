@@ -2,7 +2,7 @@
 
 `.env.example`을 `.env`로 복사합니다. `EXPO_PUBLIC_USE_MOCK`은 생략하면 `true`이고, 정확히 `true`일 때만 mock입니다. 서버를 쓰려면 `false`와 `/api/v1`까지 포함한 `EXPO_PUBLIC_API_BASE_URL`을 설정하고 앱을 완전히 새로고침합니다. 환경변수는 빌드에 포함되므로 토큰은 넣지 않습니다.
 
-현재 전환이 적용된 서비스는 역 검색·역 상세·노선 목록(`services/station.ts`)과 혼잡도 조회(`services/congestion.ts`)입니다. 나머지 서비스는 기존 mock을 유지합니다.
+현재 인증, 역 검색·역 상세·노선 목록(`services/station.ts`), 혼잡도 조회(`services/congestion.ts`)가 서버 모드를 지원해요. `/users/me`는 A-2에서 연결해요.
 
 ```ts
 import { get, post, delete as apiDelete } from '@/services/api/client';
@@ -25,7 +25,7 @@ try {
 } catch (error) {
     if (error instanceof ApiError) {
         // code는 서버 값을 그대로 유지하고, message는 서버 문구를 우선합니다.
-        console.warn(error.code, error.message, error.status, error.details);
+        // 화면에는 코드별 안내만 표시하고 오류 원문과 details는 기록하지 않아요.
     } else {
         throw error;
     }
@@ -39,7 +39,7 @@ try {
 ```ts
 import { setAccessTokenProvider, post } from '@/services/api/client';
 
-// 향후 인증 모듈이 가진 토큰 조회 함수를 연결합니다. 비동기 함수도 가능합니다.
+// 앱에서는 auth.ts가 등록하므로 화면에서 직접 덮어쓰지 않아요. 비동기 함수도 가능해요.
 const readCurrentAccessToken = (): string | null => null;
 setAccessTokenProvider(readCurrentAccessToken);
 
@@ -50,7 +50,20 @@ setAccessTokenProvider(readCurrentAccessToken);
 setAccessTokenProvider(null);
 ```
 
-토큰이 있을 때만 `Authorization: Bearer ...`를 붙입니다. 쿠키 옵션, 토큰 저장, 로그인 구현, 401 갱신·재시도는 포함하지 않습니다.
+토큰이 있을 때만 Authorization 헤더를 붙여요. 인증 모듈이 아래 등록 함수로 갱신과 실패 처리를 연결해요.
+
+## 인증 (#88, v1.12 4.1~4.3)
+
+- `loginWithKakao()`는 SDK `login()` 결과를 `/auth/kakao`에 보내고 응답을 검사한 뒤 저장과 `signIn`을 수행해요. 취소는 `isKakaoLoginCancelled`로 구분해요. SDK가 카카오톡 미설치 시 계정 로그인으로 폴백해요.
+- `auth.ts`를 앱 시작 시 불러오면 `setAccessTokenProvider`, `setTokenRefresher`, `setAuthFailureHandler`, `setSessionGenerationProvider`를 등록해요. 클라이언트는 인증 서비스를 import하지 않아요.
+- 서버 모드에서는 `AuthGate`가 `restoring` 동안 화면을 가리고 `refreshSession()`으로 복원해요. 사용자 정보는 `{ userId: null, nickname: null }`로 미확인 상태예요. 마이페이지는 확인된 세션 닉네임 또는 `사용자`를 표시하고 닉네임 변경·탈퇴 완료는 A-2 전까지 막아요. 사용자 서비스의 조회·수정 mock은 유지해요.
+- Access Token은 메모리, Refresh Token만 SecureStore에 저장해요. 웹은 모두 메모리에만 보관하므로 새로고침하면 로그아웃돼요. 웹에서 실제 카카오 로그인은 지원하지 않아요.
+- 인증이 필요한 요청마다 사용한 토큰과 세대를 기록해요. 401 `TOKEN_EXPIRED`는 같은 세대에서 토큰이 이미 바뀌었다면 현재 토큰으로, 아니라면 갱신 후 원래 요청을 한 번만 재시도해요. client의 진행 중 Promise와 서비스의 세대별 Promise를 공유하므로 앱 복원과 요청 갱신이 겹쳐도 refresh는 한 번이에요. 완료 후 Promise를 비워 다음 만료를 처리해요.
+- 갱신 응답의 새 Refresh Token 저장에 성공해야 로그인 상태로 전환해요. 만료 시간은 응답 검사에만 사용하고 선제 갱신하지 않아요. 로그인·로그아웃과 인증 무효화 때 세대를 바꿔 이전 응답이 새 상태를 바꾸지 못하게 해요.
+- 갱신 401 또는 인증 무효 오류는 토큰 삭제와 `signedOut` 후 `resetToLogin()`으로 이동해요. `TOKEN_INVALID`·`AUTH_REQUIRED`는 갱신 없이 이동해요. `auth:false`인 세 인증 요청에는 헤더·자동 갱신을 적용하지 않아요. 역 검색의 기존 인증 안내는 화면 내부 표시이며, AuthGate가 보호 화면을 가려 별도 이동이나 팝업을 추가하지 않아요.
+- 갱신의 409·5xx는 토큰을 유지하고 호출자에게 오류를 전달해 재시도할 수 있어요. 네트워크·시간 초과는 `NETWORK_ERROR`를 전달하고 토큰을 유지해요. 서버에서 회전했으나 응답만 유실됐을 수 있어 같은 실행 중에는 동일 토큰으로 자동 갱신을 다시 보내지 않아요(`REFRESH_UNCERTAIN`). 복원 화면의 카카오 재로그인 또는 로그아웃 후 재로그인으로 복구해요. 앱 재시작 후에는 메모리의 불확실 상태를 알 수 없어서 남은 저장 토큰으로 복원을 한 번 시도할 수 있어요. 이 경우 서버의 재사용 감지로 해당 로그인 계열이 폐기될 수 있고 재로그인이 필요해요.
+- `logoutSession()`은 서버 호출 결과와 관계없이 메모리를 비우고 `signedOut`으로 바꿔요. 결과의 `server`는 성공·실패·생략, `storageCleared`는 기기 삭제 결과예요. 삭제 실패 시 현재 실행에서는 저장값 재사용을 막고 안내를 표시하지만, 재시작 시 다시 읽힐 수 있어요. 서버 로그아웃이 성공했다면 남은 저장값은 폐기된 값이에요. 서버 호출과 삭제가 모두 실패했다면 재시작 때 복원될 가능성이 있으므로 기기 저장소 문제를 해결한 후 다시 로그아웃해야 해요.
+- mock 모드는 기존 프로필과 로그인·로그아웃·탈퇴 흐름을 유지하며 서버를 호출하지 않아요. `unknown`의 개발용 직접 접근도 mock에서만 허용해요. 서버 모드의 모든 보호 화면은 AuthGate가 막아요.
 
 ## 역 검색
 
@@ -100,6 +113,6 @@ const congestion = toCongestion(data); // 6.1과 같은 { supported, kind, pct, 
 - 서버 오류 코드는 그대로 전달합니다: `VALIDATION_ERROR`(400), 401 계열, `STATION_NOT_FOUND`(404), `NOT_FOUND`(404, 지원 역인데 그 노선에 속하지 않음, `details.lineId`).
 - mock은 영업일 규칙(05:30~다음 날 00:30, 30분 칸 39개, 01:00~05:29는 첫차 05:30 칸)을 따르며 막차 이후 대체는 하지 않습니다. 둘째 인자 `'error'`·`'network'`로 서버 오류·네트워크 실패를 흉내 낼 수 있고, 서버 모드에서는 무시합니다.
 
-401(`AUTH_REQUIRED`·`TOKEN_EXPIRED`·`TOKEN_INVALID`)은 `isAuthError(error)`로 구분해 "로그인이 필요해요" 안내만 합니다. 갱신·재로그인은 A-1 범위입니다.
+401 처리는 공통 클라이언트와 인증 서비스에서 담당해요. 화면에서는 `isAuthError(error)`로 구분할 수 있어요.
 
 실행 검사는 프로젝트 루트에서 `node --test scripts/verify-api-client.cjs`로 돌립니다. 실제 서버와 추가 패키지 없이 응답·오류·인증 헤더·시간 초과·mock 검색을 확인합니다.

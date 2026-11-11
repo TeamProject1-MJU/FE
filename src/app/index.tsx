@@ -1,3 +1,4 @@
+import { useMock } from '@/services/api/config';
 import { useEffect, useRef, useState } from 'react';
 import {
     Animated,
@@ -62,7 +63,7 @@ export default function SplashScreen() {
         ]).start();
 
         const timer = setTimeout(() => {
-            router.replace('/onboarding-1');
+            router.replace(useMock() ? '/onboarding-1' : '/home');
         }, SPLASH_DURATION);
 
         return () => clearTimeout(timer);

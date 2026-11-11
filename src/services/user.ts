@@ -1,13 +1,15 @@
+import { useMock } from '@/services/api/config';
+import { logoutSession } from '@/services/auth';
+import { mockUser, setMockUser } from '@/mocks/user';
 /**
  * 사용자 서비스 (#38, API 명세 v1.12 4.3~4.6)
  *
  * TODO: 백엔드 연동 시 아래 API 호출로 교체합니다.
  * - GET    /users/me     내 정보 { id, nickname, createdAt }
  * - PATCH  /users/me     닉네임 수정 { nickname } (2~20자, 중복 허용, 오류 VALIDATION_ERROR)
- * - POST   /auth/logout  { refreshToken } (Authorization 헤더 없음, 앱은 저장한 토큰을 모두 지움)
  * - DELETE /users/me     회원 탈퇴
  *
- * 지금은 실제 조회·토큰 저장·계정 API 없이 mock 으로 화면 흐름만 확인합니다.
+ * 로그아웃은 인증 서비스로 연결해요. 사용자 조회·수정은 mock을 유지하고 서버 모드 탈퇴는 막아요.
  */
 
 import {
@@ -22,12 +24,6 @@ import { clearSelectedRoute } from '@/stores/route-store';
 const MOCK_DELAY_MS = 700;
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-/** mock 사용자 (앱이 켜져 있는 동안 닉네임 수정 결과를 기억) */
-let mockUser: User = {
-    id: '0192f3a4-7b1c-7c3e-9a10-5d2e8f6b1a01',
-    nickname: '민지',
-    createdAt: '2026-10-02T10:00:00+09:00',
-};
 
 /**
  * 닉네임 글자 수 (백엔드와 같은 기준)
@@ -64,11 +60,11 @@ export async function updateNickname(nickname: string, failForTest = false): Pro
     if (failForTest) throw new UserError('NETWORK_ERROR', '저장하지 못했어요. 잠시 후 다시 시도해 주세요.');
     const message = validateNickname(nickname);
     if (message) throw new UserError('VALIDATION_ERROR', message);
-    mockUser = { ...mockUser, nickname: nickname.trim() };
+    setMockUser({ ...mockUser, nickname: nickname.trim() });
     return mockUser;
 }
 
-/** 4.1 카카오 로그인 mock: 로그인 상태로 바꿉니다. TODO: 카카오 SDK + POST /auth/kakao 연동 */
+/** 화면 확인용 mock 로그인 상태로 바꿔요. */
 export function mockKakaoLogin() {
     signIn({ userId: mockUser.id, nickname: mockUser.nickname });
 }
@@ -77,9 +73,13 @@ export function mockKakaoLogin() {
  * 4.3 로그아웃 (#40)
  * 성공하면 mock 로그인 상태와 이전 사용자의 화면 데이터(선택 경로)를 지웁니다.
  * failForTest 가 true 면 네트워크 실패를 흉내 냅니다(실패 상태 확인용).
- * TODO: POST /auth/logout { refreshToken } 호출, 저장한 Access·Refresh Token 삭제
  */
 export async function logout(failForTest = false): Promise<void> {
+    if (!useMock()) {
+        await logoutSession();
+        clearSelectedRoute();
+        return;
+    }
     await wait(MOCK_DELAY_MS);
     if (failForTest) throw new UserError('NETWORK_ERROR', '로그아웃하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.');
     signOut();
@@ -94,6 +94,7 @@ export async function logout(failForTest = false): Promise<void> {
  * TODO: DELETE /users/me 호출, 저장한 Access·Refresh Token 삭제
  */
 export async function withdraw(failForTest = false): Promise<void> {
+    if (!useMock()) throw new UserError('VALIDATION_ERROR', '회원 탈퇴는 아직 준비 중이에요.');
     await wait(MOCK_DELAY_MS);
     if (failForTest) throw new UserError('NETWORK_ERROR', '탈퇴하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.');
     signOut();

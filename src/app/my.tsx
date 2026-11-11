@@ -1,3 +1,5 @@
+import { useMock } from '@/services/api/config';
+import { getSession } from '@/stores/auth-store';
 import { ComponentProps, ReactNode, useCallback, useEffect, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import {
@@ -33,7 +35,7 @@ const DIVIDER = '#e6e9ef';
 
 type IoniconName = ComponentProps<typeof Ionicons>['name'];
 type Sheet = 'nickname' | 'logout' | 'withdraw' | null;
-type Load = { kind: 'loading' } | { kind: 'error' } | { kind: 'done'; user: User };
+type Load = { kind: 'loading' } | { kind: 'error' } | { kind: 'done'; user: { nickname: string } };
 
 /** 앱 권한 상태 (TODO: expo-image-picker·expo-location 권한 조회로 교체) */
 const MOCK_PERMISSIONS: { key: string; label: string; granted: boolean }[] = [
@@ -48,7 +50,7 @@ const TAB_BAR_CONTENT_HEIGHT = 58;
  *
  * 내 정보(닉네임·로그인 방식), 앱 권한, 로그아웃·회원 탈퇴.
  * 닉네임 수정·로그아웃·회원 탈퇴는 상세설계서대로 아래에서 올라오는 시트로 엽니다.
- * 실제 사용자 조회·토큰 저장·계정 API 는 연동하지 않았습니다(services/user.ts mock).
+ * 서버 모드는 확인된 세션 닉네임만 표시하고, 미확인 상태는 기본 문구로 보여줘요.
  */
 export default function MyScreen() {
     const insets = useSafeAreaInsets();
@@ -72,7 +74,8 @@ export default function MyScreen() {
     const loadUser = useCallback(async () => {
         setLoad({ kind: 'loading' });
         try {
-            const user = await fetchMe(failNext);
+            const session = getSession();
+            const user = useMock() ? await fetchMe(failNext) : { nickname: session?.nickname ?? '사용자' };
             setLoad({ kind: 'done', user });
         } catch {
             setLoad({ kind: 'error' });
@@ -145,7 +148,7 @@ export default function MyScreen() {
                         </View>
                         <Pressable
                             style={({ pressed }) => [styles.smallButton, pressed && styles.pressed]}
-                            onPress={() => setSheet('nickname')}
+                            onPress={() => useMock() ? setSheet('nickname') : setToast('닉네임 수정은 아직 준비 중이에요.')}
                             accessibilityRole="button"
                         >
                             <Text style={styles.smallButtonText}>닉네임 수정</Text>
@@ -191,7 +194,7 @@ export default function MyScreen() {
                     </Pressable>
                     <Pressable
                         style={({ pressed }) => [styles.listRow, styles.listDivider, pressed && styles.pressed]}
-                        onPress={() => setSheet('withdraw')}
+                        onPress={() => useMock() ? setSheet('withdraw') : setToast('회원 탈퇴는 아직 준비 중이에요.')}
                         accessibilityRole="button"
                     >
                         <Text style={styles.listLabel}>회원 탈퇴</Text>
@@ -248,7 +251,7 @@ export default function MyScreen() {
                         setFailLogout(false); // 다시 시도하면 성공하도록
                         await logout(fail);
                         // 로그인 상태를 지운 뒤, 이전 화면 기록 없이 로그인 화면으로 이동
-                        resetToLogin();
+                        if (useMock()) resetToLogin();
                     }}
                 />
             )}
