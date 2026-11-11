@@ -556,3 +556,237 @@ test('서버 모드에서 고른 서버 역(id 포함)을 호출 화면에 그�
     runtime.screen.clearRecentStations();
     runtime.unmount();
 });
+
+/* ---------- 혼잡도 조회 (#86, 명세 6.2) ---------- */
+
+const congestionData = (overrides = {}) => ({
+    stationId: 222, lineId: 2, direction: 'INNER', dayType: 'WEEKDAY', slotStart: '08:00', slotDate: '2026-11-11',
+    firstTrain: false, supported: true, pct: 78, level: 'NORMAL', levelLabel: '보통', source: 'PREDICTED', ...overrides,
+});
+
+async function mockCongestion(runtime, service, query, mock) {
+    const result = service.fetchCongestion(query, mock);
+    runtime.advance(500);
+    return result;
+}
+
+test('혼잡도 서버 요청: 쿼리 값·date 가 있으면 dayType 생략·방향값 그대로', async () => {
+    const server = createRuntime(serverEnv);
+    const service = server.load('src/services/congestion.ts');
+    const calls = [];
+    server.context.fetch = async url => { calls.push(url); return jsonResponse({ success: true, data: congestionData() }); };
+    await service.fetchCongestion({ stationId: 222, lineId: 2, direction: 'INNER', time: '08:10', date: '2026-11-11', dayType: 'SUNDAY' });
+    assert.equal(calls[0], 'https://example.test/api/v1/congestion?stationId=222&lineId=2&direction=INNER&time=08%3A10&date=2026-11-11');
+    await service.fetchCongestion({ stationId: 222, lineId: 2, direction: 'INNER', time: '08:10', dayType: 'SATURDAY' });
+    assert.equal(calls[1], 'https://example.test/api/v1/congestion?stationId=222&lineId=2&direction=INNER&time=08%3A10&dayType=SATURDAY');
+    // 1호선 UP(소요산 방향)·DOWN(인천·신창 방향)을 포함해 방향값을 바꾸지 않고 그대로 실어요.
+    for (const [lineId, direction] of [[1, 'UP'], [1, 'DOWN'], [2, 'INNER'], [2, 'OUTER'], [6, 'LOOP']]) {
+        await service.fetchCongestion({ stationId: 150, lineId, direction, time: '00:00', dayType: 'WEEKDAY' });
+        const params = new URL(calls.at(-1)).searchParams;
+        assert.equal(params.get('lineId'), String(lineId));
+        assert.equal(params.get('direction'), direction);
+        assert.equal(params.get('time'), '00:00');
+    }
+    // 서버 모드에서는 mock 상태 인자를 무시하고 서버를 불러요.
+    await service.fetchCongestion({ stationId: 222, lineId: 2, direction: 'INNER', time: '08:10', dayType: 'WEEKDAY' }, 'error');
+    assert.equal(calls.length, 8);
+    assert.equal(server.timers.size, 0);
+});
+
+test('혼잡도 응답 검사: 정상·데이터 없음 통과, 형식 오류는 UNKNOWN_ERROR', async () => {
+    const server = createRuntime(serverEnv);
+    const service = server.load('src/services/congestion.ts');
+    const { toCongestion } = server.load('src/types/congestion.ts');
+    const query = { stationId: 222, lineId: 2, direction: 'INNER', time: '08:10', date: '2026-11-11' };
+    const respond = data => { server.context.fetch = async () => jsonResponse({ success: true, data }); };
+
+    respond({ ...congestionData({ source: 'ESTIMATED' }), extra: 1 });
+    const ok = await service.fetchCongestion(query);
+    assert.deepEqual(plain(ok), congestionData({ source: 'ESTIMATED' }));
+    assert.deepEqual(plain(toCongestion(ok)), { supported: true, kind: 'ESTIMATED', pct: 78, level: 'NORMAL', levelLabel: '보통' });
+
+    // 데이터 없음(200): 네 값은 보지 않고 null 로 돌려줘요. slotDate 는 date 가 없으면 null 이에요.
+    for (const empty of [
+        congestionData({ supported: false, pct: null, level: null, levelLabel: null, source: null, slotDate: null }),
+        congestionData({ supported: false, pct: 12, level: '이상한값', levelLabel: 3, source: 'X', slotDate: null }),
+        congestionData({ supported: false, direction: 'INNER', lineId: 1, firstTrain: true, slotStart: '05:30' }),
+    ]) {
+        respond(empty);
+        const data = await service.fetchCongestion(query);
+        assert.equal(data.supported, false);
+        assert.deepEqual([data.pct, data.level, data.levelLabel, data.source], [null, null, null, null]);
+        assert.deepEqual(plain(toCongestion(data)), { supported: false, kind: null, pct: null, level: null, levelLabel: null });
+    }
+
+    const broken = [
+        null, {}, [],
+        ...['stationId', 'lineId', 'direction', 'dayType', 'slotStart', 'slotDate', 'firstTrain', 'supported']
+            .map(key => { const data = congestionData(); delete data[key]; return data; }),
+        congestionData({ stationId: '222' }),
+        congestionData({ direction: 'NORTH' }),
+        congestionData({ dayType: 'HOLIDAY' }),
+        congestionData({ slotStart: '8:00' }),
+        congestionData({ slotDate: '2026/11/11' }),
+        congestionData({ firstTrain: 'false' }),
+        congestionData({ supported: 'true' }),
+        // supported=true 인데 값이 빠졌거나 형식이 달라요.
+        ...['pct', 'level', 'levelLabel', 'source'].map(key => congestionData({ [key]: null })),
+        congestionData({ level: 'BUSY' }),
+        congestionData({ pct: '78' }),
+        congestionData({ source: undefined, kind: 'PREDICTED' }),
+    ];
+    for (const data of broken) {
+        respond(data);
+        await assert.rejects(service.fetchCongestion(query), error => error.code === 'UNKNOWN_ERROR', JSON.stringify(data));
+    }
+    assert.equal(server.timers.size, 0);
+});
+
+test('혼잡도 오류 코드: 400·401·404(STATION_NOT_FOUND·NOT_FOUND)를 code 그대로 구분', async () => {
+    const server = createRuntime(serverEnv);
+    const service = server.load('src/services/congestion.ts');
+    const { ApiError, API_ERROR_MESSAGES, isAuthError } = server.load('src/services/api/errors.ts');
+    const query = { stationId: 222, lineId: 2, direction: 'INNER', time: '08:10', dayType: 'WEEKDAY' };
+    const cases = [
+        ['VALIDATION_ERROR', 400, null],
+        ['AUTH_REQUIRED', 401, null],
+        ['TOKEN_EXPIRED', 401, null],
+        ['TOKEN_INVALID', 401, null],
+        ['STATION_NOT_FOUND', 404, null],
+        ['NOT_FOUND', 404, { lineId: 2 }],
+    ];
+    for (const [code, status, details] of cases) {
+        server.context.fetch = async () => jsonResponse({ success: false, error: { code, message: '', details } }, status);
+        await assert.rejects(service.fetchCongestion(query), error => {
+            assert.ok(error instanceof ApiError);
+            assert.equal(error.code, code);
+            assert.equal(error.status, status);
+            assert.equal(error.message, API_ERROR_MESSAGES[code]);
+            assert.deepEqual(plain(error.details), details);
+            assert.equal(isAuthError(error), status === 401);
+            return true;
+        });
+    }
+    assert.equal(API_ERROR_MESSAGES.NOT_FOUND, '해당 노선에서 그 역의 혼잡도를 찾지 못했어요.');
+});
+
+test('혼잡도 잘못된 요청은 서버를 부르지 않고 VALIDATION_ERROR(400), mock 도 같음', async () => {
+    const server = createRuntime(serverEnv);
+    const service = server.load('src/services/congestion.ts');
+    let count = 0;
+    server.context.fetch = async () => { count++; return jsonResponse({ success: true, data: congestionData() }); };
+    const base = { stationId: 222, lineId: 2, direction: 'INNER', time: '08:10', dayType: 'WEEKDAY' };
+    const invalid = [
+        { ...base, time: '24:00' },
+        { ...base, time: '8:10' },
+        { ...base, time: '08:60' },
+        { ...base, time: undefined },
+        { ...base, dayType: undefined },
+        { ...base, dayType: 'HOLIDAY' },
+        { ...base, dayType: undefined, date: '2026-11-31' },
+        { ...base, date: '2026/11/11' },
+        { ...base, date: '' },
+        { ...base, direction: 'up' },
+        { ...base, direction: undefined },
+        { ...base, stationId: 0 },
+        { ...base, stationId: 1.5 },
+        { ...base, lineId: Number.NaN },
+    ];
+    const mockRuntime = createRuntime();
+    const mockService = mockRuntime.load('src/services/congestion.ts');
+    for (const query of invalid) {
+        await assert.rejects(service.fetchCongestion(query), error => error.code === 'VALIDATION_ERROR' && error.status === 400, JSON.stringify(query));
+        await assert.rejects(mockService.fetchCongestion(query), error => error.code === 'VALIDATION_ERROR' && error.status === 400, JSON.stringify(query));
+    }
+    assert.equal(count, 0);
+    assert.equal(mockRuntime.timers.size, 0);
+    // 경계값은 통과해요: 00:00·23:59, date 가 있으면 dayType 이 없어도 돼요.
+    await service.fetchCongestion({ ...base, time: '00:00' });
+    await service.fetchCongestion({ ...base, time: '23:59' });
+    await service.fetchCongestion({ ...base, dayType: undefined, date: '2028-02-29' });
+    assert.equal(count, 3);
+});
+
+test('resolveSlot: 05:30 시작·39칸·자정 이후 전날 영업일·01:00~05:29 첫차·영업일 dayType', () => {
+    const { resolveSlot, CONGESTION_SLOT_STARTS, FIRST_TRAIN_SLOT } = createRuntime().load('src/services/congestion.ts');
+    assert.equal(FIRST_TRAIN_SLOT, '05:30');
+    assert.equal(CONGESTION_SLOT_STARTS.length, 39);
+    assert.deepEqual(plain(CONGESTION_SLOT_STARTS.slice(0, 2)), ['05:30', '06:00']);
+    assert.deepEqual(plain(CONGESTION_SLOT_STARTS.slice(-4)), ['23:00', '23:30', '00:00', '00:30']);
+    // 2026-11-13 금, 11-14 토, 11-15 일, 11-16 월
+    const at = (day, hour, minute) => new Date(2026, 10, day, hour, minute);
+    const cases = [
+        [at(13, 5, 30), { slotStart: '05:30', slotDate: '2026-11-13', firstTrain: false, dayType: 'WEEKDAY' }],
+        [at(13, 14, 0), { slotStart: '14:00', slotDate: '2026-11-13', firstTrain: false, dayType: 'WEEKDAY' }],
+        [at(13, 23, 45), { slotStart: '23:30', slotDate: '2026-11-13', firstTrain: false, dayType: 'WEEKDAY' }],
+        [at(13, 23, 59), { slotStart: '23:30', slotDate: '2026-11-13', firstTrain: false, dayType: 'WEEKDAY' }],
+        [at(14, 0, 10), { slotStart: '00:00', slotDate: '2026-11-13', firstTrain: false, dayType: 'WEEKDAY' }],
+        [at(14, 0, 59), { slotStart: '00:30', slotDate: '2026-11-13', firstTrain: false, dayType: 'WEEKDAY' }],
+        [at(14, 1, 0), { slotStart: '05:30', slotDate: '2026-11-14', firstTrain: true, dayType: 'SATURDAY' }],
+        [at(14, 3, 0), { slotStart: '05:30', slotDate: '2026-11-14', firstTrain: true, dayType: 'SATURDAY' }],
+        [at(14, 5, 29), { slotStart: '05:30', slotDate: '2026-11-14', firstTrain: true, dayType: 'SATURDAY' }],
+        [at(15, 0, 20), { slotStart: '00:00', slotDate: '2026-11-14', firstTrain: false, dayType: 'SATURDAY' }],
+        [at(16, 0, 40), { slotStart: '00:30', slotDate: '2026-11-15', firstTrain: false, dayType: 'SUNDAY' }],
+        [new Date(2026, 11, 1, 0, 5), { slotStart: '00:00', slotDate: '2026-11-30', firstTrain: false, dayType: 'WEEKDAY' }],
+    ];
+    for (const [date, expected] of cases) assert.deepEqual(plain(resolveSlot(date)), expected, date.toString());
+    // 하루 1분 단위로 모든 결과가 39칸 안에 있어요.
+    for (let minute = 0; minute < 24 * 60; minute++) {
+        assert.ok(CONGESTION_SLOT_STARTS.includes(resolveSlot(at(13, 0, minute)).slotStart));
+    }
+});
+
+test('mock 혼잡도: slotDate·dayType 규칙, 여러 단계·데이터 없음·첫차·오류 상태', async () => {
+    const runtime = createRuntime();
+    const service = runtime.load('src/services/congestion.ts');
+    const { toCongestion } = runtime.load('src/types/congestion.ts');
+    const { ApiError } = runtime.load('src/services/api/errors.ts');
+    runtime.context.fetch = async () => { throw new Error('mock 모드에서는 서버를 부르지 않아야 해요.'); };
+    const base = { stationId: 222, lineId: 2, direction: 'INNER' };
+
+    // date 가 있으면 영업일 날짜·영업일 dayType(요청 dayType 무시). 토요일 00:10 → 금요일 영업일.
+    let data = await mockCongestion(runtime, service, { ...base, time: '00:10', date: '2026-11-14', dayType: 'SUNDAY' });
+    assert.deepEqual([data.slotStart, data.slotDate, data.dayType, data.firstTrain], ['00:00', '2026-11-13', 'WEEKDAY', false]);
+    data = await mockCongestion(runtime, service, { ...base, time: '14:00', date: '2026-11-14' });
+    assert.deepEqual([data.slotStart, data.slotDate, data.dayType, data.firstTrain], ['14:00', '2026-11-14', 'SATURDAY', false]);
+    data = await mockCongestion(runtime, service, { ...base, time: '03:00', date: '2026-11-15' });
+    assert.deepEqual([data.slotStart, data.slotDate, data.dayType, data.firstTrain], ['05:30', '2026-11-15', 'SUNDAY', true]);
+    // date 가 없으면 slotDate 는 null, dayType 은 요청 값 그대로예요.
+    for (const [time, slotStart, firstTrain] of [['14:00', '14:00', false], ['03:00', '05:30', true], ['00:40', '00:30', false]]) {
+        data = await mockCongestion(runtime, service, { ...base, time, dayType: 'SATURDAY' });
+        assert.deepEqual([data.slotStart, data.slotDate, data.dayType, data.firstTrain], [slotStart, null, 'SATURDAY', firstTrain]);
+    }
+
+    // 여러 단계가 나오고, 출처는 MOCK 이에요.
+    const levels = new Set();
+    for (const stationId of [220, 221, 222, 223]) {
+        for (const time of ['08:00', '14:00']) {
+            const item = await mockCongestion(runtime, service, { stationId, lineId: 2, direction: 'OUTER', time, dayType: 'WEEKDAY' });
+            assert.equal(item.supported, true);
+            assert.equal(item.source, 'MOCK');
+            levels.add(item.level);
+        }
+    }
+    assert.ok(levels.size >= 3);
+
+    // 데이터 없음: 역 109, 그 노선에 없는 방향(1호선 INNER, 2호선 UP)은 오류가 아닌 회색이에요.
+    for (const query of [
+        { stationId: 109, lineId: 1, direction: 'UP', time: '14:00', dayType: 'WEEKDAY' },
+        { stationId: 150, lineId: 1, direction: 'INNER', time: '14:00', dayType: 'WEEKDAY' },
+        { stationId: 222, lineId: 2, direction: 'UP', time: '14:00', dayType: 'WEEKDAY' },
+    ]) {
+        const empty = await mockCongestion(runtime, service, query);
+        assert.deepEqual(plain(toCongestion(empty)), { supported: false, kind: null, pct: null, level: null, levelLabel: null });
+        assert.equal(empty.direction, query.direction);
+    }
+    // 1호선 UP·DOWN 은 정상이에요.
+    for (const direction of ['UP', 'DOWN']) {
+        const item = await mockCongestion(runtime, service, { stationId: 150, lineId: 1, direction, time: '14:00', dayType: 'WEEKDAY' });
+        assert.equal(item.supported, true);
+        assert.equal(item.direction, direction);
+    }
+
+    await assert.rejects(mockCongestion(runtime, service, { ...base, time: '14:00', dayType: 'WEEKDAY' }, 'error'), error => error instanceof ApiError && error.code === 'INTERNAL_ERROR' && error.status === 500);
+    await assert.rejects(mockCongestion(runtime, service, { ...base, time: '14:00', dayType: 'WEEKDAY' }, 'network'), error => error instanceof ApiError && error.code === 'NETWORK_ERROR');
+    assert.equal(runtime.timers.size, 0);
+});

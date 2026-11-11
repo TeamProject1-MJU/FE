@@ -8,6 +8,7 @@ export const API_ERROR_MESSAGES: Readonly<Record<string, string>> = {
     TOKEN_INVALID: '로그인 정보를 확인할 수 없어요. 다시 로그인해 주세요.',
     STATION_NOT_FOUND: '역 정보를 찾지 못했어요.',
     STATION_UNSUPPORTED: '서비스에서 지원하지 않는 역이에요.',
+    NOT_FOUND: '해당 노선에서 그 역의 혼잡도를 찾지 못했어요.',
 };
 
 export class ApiError extends Error {
