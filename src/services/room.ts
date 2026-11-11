@@ -1,7 +1,7 @@
 /**
  * 약속방 서비스 (#42, API 명세 v1.12 7.1~7.3, 7.5, 7.8)
  *
- * #94: 7.3 목록·7.4 상세·7.6 멤버 조회는 서버 모드를 지원해요.
+ * #94·#97: 7.1 생성·7.2 참여·7.3 목록·7.4 상세·7.6 멤버 조회는 서버 모드를 지원해요.
  * TODO: 나머지 API는 기존 mock을 유지하고 후속 이슈에서 연동해요.
  * - GET    /rooms                    내 방 목록
  * - POST   /rooms                    방 생성 { name, appointmentAt } (정원 4명 고정)
@@ -18,15 +18,15 @@
  * - DELETE /rooms/{roomId}/station-proposals/{proposalId}        후보 삭제 (7.16, 제안자 또는 OWNER, #50)
  * - PUT    /rooms/{roomId}/station-proposals/{proposalId}/vote   참고용 투표 (7.17, 1인 1표, #50)
  *
- * 지금은 앱이 켜져 있는 동안만 유지되는 mock 목록으로 생성·참여·수정·나가기 결과를 반영합니다.
+ * mock 모드는 앱 실행 중의 메모리 목록에 결과를 반영해요. 서버 생성·참여는 실제 응답을 공용 캐시에 반영해요.
  */
 
 import { MOCK_STATIONS } from '@/mocks/stations';
 import { useMock as isMockMode } from '@/services/api/config';
 import { fetchStation } from '@/services/station';
 import { getSession } from '@/stores/auth-store';
-import { fetchServerRoomDetail, fetchServerRoomMembers, fetchServerRooms } from '@/services/room-query';
-import { assertRoomCacheScope, getRoomCacheScope, readCachedMembers, readCachedRoom, subscribeRoomCacheReset } from '@/services/room-cache';
+import { createServerRoom, joinServerRoom, fetchServerRoomDetail, fetchServerRoomMembers, fetchServerRooms } from '@/services/room-query';
+import { assertRoomCacheScope, getRoomCacheScope, readCachedMembers, readCachedRoom, readCachedRoomCode, subscribeRoomCacheReset } from '@/services/room-cache';
 import { emitRoomMockChange } from '@/stores/room-mock-events';
 import {
     RoomError,
@@ -344,6 +344,15 @@ const inviteFailOnce = new Set<string>();
  * TODO: 실제 연동 시 GET /rooms/{roomId}/invite-code 호출로 교체
  */
 export async function fetchInviteCode(roomId: string, mock?: 'error'): Promise<{ roomCode: string }> {
+    if (!isMockMode()) {
+        const room = getMockRoom(roomId);
+        if (!room) throw new RoomError('ROOM_NOT_FOUND', '약속방을 찾을 수 없어요.');
+        if (room.myRole !== 'OWNER') throw new RoomError('NOT_ROOM_OWNER', '초대 코드는 방장만 볼 수 있어요.');
+        const roomCode = readCachedRoomCode(roomId);
+        if (roomCode) return { roomCode };
+        // TODO(#97 범위 밖, C-3): 7.9 조회 연동 전에는 가짜 코드를 발급하지 않아요.
+        throw new RoomError('UNKNOWN_ERROR', '초대 코드 조회는 아직 준비 중이에요.');
+    }
     await wait(MOCK_DELAY_MS);
     if (mock) inviteFailOnce.add(roomId);
 
@@ -395,6 +404,12 @@ export function mockTransferOwner(roomId: string, direction: 'give' | 'take') {
  * failForTest 가 true 면 실패를 흉내 냅니다(실패 상태 확인용).
  */
 export async function createRoom(request: CreateRoomRequest, failForTest = false): Promise<CreatedRoom> {
+    if (!isMockMode()) {
+        const name = typeof request?.name === 'string' ? request.name.trim() : '';
+        if (roomNameLength(name) === 0) throw new RoomError('VALIDATION_ERROR', '약속방 이름을 입력해 주세요.');
+        if (roomNameLength(name) > ROOM_NAME_MAX) throw new RoomError('VALIDATION_ERROR', `약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`);
+        return createServerRoom({ name, appointmentAt: request.appointmentAt });
+    }
     await wait(MOCK_DELAY_MS);
     if (failForTest) throw new RoomError('NETWORK_ERROR', '약속방을 만들지 못했어요. 잠시 후 다시 시도해 주세요.');
     const name = request.name.trim();
@@ -439,6 +454,11 @@ export function isValidRoomCode(code: string) {
  * - 성공하면 방 목록과 멤버 목록에 반영하고 roomId 를 돌려줍니다.
  */
 export async function joinRoom(roomCode: string): Promise<{ roomId: string }> {
+    if (!isMockMode()) {
+        const code = typeof roomCode === 'string' ? normalizeRoomCode(roomCode) : '';
+        if (!isValidRoomCode(code)) throw new RoomError('VALIDATION_ERROR', '초대 코드는 영문과 숫자 6자리예요.');
+        return joinServerRoom(code);
+    }
     await wait(MOCK_DELAY_MS);
     const code = normalizeRoomCode(roomCode);
     if (!isValidRoomCode(code)) throw new RoomError('VALIDATION_ERROR', '초대 코드는 영문과 숫자 6자리예요.');
