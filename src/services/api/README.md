@@ -193,8 +193,30 @@ await fetchRoomMembers(roomId); // GET /rooms/{roomId}/members
 - `getMockRoom`·`getMockMembers`는 서버 모드에서 캐시만 읽고 mock 방으로 대체하지 않아요. 후보·채팅 API는 mock을 유지하며 이 방 정보를 읽어요. 채팅은 캐시 상세를 우선 사용하고 없으면 실제 상세 조회를 해요. 추천은 #99부터 서버 8.1~8.3을 불러요(아래 "중간역 추천" 항목).
 - ROOM_NOT_FOUND·NOT_ROOM_MEMBER·NETWORK_ERROR·VALIDATION_ERROR·ROOM_BUSY는 같은 RoomError 코드로 전달해요. 형식 오류와 그 밖의 서버 오류는 UNKNOWN_ERROR예요. TOKEN_*과 공통 인증 오류는 ApiError 그대로 A-1에 맡겨요.
 - 서버 모드의 `fetchMyRooms`·`fetchRoomDetail`은 mock 실패·빈 목록 플래그를 무시해요. 화면의 로딩·빈 목록·재시도·접근 불가 표시는 실제 응답에 따라 동작해요.
-- 생성·참여·초대 코드·수정·출발역 변경·나가기·승계·후보·투표·채팅·WebSocket의 실제 API 연동은 범위 밖이에요. mock 데이터·이벤트를 서버 응답으로 표시하거나 저장하지 않아요.
+- 생성·참여는 아래 #97에서 연동해요. 초대 코드 조회·수정·출발역 변경·나가기·승계·후보·투표·채팅·WebSocket의 실제 API 연동은 범위 밖이에요. mock 데이터·이벤트를 서버 응답으로 표시하거나 저장하지 않아요.
 - 실서버 확인은 Swagger에서 같은 계정으로 방을 만든 뒤 웹에서 GET /rooms·상세·멤버 응답과 화면을 비교해요. 빈 계정, 일반 멤버/방장, 403·404도 확인해요. 테스트용 토큰 주입 코드와 `.env`는 커밋하지 않아요.
+
+
+## 방 생성·참여 (#97, 명세 7.1·7.2)
+
+```ts
+import { createRoom, joinRoom } from '@/services/room';
+
+const created = await createRoom({ name: '  금요일 모임  ', appointmentAt: null });
+// POST /rooms: { name: '금요일 모임', appointmentAt: null }. maxMembers는 보내지 않아요.
+const joined = await joinRoom('a3k9pz ');
+// POST /rooms/join: { roomCode: 'A3K9PZ' } → { roomId }
+```
+
+- 이름은 기존 `roomNameLength`대로 앞뒤 공백을 뺀 유니코드 코드 포인트 1~30자를 검사해요. 문자열이 아니거나 길이가 맞지 않으면 전송 전에 `VALIDATION_ERROR`예요. 선택 시각은 null 또는 시간대가 포함된 ISO 문자열이에요. mock 실패 플래그는 서버 모드에서 무시해요.
+- 201 응답을 `unknown`으로 검사해요. 서버의 id·roomCode·name·maxMembers·status·ownerId·appointmentAt은 그대로 사용하고, 응답에 없는 myRole(OWNER)·memberCount(1)·selectedStation(null)만 생성 규칙으로 채워요. 가입 시각·멤버 상세는 만들지 않아요.
+- 생성 요약과 코드를 같은 계정의 메모리 캐시에 반영해요. 생성 완료 화면의 표시·복사·공유는 응답의 `roomCode`를 사용해요. 이후 상세에서도 이 실행에서 확인한 코드는 사용할 수 있어요. 7.9 호출은 추가하지 않으며, 코드를 모르는 서버 방에 가짜 코드를 만들지 않아요.
+- 참여 코드는 `normalizeRoomCode`의 trim·대문자 변환 후 `isValidRoomCode`로 검사해요. 서버 입력 화면은 붙여넣기 전에 6자로 자르지 않으며, 내부 공백·기호·초과 글자를 임의로 삭제해 다른 유효 코드로 만들지 않아요. mock 입력은 기존 정리 동작을 유지해요.
+- 참여 성공 응답의 UUID를 확인한 뒤 기존 상세 GET으로 실제 역할·멤버 수를 받아 캐시와 목록을 갱신해요. POST 성공 뒤 GET만 실패하면 참여 결과를 실패로 바꾸지 않고 상세 화면에서 조회를 재시도해요. 생성·참여 POST 자체를 자동 재전송하지 않아요. 기존 A-1의 인증 갱신·재시도와 공통 10초 제한은 유지해요.
+- ROOM_CODE_INVALID(404)·ROOM_FULL/ALREADY_JOINED/ROOM_BUSY(409)·VALIDATION_ERROR(400)는 같은 RoomError 코드로, 네트워크·시간 초과는 NETWORK_ERROR로, 형식 오류·그 밖의 오류는 UNKNOWN_ERROR로 전달해요. TOKEN_*과 공통 인증 오류는 기존 A-1에 맡기며 화면에서 중복 안내하지 않아요.
+- ALREADY_JOINED는 성공으로 바꾸거나 자동 이동하지 않아요. 서버 오류의 유효한 details.roomId 또는 이 계정에서 확인한 코드·ID가 있으면 사용자가 해당 방으로 이동할 수 있어요. Swagger 예시처럼 details가 비어 있고 코드·ID도 모르면 참여 중인 방 목록 버튼을 보여 줘요.
+- 버튼 상태와 즉시 적용되는 ref로 빠른 연타·키보드 제출의 중복 요청을 막아요. 실패하면 입력을 유지하고 다시 누를 수 있어요. 화면을 떠난 뒤 늦은 응답으로 완료 화면이나 상세 이동을 실행하지 않아요. 계정이 바뀐 뒤 늦은 쓰기 응답은 이전 계정의 캐시·코드를 갱신하지 못해요. 생성·참여 전에 시작한 조회도 새 캐시를 덮거나 제거하지 못하며, 참여 후 상세는 이전 요청과 공유하지 않아요.
+- 실서버 확인: 같은 계정으로 웹 로그인 후 POST /rooms 201과 응답 코드·목록·상세를 비교해요. 두 번째 계정으로 소문자·앞뒤 공백 코드를 입력해 POST /rooms/join 200과 2명 멤버를 확인해요. 404·정원 초과·이미 참여·처리 중은 자동 검사와 가능한 실서버 조건에서 확인해요. 임시 토큰 주입 코드는 확인 후 제거하며 커밋하지 않아요.
 
 ## 중간역 추천 (#99, 명세 8.1·8.2·8.3)
 

@@ -137,7 +137,7 @@ export type RoomErrorCode =
 export class RoomError extends Error {
     code: RoomErrorCode;
 
-    constructor(code: RoomErrorCode, message: string) {
+    constructor(code: RoomErrorCode, message: string, readonly roomId?: string) {
         super(message);
         this.code = code;
     }

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { router } from 'expo-router';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -6,6 +6,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { formatAppointmentParam } from '@/constants/home-mock';
+import { useMock as isMockMode } from '@/services/api/config';
+import { ApiError, isAuthError } from '@/services/api/errors';
 import { getMockRoom, isValidRoomCode, joinRoom, normalizeRoomCode } from '@/services/room';
 import { RoomError, type RoomErrorCode } from '@/types/room';
 
@@ -21,7 +23,7 @@ const CODE_LENGTH = 6;
 /**
  * 약속방 입장 (#42·#44, 상세설계서 그림 27, API 명세 7.2 POST /rooms/join)
  *
- * 코드 정규화: 공백·기호를 빼고 대문자로 (서버 형식 ^[A-Z0-9]{6}$).
+ * 서버 입력은 앞뒤 공백을 빼고 대문자로 정리한 뒤 6자리 영문·숫자인지 검사해요.
  * mock 초대 코드
  * - A3K9PZ: 진행 중 방 입장, CFM7Q2: 약속역 확정된 방 입장
  * - FULL44: 정원 초과, BUSY99: 처리 중(다시 시도하면 입장), K7Q2MX: 이미 참여 중인 방
@@ -31,37 +33,53 @@ export default function JoinRoomScreen() {
     const insets = useSafeAreaInsets();
     const inputRef = useRef<TextInput>(null);
     const [code, setCode] = useState('');
-    const [error, setError] = useState<{ code: RoomErrorCode | 'UNKNOWN'; message: string } | null>(null);
+    const [error, setError] = useState<{ code: RoomErrorCode | 'UNKNOWN'; message: string; roomId?: string } | null>(null);
     const [joining, setJoining] = useState(false);
+    const submitting = useRef(false);
+    const mounted = useRef(true);
+    useEffect(() => {
+        mounted.current = true;
+        return () => { mounted.current = false; };
+    }, []);
 
     const goBack = () => (router.canGoBack() ? router.back() : router.replace('/rooms'));
     const formatOk = isValidRoomCode(code);
     const ready = formatOk && !joining;
 
+    const enterRoom = (roomId: string) => {
+        const room = getMockRoom(roomId);
+        router.replace({
+            pathname: '/rooms/[roomId]',
+            params: {
+                roomId,
+                roomName: room?.name ?? '',
+                appointmentAt: room?.appointmentAt ? formatAppointmentParam(new Date(room.appointmentAt)) : '',
+                maxMembers: String(room?.maxMembers ?? 4),
+            },
+        });
+    };
+
     const join = async () => {
-        if (!ready) return;
+        if (!ready || submitting.current) return;
+        submitting.current = true;
+        let succeeded = false;
         setJoining(true);
         setError(null);
         try {
             const { roomId } = await joinRoom(code);
-            const room = getMockRoom(roomId);
-            router.replace({
-                pathname: '/rooms/[roomId]',
-                params: {
-                    roomId,
-                    roomName: room?.name ?? '',
-                    appointmentAt: room?.appointmentAt ? formatAppointmentParam(new Date(room.appointmentAt)) : '',
-                    maxMembers: String(room?.maxMembers ?? 4),
-                },
-            });
+            succeeded = true;
+            if (mounted.current) enterRoom(roomId);
         } catch (caught) {
+            if (!mounted.current || caught instanceof ApiError && (isAuthError(caught) || caught.code.startsWith('TOKEN_'))) return;
             // 409(이미 참여·정원 초과·처리 중)도 성공으로 바꾸지 않고 안내만 합니다.
             setError(
                 caught instanceof RoomError
-                    ? { code: caught.code, message: caught.message }
+                    ? { code: caught.code, message: caught.message, roomId: caught.roomId }
                     : { code: 'UNKNOWN', message: '입장하지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해 주세요.' },
             );
-            setJoining(false);
+        } finally {
+            if (!succeeded) submitting.current = false;
+            if (mounted.current) setJoining(false);
         }
     };
 
@@ -105,13 +123,14 @@ export default function JoinRoomScreen() {
                         style={styles.hiddenInput}
                         value={code}
                         onChangeText={value => {
-                            // 붙여넣은 코드의 공백·기호를 빼고 대문자로 맞춥니다.
-                            setCode(normalizeRoomCode(value).replace(/[^A-Z0-9]/g, '').slice(0, CODE_LENGTH));
+                            const normalized = normalizeRoomCode(value);
+                            setCode(isMockMode() ? normalized.replace(/[^A-Z0-9]/g, '').slice(0, CODE_LENGTH) : normalized);
                             setError(null);
                         }}
                         autoCapitalize="characters"
                         autoCorrect={false}
-                        maxLength={CODE_LENGTH}
+                        maxLength={isMockMode() ? CODE_LENGTH : undefined}
+                        editable={!joining}
                         autoFocus
                         returnKeyType="done"
                         onSubmitEditing={join}
@@ -127,7 +146,7 @@ export default function JoinRoomScreen() {
                     </View>
                 ) : (
                     <Text style={styles.help}>
-                        {code.length === 0 ? '영문과 숫자 6자리예요' : `${code.length}/${CODE_LENGTH}자 입력`}
+                        {code.length === 0 || !formatOk ? '영문과 숫자 6자리예요' : `${code.length}/${CODE_LENGTH}자 입력`}
                     </Text>
                 )}
 
@@ -145,6 +164,16 @@ export default function JoinRoomScreen() {
                         </Text>
                     )}
                 </Pressable>
+
+                {error?.code === 'ALREADY_JOINED' && (
+                    <Pressable
+                        style={[styles.outlineButton, { marginTop: 12 }]}
+                        onPress={() => error.roomId ? enterRoom(error.roomId) : router.replace('/rooms')}
+                        accessibilityRole="button"
+                    >
+                        <Text style={styles.outlineText}>{error.roomId ? '참여 중인 방으로 가기' : '참여 중인 방 목록 보기'}</Text>
+                    </Pressable>
+                )}
 
                 <View style={styles.dividerRow}>
                     <View style={styles.divider} />

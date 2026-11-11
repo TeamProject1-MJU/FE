@@ -2430,6 +2430,378 @@ test('이전 방의 늦은 상세 응답은 새 방 화면을 덮지 않아요',
     r.unmount();
 });
 
+const createdRoomData = (overrides = {}) => ({
+    id: ROOM_QUERY_ID, roomCode: 'A3K9PZ', name: '서버가 저장한 모임', maxMembers: 4, status: 'OPEN',
+    ownerId: ROOM_QUERY_ME, appointmentAt: null, ...overrides,
+});
+const roomWriteButton = (view, label) => findElement(view, element => element.type === 'Pressable'
+    && findElement(element.props.children, child => child.type === 'Text' && child.props?.children === label));
+
+test('방 생성 서버 요청·인증·이름 정리·시각 null과 생성 응답의 세 필드·목록 캐시', async () => {
+    const r = roomQueryRuntime();
+    r.load('src/services/api/client.ts').setAccessTokenProvider(() => 'test-access');
+    r.respond(async () => jsonResponse({ success: true, data: [roomQuerySummary({ id: ROOM_QUERY_ID2 })] }));
+    await r.room.fetchMyRooms(); r.calls.length = 0;
+    for (const appointmentAt of [null, '2026-11-20T19:00:00+09:00', '2026-11-20T10:00:00.123456Z']) {
+        const raw = createdRoomData({ appointmentAt });
+        r.respond(async () => jsonResponse({ success: true, data: raw }, 201));
+        const created = await r.room.createRoom({ name: '  새 모임  ', appointmentAt, maxMembers: 9 }, true);
+        assert.deepEqual(plain(created), { ...raw, myRole: 'OWNER', memberCount: 1, selectedStation: null });
+        const call = r.calls.at(-1);
+        assert.equal(call.url, 'https://example.test/api/v1/rooms');
+        assert.equal(call.options.method, 'POST');
+        assert.equal(call.options.headers.Authorization, 'Bearer test-access');
+        assert.deepEqual(JSON.parse(call.options.body), { name: '새 모임', appointmentAt });
+        assert.equal(r.room.getMockRoom(ROOM_QUERY_ID).name, raw.name);
+        assert.equal(r.room.getMockRoom(ROOM_QUERY_ID).memberCount, 1);
+        assert.deepEqual(plain(r.room.getMockMembers(ROOM_QUERY_ID)), []); // joinedAt은 발명하지 않아요.
+        assert.deepEqual(plain(await r.room.fetchInviteCode(ROOM_QUERY_ID)), { roomCode: raw.roomCode });
+    }
+    assert.equal(r.calls.length, 3); // 코드 확인을 위한 별도 7.9 요청은 없어요.
+    assert.deepEqual(new Set(r.roomCache.readCachedRooms().map(room => room.id)), new Set([ROOM_QUERY_ID2, ROOM_QUERY_ID]));
+    assert.equal(Object.hasOwn(r.roomCache.readCachedRooms()[1], 'roomCode'), false);
+});
+
+test('방 생성 입력은 코드 포인트 1~30자·문자열·시간대를 검사하고 잘못된 요청은 전송하지 않아요', async () => {
+    const r = roomQueryRuntime();
+    r.respond(async () => jsonResponse({ success: true, data: createdRoomData() }, 201));
+    for (const name of ['', '   ', '😀'.repeat(31), null, 123]) {
+        await assert.rejects(r.room.createRoom({ name, appointmentAt: null }), { code: 'VALIDATION_ERROR' });
+    }
+    for (const appointmentAt of ['2026-11-20T19:00:00', 'not-a-date', 12, '2026-11-20T25:00:00Z']) {
+        await assert.rejects(r.room.createRoom({ name: '모임', appointmentAt }), { code: 'VALIDATION_ERROR' });
+    }
+    assert.equal(r.calls.length, 0);
+    for (const name of ['😀', '😀'.repeat(30)]) {
+        await r.room.createRoom({ name, appointmentAt: null });
+        assert.equal(JSON.parse(r.calls.at(-1).options.body).name, name);
+    }
+    await r.room.createRoom({ name: '시각 생략' });
+    assert.equal(JSON.parse(r.calls.at(-1).options.body).appointmentAt, null);
+});
+
+test('방 생성 필수 응답 누락·잘못된 타입은 UNKNOWN_ERROR이며 가짜 방·초대 코드를 캐시하지 않아요', async () => {
+    const mutations = Object.keys(createdRoomData()).map(key => data => { delete data[key]; });
+    mutations.push(data => { data.id = 'room-1'; }, data => { data.ownerId = ROOM_QUERY_OTHER; },
+        data => { data.name = ''; }, data => { data.name = 1; }, data => { data.name = 'a'.repeat(31); },
+        data => { data.maxMembers = '4'; }, data => { data.maxMembers = 5; }, data => { data.status = 'OTHER'; },
+        data => { data.roomCode = 'a3k9pz'; }, data => { data.roomCode = 'A3K9PZ7'; },
+        data => { data.appointmentAt = '2026-11-20T19:00:00'; });
+    for (const mutate of mutations) {
+        const r = roomQueryRuntime(); const data = createdRoomData(); mutate(data);
+        r.respond(async () => jsonResponse({ success: true, data }, 201));
+        await assert.rejects(r.room.createRoom({ name: '새 방', appointmentAt: null }), { code: 'UNKNOWN_ERROR' });
+        assert.equal(r.calls.length, 1); assert.deepEqual(plain(r.roomCache.readCachedRooms()), []);
+        assert.equal(r.roomCache.findCachedRoomIdByCode('A3K9PZ'), undefined);
+    }
+});
+
+test('방 참여는 코드 앞뒤 공백·소문자를 정리하고 실제 상세와 2명 멤버로 캐시를 갱신해요', async () => {
+    const r = roomQueryRuntime(); const detail = roomQueryDetail('MEMBER');
+    r.respond(async (_url, options) => jsonResponse({ success: true, data: options.method === 'POST' ? { roomId: ROOM_QUERY_ID } : detail }));
+    assert.deepEqual(plain(await r.room.joinRoom('  a3k9pz \n')), { roomId: ROOM_QUERY_ID });
+    assert.equal(r.calls[0].url, 'https://example.test/api/v1/rooms/join');
+    assert.deepEqual(JSON.parse(r.calls[0].options.body), { roomCode: 'A3K9PZ' });
+    assert.equal(r.calls[1].url, `https://example.test/api/v1/rooms/${ROOM_QUERY_ID}`);
+    assert.equal(r.calls[1].options.method, 'GET');
+    assert.equal(r.room.getMockRoom(ROOM_QUERY_ID).myRole, 'MEMBER');
+    assert.equal(r.roomCache.readCachedRooms()[0].memberCount, 2);
+    assert.deepEqual(plain(r.room.getMockMembers(ROOM_QUERY_ID)), detail.members);
+    assert.equal(r.roomCache.readCachedRoomCode(ROOM_QUERY_ID), undefined);
+});
+
+test('방 참여의 형식 오류는 요청 전에 거절하고 잘못된 roomId 응답으로 조회하지 않아요', async () => {
+    const r = roomQueryRuntime();
+    for (const code of ['', 'A3K9P', 'A3K9PZ7', 'a3 k9pz', 'a3k9p!', null, 123456]) {
+        await assert.rejects(r.room.joinRoom(code), { code: 'VALIDATION_ERROR' });
+    }
+    assert.equal(r.calls.length, 0);
+    for (const data of [null, {}, { roomId: 'room-1' }, { roomId: 12 }, []]) {
+        r.calls.length = 0;
+        r.respond(async () => jsonResponse({ success: true, data }));
+        await assert.rejects(r.room.joinRoom('a3k9pz'), { code: 'UNKNOWN_ERROR' });
+        assert.equal(r.calls.length, 1); assert.equal(r.room.getMockRoom(ROOM_QUERY_ID), undefined);
+    }
+});
+
+test('생성·참여 오류 404·409·400은 RoomError, TOKEN 계열은 원본 인증 오류로 전달해요', async () => {
+    for (const operation of ['create', 'join']) {
+        for (const [code, status] of [['ROOM_CODE_INVALID', 404], ['ROOM_FULL', 409], ['ALREADY_JOINED', 409], ['ROOM_BUSY', 409],
+            ['VALIDATION_ERROR', 400], ['TOKEN_EXPIRED', 401], ['TOKEN_INVALID', 401], ['TOKEN_FUTURE', 401], ['INTERNAL_ERROR', 500]]) {
+            const r = roomQueryRuntime();
+            r.load('src/services/api/client.ts').setTokenRefresher(null);
+            r.respond(async () => jsonResponse({ success: false, error: { code, details: {} } }, status));
+            const pending = operation === 'create' ? r.room.createRoom({ name: '모임', appointmentAt: null }) : r.room.joinRoom('A3K9PZ');
+            await assert.rejects(pending, error => error.code === (status === 500 ? 'UNKNOWN_ERROR' : code)
+                && (status !== 401 || error instanceof r.load('src/services/api/errors.ts').ApiError));
+            assert.equal(r.calls.length, 1); assert.deepEqual(plain(r.roomCache.readCachedRooms()), []);
+        }
+    }
+});
+
+test('참여 POST가 성공한 뒤 상세 조회만 실패하면 성공 roomId를 유지하고 POST를 재전송하지 않아요', async () => {
+    for (const outcome of ['network', 'ROOM_NOT_FOUND', 'NOT_ROOM_MEMBER', 'invalid']) {
+        const r = roomQueryRuntime();
+        r.respond(async (_url, options) => {
+            if (options.method === 'POST') return jsonResponse({ success: true, data: { roomId: ROOM_QUERY_ID } });
+            if (outcome === 'network') throw Error();
+            return outcome === 'invalid' ? jsonResponse({ success: true, data: {} })
+                : jsonResponse({ success: false, error: { code: outcome } }, outcome === 'ROOM_NOT_FOUND' ? 404 : 403);
+        });
+        assert.deepEqual(plain(await r.room.joinRoom('a3k9pz')), { roomId: ROOM_QUERY_ID });
+        assert.equal(r.calls.filter(call => call.options.method === 'POST').length, 1);
+        assert.equal(r.room.getMockRoom(ROOM_QUERY_ID), undefined);
+    }
+});
+
+test('이미 참여한 코드는 오류를 유지하며 확인된 방 ID만 제공하고 모르는 코드는 ID를 만들지 않아요', async () => {
+    for (const known of [false, true]) {
+        const r = roomQueryRuntime();
+        if (known) {
+            r.respond(async () => jsonResponse({ success: true, data: createdRoomData() }, 201));
+            await r.room.createRoom({ name: '모임', appointmentAt: null });
+        }
+        r.respond(async () => jsonResponse({ success: false, error: { code: 'ALREADY_JOINED', details: {} } }, 409));
+        await assert.rejects(r.room.joinRoom('a3k9pz'), error => error.code === 'ALREADY_JOINED' && error.roomId === (known ? ROOM_QUERY_ID : undefined));
+    }
+});
+
+test('생성·참여의 네트워크·10초 초과는 NETWORK_ERROR이며 별도 재시도하지 않아요', async () => {
+    for (const operation of ['create', 'join']) {
+        for (const timeout of [false, true]) {
+            const r = roomQueryRuntime();
+            r.respond((_url, options) => timeout
+                ? new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(Error())))
+                : Promise.reject(Error()));
+            const pending = operation === 'create' ? r.room.createRoom({ name: '모임', appointmentAt: null }) : r.room.joinRoom('A3K9PZ');
+            const rejected = assert.rejects(pending, { code: 'NETWORK_ERROR' });
+            await settle();
+            if (timeout) { assert.equal([...r.timers.values()][0].ms, 10000); r.advance(10000); }
+            await rejected; assert.equal(r.calls.length, 1); assert.equal(r.timers.size, 0);
+        }
+    }
+});
+
+test('계정이 바뀐 뒤 늦은 생성·참여 성공 또는 실패로 이전 방·코드를 재사용하지 않아요', async () => {
+    for (const operation of ['create', 'join']) {
+        for (const fail of [false, true]) {
+            const r = roomQueryRuntime(); let resolve;
+            r.respond(() => new Promise(done => { resolve = done; }));
+            const pending = operation === 'create' ? r.room.createRoom({ name: '모임', appointmentAt: null }) : r.room.joinRoom('A3K9PZ');
+            const rejected = assert.rejects(pending, { code: 'AUTH_REQUIRED' });
+            await settle(); await r.load('src/services/auth.ts').clearLocalSession();
+            r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_OTHER, nickname: '다음 계정' });
+            resolve(fail ? jsonResponse({ success: false, error: { code: 'ROOM_BUSY' } }, 409)
+                : jsonResponse({ success: true, data: operation === 'create' ? createdRoomData() : { roomId: ROOM_QUERY_ID } }));
+            await rejected;
+            assert.deepEqual(plain(r.roomCache.readCachedRooms()), []);
+            assert.equal(r.roomCache.findCachedRoomIdByCode('A3K9PZ'), undefined);
+        }
+    }
+});
+
+test('생성 코드 캐시는 상세·목록 갱신에 유지되고 권한·목록·계정 변경 시 재사용하지 않아요', async () => {
+    const r = roomQueryRuntime();
+    r.respond(async () => jsonResponse({ success: true, data: createdRoomData() }, 201));
+    await r.room.createRoom({ name: '모임', appointmentAt: null });
+    r.respond(async url => jsonResponse({ success: true, data: url.endsWith('/rooms') ? [roomQuerySummary()] : roomQueryDetail() }));
+    await r.room.fetchRoomDetail(ROOM_QUERY_ID); await r.room.fetchMyRooms();
+    assert.deepEqual(plain(await r.room.fetchInviteCode(ROOM_QUERY_ID)), { roomCode: 'A3K9PZ' });
+    r.respond(async () => jsonResponse({ success: true, data: roomQueryDetail('MEMBER') }));
+    await r.room.fetchRoomDetail(ROOM_QUERY_ID);
+    assert.equal(r.roomCache.readCachedRoomCode(ROOM_QUERY_ID), undefined);
+    await assert.rejects(r.room.fetchInviteCode(ROOM_QUERY_ID), { code: 'NOT_ROOM_OWNER' });
+    r.respond(async () => jsonResponse({ success: true, data: [] })); await r.room.fetchMyRooms();
+    assert.equal(r.roomCache.findCachedRoomIdByCode('A3K9PZ'), undefined);
+    r.respond(async () => jsonResponse({ success: true, data: roomQueryDetail() })); await r.room.fetchRoomDetail(ROOM_QUERY_ID);
+    const calls = r.calls.length;
+    await assert.rejects(r.room.fetchInviteCode(ROOM_QUERY_ID), { code: 'UNKNOWN_ERROR' });
+    assert.equal(r.calls.length, calls); // 알 수 없는 서버 코드 대신 가짜 코드나 7.9 호출을 만들지 않아요.
+});
+
+test('mock 생성·참여·이미 참여·정원 초과·처리 중 재시도는 서버 없이 유지해요', async () => {
+    const r = createRuntime(); const service = r.load('src/services/room.ts'); let calls = 0;
+    r.context.fetch = async () => { calls++; throw Error(); };
+    const created = await finishRoomMock(r, service.createRoom({ name: '  mock 모임  ', appointmentAt: null }));
+    assert.equal(created.name, 'mock 모임'); assert.equal(created.myRole, 'OWNER'); assert.equal(created.memberCount, 1);
+    assert.equal((await finishRoomMock(r, service.fetchInviteCode(created.id))).roomCode, created.roomCode);
+    for (const code of ['a3k9pz ', 'cfm7q2']) {
+        const joined = await finishRoomMock(r, service.joinRoom(code));
+        assert.equal(service.getMockRoom(joined.roomId).myRole, 'MEMBER');
+    }
+    for (const [code, error] of [['A3K9PZ', 'ALREADY_JOINED'], ['FULL44', 'ROOM_FULL'], ['BUSY99', 'ROOM_BUSY'], ['XXXXXX', 'ROOM_CODE_INVALID']]) {
+        const rejected = assert.rejects(service.joinRoom(code), { code: error }); await finishRoomMock(r, rejected);
+    }
+    await finishRoomMock(r, service.joinRoom('BUSY99')); assert.equal(calls, 0);
+});
+
+test('서버 생성 화면은 연타를 한 번만 보내고 생성 응답의 이름·초대 코드를 복사해요', async () => {
+    const r = roomQueryScreen('src/app/rooms/new.tsx'); let resolve; const copied = [];
+    r.external['expo-clipboard'].setStringAsync = async code => { copied.push(code); };
+    const calls = [];
+    r.context.fetch = (url, options) => { calls.push({ url, options }); return new Promise(done => { resolve = done; }); };
+    let view = r.render(); findElement(view, element => element.type === 'TextInput').props.onChangeText('  입력한 모임  ');
+    view = r.render(); const submit = roomWriteButton(view, '약속방 만들기');
+    const first = submit.props.onPress(); const second = submit.props.onPress();
+    await settle(); assert.equal(calls.length, 1);
+    assert.deepEqual(JSON.parse(calls[0].options.body), { name: '입력한 모임', appointmentAt: null });
+    view = r.render(); assert.ok(findElement(view, element => element.type === 'ActivityIndicator'));
+    assert.equal(findElement(view, element => element.type === 'TextInput').props.editable, false);
+    resolve(jsonResponse({ success: true, data: createdRoomData() }, 201)); await Promise.all([first, second]);
+    const completed = r.render(); const content = r.renderComponent(completed);
+    assert.ok(findElement(content, element => element.props?.children === '서버가 저장한 모임'));
+    assert.ok(findElement(content, element => element.props?.children === 'A3K9PZ'));
+    await findElement(content, element => element.props?.accessibilityLabel?.startsWith('초대 코드 A')).props.onPress();
+    assert.deepEqual(copied, ['A3K9PZ']); r.unmount();
+});
+
+test('서버 생성 화면은 실패해도 입력을 유지해 재시도하고 TOKEN 오류는 중복 안내하지 않아요', async () => {
+    for (const code of ['ROOM_BUSY', 'TOKEN_INVALID']) {
+        const r = roomQueryScreen('src/app/rooms/new.tsx'); let calls = 0;
+        r.context.fetch = async () => { calls++; return jsonResponse({ success: false, error: { code } }, code === 'TOKEN_INVALID' ? 401 : 409); };
+        let view = r.render(); findElement(view, element => element.type === 'TextInput').props.onChangeText('유지할 이름');
+        view = r.render(); await roomWriteButton(view, '약속방 만들기').props.onPress(); view = r.render();
+        assert.equal(findElement(view, element => element.type === 'TextInput').props.value, '유지할 이름');
+        const notice = findElement(view, element => element.type === 'Text' && typeof element.props?.children === 'string' && element.props.children.includes('잠시 후 다시 시도'));
+        assert.equal(!!notice, code === 'ROOM_BUSY');
+        if (code === 'ROOM_BUSY') {
+            r.context.fetch = async () => { calls++; return jsonResponse({ success: true, data: createdRoomData() }, 201); };
+            await roomWriteButton(view, '약속방 만들기').props.onPress(); assert.equal(calls, 2);
+            assert.equal(r.render().props.room.roomCode, 'A3K9PZ');
+        }
+        r.unmount();
+    }
+});
+
+test('서버 참여 화면은 공백 포함 붙여넣기와 연타를 처리하고 검증된 UUID의 상세로 이동해요', async () => {
+    const r = roomQueryScreen('src/app/rooms/join.tsx'); const routes = []; const calls = []; let resolve;
+    r.external['expo-router'].router.replace = route => routes.push(route);
+    r.context.fetch = async (url, options) => {
+        calls.push({ url, options });
+        if (options.method === 'POST') return await new Promise(done => { resolve = done; });
+        return jsonResponse({ success: true, data: roomQueryDetail('MEMBER') });
+    };
+    let view = r.render(); const input = findElement(view, element => element.type === 'TextInput');
+    assert.equal(input.props.maxLength, undefined); input.props.onChangeText(' a3k9pz ');
+    view = r.render(); const button = roomWriteButton(view, '입장하기');
+    assert.equal(findElement(view, element => element.type === 'TextInput').props.value, 'A3K9PZ');
+    const first = button.props.onPress(); const second = button.props.onPress(); await settle();
+    assert.equal(calls.length, 1);
+    resolve(jsonResponse({ success: true, data: { roomId: ROOM_QUERY_ID } })); await Promise.all([first, second]);
+    assert.equal(calls.filter(call => call.options.method === 'POST').length, 1);
+    assert.equal(routes.length, 1); assert.equal(routes[0].pathname, '/rooms/[roomId]'); assert.equal(routes[0].params.roomId, ROOM_QUERY_ID);
+    r.unmount();
+});
+
+test('참여 화면은 잘못된 문자·길이를 잘라 유효 코드로 만들지 않고 전송을 막아요', async () => {
+    const r = roomQueryScreen('src/app/rooms/join.tsx'); let calls = 0;
+    r.context.fetch = async () => { calls++; throw Error(); };
+    for (const code of ['A3K9PZ7', 'A3 K9PZ', 'A3K9P!']) {
+        let view = r.render(); findElement(view, element => element.type === 'TextInput').props.onChangeText(code);
+        view = r.render(); const button = roomWriteButton(view, '입장하기');
+        assert.equal(button.props.disabled, true); await button.props.onPress();
+    }
+    assert.equal(calls, 0); r.unmount();
+});
+
+test('참여 화면은 404·409 안내를 유지하고 이미 참여한 방 이동은 사용자 선택 후에만 해요', async () => {
+    for (const code of ['ROOM_CODE_INVALID', 'ROOM_FULL', 'ROOM_BUSY', 'ALREADY_JOINED', 'TOKEN_INVALID']) {
+        const r = roomQueryScreen('src/app/rooms/join.tsx'); const routes = [];
+        r.external['expo-router'].router.replace = route => routes.push(route);
+        r.context.fetch = async () => jsonResponse({ success: false, error: { code, details: {} } }, code === 'ROOM_CODE_INVALID' ? 404 : code === 'TOKEN_INVALID' ? 401 : 409);
+        let view = r.render(); findElement(view, element => element.type === 'TextInput').props.onChangeText('a3k9pz');
+        view = r.render(); await roomWriteButton(view, '입장하기').props.onPress(); view = r.render();
+        if (code !== 'TOKEN_INVALID') assert.equal(routes.length, 0);
+        assert.equal(!!findElement(view, element => element.type === 'View' && element.props?.accessibilityLiveRegion === 'polite'), code !== 'TOKEN_INVALID');
+        if (code === 'ALREADY_JOINED') {
+            const showList = roomWriteButton(view, '참여 중인 방 목록 보기'); assert.ok(showList);
+            showList.props.onPress(); assert.deepEqual(routes, ['/rooms']);
+        }
+        if (code === 'ROOM_BUSY') assert.ok(roomWriteButton(view, '다시 시도'));
+        r.unmount();
+    }
+});
+
+test('생성·참여 화면을 떠난 뒤 늦은 성공으로 완료 화면을 표시하거나 상세로 이동하지 않아요', async () => {
+    for (const operation of ['create', 'join']) {
+        const r = roomQueryScreen(operation === 'create' ? 'src/app/rooms/new.tsx' : 'src/app/rooms/join.tsx');
+        let resolve; const routes = [];
+        r.external['expo-router'].router.replace = route => routes.push(route);
+        r.context.fetch = async (_url, options) => options.method === 'POST'
+            ? await new Promise(done => { resolve = done; }) : jsonResponse({ success: true, data: roomQueryDetail('MEMBER') });
+        let view = r.render(); findElement(view, element => element.type === 'TextInput').props.onChangeText(operation === 'create' ? '모임' : 'A3K9PZ');
+        view = r.render(); const pending = roomWriteButton(view, operation === 'create' ? '약속방 만들기' : '입장하기').props.onPress();
+        await settle(); r.unmount();
+        resolve(jsonResponse({ success: true, data: operation === 'create' ? createdRoomData() : { roomId: ROOM_QUERY_ID } }, operation === 'create' ? 201 : 200));
+        await pending; assert.equal(routes.length, 0); assert.equal(r.render().props.room, undefined);
+    }
+});
+
+
+test('이미 참여한 방 ID가 확인된 경우에도 안내 후 버튼을 눌러야 상세로 이동해요', async () => {
+    const r = roomQueryScreen('src/app/rooms/join.tsx'); const routes = [];
+    r.external['expo-router'].router.replace = route => routes.push(route);
+    r.context.fetch = async () => jsonResponse({ success: true, data: createdRoomData() }, 201);
+    await r.load('src/services/room.ts').createRoom({ name: '모임', appointmentAt: null });
+    r.context.fetch = async () => jsonResponse({ success: false, error: { code: 'ALREADY_JOINED', details: {} } }, 409);
+    let view = r.render(); findElement(view, element => element.type === 'TextInput').props.onChangeText('a3k9pz');
+    view = r.render(); await roomWriteButton(view, '입장하기').props.onPress(); view = r.render();
+    assert.equal(routes.length, 0);
+    roomWriteButton(view, '참여 중인 방으로 가기').props.onPress();
+    assert.equal(routes.length, 1); assert.equal(routes[0].params.roomId, ROOM_QUERY_ID);
+    r.unmount();
+});
+
+test('방 생성도 기존 A-1의 만료 토큰 갱신을 거쳐 새 토큰으로 한 번만 재시도해요', async () => {
+    const r = roomQueryRuntime();
+    await r.load('src/services/token-storage.ts').saveTokens('old-access', 'old-refresh', () => true);
+    r.respond(async (url, options) => {
+        if (url.endsWith('/auth/refresh')) return jsonResponse({ success: true, data: { accessToken: 'new-access', refreshToken: 'new-refresh', accessTokenExpiresIn: 1800 } });
+        if (options.headers.Authorization === 'Bearer old-access') return jsonResponse({ success: false, error: { code: 'TOKEN_EXPIRED' } }, 401);
+        return jsonResponse({ success: true, data: createdRoomData() }, 201);
+    });
+    const created = await r.room.createRoom({ name: '모임', appointmentAt: null });
+    assert.equal(created.id, ROOM_QUERY_ID);
+    assert.equal(r.calls.filter(call => call.url.endsWith('/auth/refresh')).length, 1);
+    assert.equal(r.calls.filter(call => call.url.endsWith('/rooms')).length, 2);
+    assert.equal(r.calls.at(-1).options.headers.Authorization, 'Bearer new-access');
+    assert.equal(r.roomCache.readCachedRoomCode(ROOM_QUERY_ID), 'A3K9PZ');
+});
+
+
+test('생성 전의 늦은 빈 목록 조회가 방금 생성한 서버 방 캐시를 지우지 않아요', async () => {
+    const r = roomQueryRuntime(); let resolveOld;
+    r.respond(() => new Promise(resolve => { resolveOld = resolve; }));
+    const old = r.room.fetchMyRooms(); await settle();
+    r.respond(async () => jsonResponse({ success: true, data: createdRoomData() }, 201));
+    await r.room.createRoom({ name: '새 모임', appointmentAt: null });
+    resolveOld(jsonResponse({ success: true, data: [] })); await old;
+    assert.equal(r.roomCache.readCachedRooms()[0].id, ROOM_QUERY_ID);
+    assert.equal(r.roomCache.readCachedRoomCode(ROOM_QUERY_ID), 'A3K9PZ');
+});
+
+test('참여 후 상세는 이전 조회를 공유하지 않고 늦은 이전 성공·403으로 새 캐시가 바뀌지 않아요', async () => {
+    for (const denied of [false, true]) {
+        const r = roomQueryRuntime(); let resolveOld; let gets = 0;
+        r.respond(async (_url, options) => {
+            if (options.method === 'POST') return jsonResponse({ success: true, data: { roomId: ROOM_QUERY_ID } });
+            gets++;
+            if (gets === 1) return await new Promise(resolve => { resolveOld = resolve; });
+            return jsonResponse({ success: true, data: roomQueryDetail('MEMBER') });
+        });
+        const old = r.room.fetchRoomDetail(ROOM_QUERY_ID); await settle();
+        const observedOld = denied ? assert.rejects(old, { code: 'NOT_ROOM_MEMBER' }) : old;
+        await r.room.joinRoom('a3k9pz');
+        assert.equal(gets, 2);
+        resolveOld(denied ? jsonResponse({ success: false, error: { code: 'NOT_ROOM_MEMBER' } }, 403)
+            : jsonResponse({ success: true, data: roomQueryDetail('OWNER') }));
+        await observedOld;
+        assert.equal(r.roomCache.readCachedRooms()[0].myRole, 'MEMBER');
+        assert.equal(r.roomCache.readCachedRoomDetail(ROOM_QUERY_ID).ownerId, ROOM_QUERY_OTHER);
+        assert.equal(r.roomCache.findCachedRoomIdByCode('A3K9PZ'), ROOM_QUERY_ID);
+    }
+});
+
 test('추천 8.1·8.2·8.3 요청 URL·body·인증 헤더, mock 인자 무시', async () => {
     const r = recoRuntime();
     r.load('src/services/api/client.ts').setAccessTokenProvider(() => 'test-access');

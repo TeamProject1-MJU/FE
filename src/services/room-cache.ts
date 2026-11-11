@@ -1,10 +1,10 @@
 import { ApiError } from '@/services/api/errors';
 import { getSessionGeneration } from '@/services/auth';
 import { getAuthStatus, getSession } from '@/stores/auth-store';
-import type { RoomDetail, RoomMember, RoomStation, RoomSummary } from '@/types/room';
+import type { CreatedRoom, RoomDetail, RoomMember, RoomStation, RoomSummary } from '@/types/room';
 
 /** 서버에서 확인한 방 정보만 보관해요. mock 방을 섞거나 디스크에 저장하지 않아요. */
-type Entry = { summary?: RoomSummary; detail?: RoomDetail; members?: RoomMember[] };
+type Entry = { summary?: RoomSummary; detail?: RoomDetail; members?: RoomMember[]; roomCode?: string };
 const entries = new Map<string, Entry>();
 let listIds: string[] = [];
 let scope: string | null = null;
@@ -82,6 +82,7 @@ export function cacheRoomList(rooms: RoomSummary[], expected: string) {
             && previous.members.find(member => member.userId === getSession()?.userId)?.role === room.myRole;
         entries.set(room.id, {
             summary: cloneSummary(room),
+            ...(previous?.roomCode ? { roomCode: previous.roomCode } : {}),
             ...(keepMembers && previous?.detail ? { detail: { ...previous.detail, ...cloneSummary(room) } } : {}),
             ...(keepMembers && previous?.members ? { members: previous.members } : {}),
         });
@@ -91,7 +92,9 @@ export function cacheRoomList(rooms: RoomSummary[], expected: string) {
 export function cacheRoomDetail(room: RoomDetail, expected: string) {
     assertRoomCacheScope(expected);
     const detail = cloneDetail(room);
-    entries.set(room.id, { summary: cloneSummary(room), detail, members: cloneMembers(room.members) });
+    const roomCode = entries.get(room.id)?.roomCode;
+    entries.set(room.id, { summary: cloneSummary(room), detail, members: cloneMembers(room.members), ...(roomCode ? { roomCode } : {}) });
+    if (!listIds.includes(room.id)) listIds.push(room.id);
 }
 
 export function cacheRoomMembers(roomId: string, members: RoomMember[], expected: string) {
@@ -101,11 +104,12 @@ export function cacheRoomMembers(roomId: string, members: RoomMember[], expected
     const owner = members.find(member => member.role === 'OWNER');
     if (!mine || !owner) throw new ApiError('UNKNOWN_ERROR');
     if (!previous?.summary) {
-        entries.set(roomId, { members: cloneMembers(members) });
+        entries.set(roomId, { ...previous, members: cloneMembers(members) });
         return; // 멤버는 보관하되 상세·목록에 없는 가짜 방 정보를 만들지 않아요.
     }
     const summary = { ...previous.summary, memberCount: members.length, myRole: mine.role };
     entries.set(roomId, {
+        ...(previous.roomCode ? { roomCode: previous.roomCode } : {}),
         summary,
         members: cloneMembers(members),
         ...(previous.detail ? { detail: { ...previous.detail, ...summary, ownerId: owner.userId, members: cloneMembers(members) } } : {}),
@@ -117,4 +121,31 @@ export function removeCachedRoom(roomId: string, expected: string) {
     assertRoomCacheScope(expected);
     entries.delete(roomId);
     listIds = listIds.filter(id => id !== roomId);
+}
+
+
+/** 7.1이 보장하는 생성 직후 요약만 추가해요. 가입 시각이나 멤버 상세는 만들지 않아요. */
+export function cacheCreatedRoom(room: CreatedRoom, expected: string) {
+    assertRoomCacheScope(expected);
+    entries.set(room.id, { summary: cloneSummary(room), roomCode: room.roomCode });
+    if (!listIds.includes(room.id)) listIds.push(room.id);
+}
+
+/** 참여 후 인원·역할은 7.4로 다시 받아요. 이전 상세를 새 참여 결과로 재사용하지 않아요. */
+export function cacheJoinedRoom(roomId: string, roomCode: string, expected: string) {
+    assertRoomCacheScope(expected);
+    entries.set(roomId, { roomCode });
+    listIds = listIds.filter(id => id !== roomId);
+}
+
+/** 7.9는 아직 연동하지 않아요. 이 세션의 서버 생성 응답으로 확인한 코드만 보여 줘요. */
+export function readCachedRoomCode(roomId: string): string | undefined {
+    syncScope();
+    const entry = entries.get(roomId);
+    return entry?.summary?.myRole === 'OWNER' ? entry.roomCode : undefined;
+}
+
+export function findCachedRoomIdByCode(roomCode: string): string | undefined {
+    syncScope();
+    return [...entries].find(([, entry]) => entry.roomCode === roomCode)?.[0];
 }

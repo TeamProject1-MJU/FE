@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
 import { ActivityIndicator, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
@@ -8,6 +8,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { CalendarModal, TimeWheelModal } from '@/components/rooms/appointment-picker';
 import { formatAppointmentParam, formatMonthDay, formatTime } from '@/constants/home-mock';
+import { ApiError, isAuthError } from '@/services/api/errors';
 import { createRoom, ROOM_NAME_MAX, roomNameLength } from '@/services/room';
 import { RoomError, type CreatedRoom } from '@/types/room';
 
@@ -24,7 +25,7 @@ const MINT_SOFT = '#e8f8f1';
 /**
  * 새 약속방 만들기 (#42·#43, 상세설계서 그림 26 ❸·그림 27 ❺, API 명세 7.1 POST /rooms)
  *
- * 방 이름(1~30자)과 선택 사항인 약속 시각을 받아 mock 으로 방을 만듭니다. 정원은 4명 고정.
+ * 방 이름(1~30자)과 선택 사항인 약속 시각으로 방을 만들어요. 서버·mock 모두 정원은 4명이에요.
  * 만든 사람이 방장(OWNER)이고 처음 인원은 1명입니다. 결과는 약속방 목록에도 반영됩니다.
  * 생성 후에는 초대 코드를 확인·복사하고 약속방으로 들어갑니다(초대 코드는 방장에게만, 그림 28 ❻).
  * 테스트용: /rooms/new?mock=error → 첫 생성 실패
@@ -41,12 +42,19 @@ export default function NewRoomScreen() {
     const [timeOpen, setTimeOpen] = useState(false);
     const [notice, setNotice] = useState('');
     const [saving, setSaving] = useState(false);
+    const submitting = useRef(false);
+    const mounted = useRef(true);
+    useEffect(() => {
+        mounted.current = true;
+        return () => { mounted.current = false; };
+    }, []);
 
     const goBack = () => (router.canGoBack() ? router.back() : router.replace('/rooms'));
 
     const nameLength = roomNameLength(roomName);
 
     const submit = async () => {
+        if (submitting.current) return;
         if (nameLength === 0) return setNotice('약속방 이름을 입력해 주세요.');
         if (nameLength > ROOM_NAME_MAX) return setNotice(`약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`);
         // 약속 시각은 선택 (명세: 시각 없는 방도 있음). 날짜·시간 중 하나만 고르면 안내합니다.
@@ -60,18 +68,23 @@ export default function NewRoomScreen() {
             if (at.getTime() < Date.now()) return setNotice('현재 이후의 약속 날짜와 시간을 선택해 주세요.');
         }
 
+        submitting.current = true;
+        let succeeded = false;
         setNotice('');
         setSaving(true);
         try {
             const fail = failNext;
             setFailNext(false); // 다시 시도하면 성공하도록
             const room = await createRoom({ name: roomName, appointmentAt: at ? at.toISOString() : null }, fail);
-            setCreated({ room, at });
+            succeeded = true;
+            if (mounted.current) setCreated({ room, at: room.appointmentAt ? new Date(room.appointmentAt) : null });
         } catch (error) {
+            if (!mounted.current || error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
             // 실패해도 입력값은 그대로 둡니다.
             setNotice(error instanceof RoomError ? error.message : '약속방을 만들지 못했어요. 다시 시도해 주세요.');
         } finally {
-            setSaving(false);
+            if (!succeeded) submitting.current = false;
+            if (mounted.current) setSaving(false);
         }
     };
 
@@ -109,6 +122,7 @@ export default function NewRoomScreen() {
                         placeholder="예: 금요일 저녁"
                         placeholderTextColor="#a1a8b8"
                         value={roomName}
+                        editable={!saving}
                         onChangeText={value => {
                             setRoomName(value);
                             setNotice('');
