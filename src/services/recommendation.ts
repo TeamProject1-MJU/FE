@@ -16,6 +16,9 @@
 import { MOCK_STATIONS } from '@/mocks/stations';
 import type { Station } from '@/types/station';
 import { getMockMembers, getMockRoom } from '@/services/room';
+import { useMock as isMockMode } from '@/services/api/config';
+import { fetchStation } from '@/services/station';
+import { assertRoomCacheScope, getRoomCacheScope, subscribeRoomCacheReset } from '@/services/room-cache';
 import { subscribeRoomMockChanges } from '@/stores/room-mock-events';
 import {
     RecommendationError,
@@ -289,7 +292,9 @@ export async function createRecommendation(
     request: RecommendationRequest,
     mock?: 'error',
 ): Promise<RecommendationRun> {
+    const scope = isMockMode() ? null : getRoomCacheScope();
     await wait(MOCK_DELAY_MS * 1.6);
+    if (scope) assertRoomCacheScope(scope);
     if (mock) createFailOnce.add(roomId);
 
     const room = getMockRoom(roomId);
@@ -314,11 +319,15 @@ export async function createRecommendation(
         if (applied[key] === undefined) delete applied[key];
     }
 
-    const departures = members.map(member => {
-        const station = MOCK_STATIONS.find(item => item.id === member.departureStation!.id);
-        if (!station || !station.isSupported) throw new RecommendationError('STATION_UNSUPPORTED', `${member.nickname}님의 출발역은 지원하지 않는 역이에요.`);
+    const departures = await Promise.all(members.map(async member => {
+        // 추천 계산은 mock을 유지해요. 서버 ID를 mock 역 목록의 다른 역으로 해석하지 않아요.
+        const station = isMockMode()
+            ? MOCK_STATIONS.find(item => item.id === member.departureStation!.id)
+            : await fetchStation(member.departureStation!.id);
+        if (!station || !station.isSupported || !station.lines.length) throw new RecommendationError('STATION_UNSUPPORTED', `${member.nickname}님의 출발역은 지원하지 않는 역이에요.`);
         return { member, station };
-    });
+    }));
+    if (scope) assertRoomCacheScope(scope);
 
     // 후보 집합: 지원 역 전체 − 제외 역, 각 참여자 추정 이동 정보 계산
     // TODO(백엔드 확인): 참여자 출발역 자체를 후보에서 빼는지. mock 은 "중간"역 취지로 제외
@@ -413,3 +422,9 @@ export async function createRecommendation(
     runsByRoom.set(roomId, [...(runsByRoom.get(roomId) ?? []), stored]);
     return withStale(roomId, stored, true);
 }
+
+subscribeRoomCacheReset(() => {
+    runsByRoom.clear();
+    createFailOnce.clear();
+    latestFailOnce.clear();
+});

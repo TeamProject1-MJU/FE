@@ -240,7 +240,7 @@ test('mock 역 검색의 정규화·정렬·미제공·노선·페이지와 서�
 });
 
 /** 화면 상태와 효과만 구동하는 검사 장치입니다. 브라우저 육안 검사를 대신하지 않습니다. */
-function createScreenRuntime(env = {}, screenPath = 'src/app/station-search.tsx') {
+function createScreenRuntime(env = {}, screenPath = 'src/app/station-search.tsx', setup = () => {}) {
     let cursor = 0;
     let slots = [];
     const rootSlots = slots;
@@ -267,6 +267,7 @@ function createScreenRuntime(env = {}, screenPath = 'src/app/station-search.tsx'
         },
     };
     const runtime = createRuntime(env, react);
+    setup(runtime);
     const screen = runtime.load(screenPath);
     return {
         ...runtime,
@@ -1879,9 +1880,9 @@ test('NextTrains: 첫 승차 구간 조건으로 부르고 카운트다운 중 1
     assert.equal(r.calls.length, 3);
     // secondsUntil 이 null 일 때만 message 를 보여주고, 숫자인 열차는 message 와 상관없이 카운트다운해요.
     r.respond(async () => ok(arrivalsData({ receivedAt: r.receivedNow(), trains: [
-        arrivalTrain({ secondsUntil: null, stopsAway: 2, message: '[2]번째 전역' }),
-        arrivalTrain({ secondsUntil: 200, message: '전역 출발' }),
-    ] })));
+            arrivalTrain({ secondsUntil: null, stopsAway: 2, message: '[2]번째 전역' }),
+            arrivalTrain({ secondsUntil: 200, message: '전역 출발' }),
+        ] })));
     r.advance(20000); await flush();
     assert.equal(r.text(), '다음 열차 · 성수행 · [2]번째 전역 · 성수행 3분 20초');
     r.advance(1000);
@@ -1996,5 +1997,393 @@ test('NextTrains: message 가 항상 있는 실서버 응답도 secondsUntil 로
     // 20초에 다시 불렀고, 그 요청이 끝나지 않아 40초 폴링은 겹침 방지로 건너뛰었어요.
     assert.equal(r.calls.length, 2);
     assert.equal(r.text(), '다음 열차 · 성수행 곧 도착 · 성수행 5분 29초');
+    r.unmount();
+});
+
+const ROOM_QUERY_ME = '11111111-1111-4111-8111-111111111111';
+const ROOM_QUERY_OTHER = '22222222-2222-4222-8222-222222222222';
+const ROOM_QUERY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const ROOM_QUERY_ID2 = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const roomQueryStation = (id = 88001) => ({ id, name: `서버 역 ${id}`, isSupported: true, lines: [{ lineId: 2, lineName: '2호선', color: '#00a84d' }] });
+function roomQuerySummary(overrides = {}) {
+    return { id: ROOM_QUERY_ID, name: '서버 모임', status: 'OPEN', myRole: 'OWNER', memberCount: 2, maxMembers: 4, appointmentAt: '2026-11-20T19:00:00+09:00', selectedStation: null, ...overrides };
+}
+function roomQueryMembers(role = 'OWNER', me = ROOM_QUERY_ME) {
+    return [
+        { userId: me, nickname: '서버 나', role, joinedAt: '2026-11-10T09:00:00Z', departureStation: roomQueryStation() },
+        { userId: ROOM_QUERY_OTHER, nickname: '서버 동료', role: role === 'OWNER' ? 'MEMBER' : 'OWNER', joinedAt: '2026-11-09T09:00:00Z', departureStation: null },
+    ];
+}
+function roomQueryDetail(role = 'OWNER', me = ROOM_QUERY_ME) {
+    const summary = roomQuerySummary({ myRole: role });
+    delete summary.memberCount; // 실서버 7.4는 목록과 달리 memberCount를 보내지 않아요.
+    return { ...summary, ownerId: role === 'OWNER' ? me : ROOM_QUERY_OTHER, confirmedAt: null, members: roomQueryMembers(role, me) };
+}
+function roomQueryRuntime() {
+    const r = createRuntime(serverEnv);
+    r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_ME, nickname: '서버 나' });
+    r.room = r.load('src/services/room.ts');
+    r.roomCache = r.load('src/services/room-cache.ts');
+    r.calls = [];
+    r.respond = handler => { r.context.fetch = async (url, options) => { r.calls.push({ url, options }); return handler(url, options); }; };
+    return r;
+}
+async function finishRoomMock(r, pending) {
+    let finished = false;
+    pending.then(() => { finished = true; }, () => { finished = true; });
+    for (let i = 0; i < 20 && !finished; i++) { r.advance(1000); await settle(); }
+    assert.ok(finished, 'mock 처리가 시간 안에 끝나야 해요.');
+    return await pending;
+}
+
+test('방 서버 조회 7.3·7.4·7.6 URL·인증·응답·정렬과 mock 플래그 무시', async () => {
+    const r = roomQueryRuntime();
+    r.load('src/services/api/client.ts').setAccessTokenProvider(() => 'test-access');
+    const detail = roomQueryDetail();
+    const unscheduled = roomQuerySummary({ id: ROOM_QUERY_ID2, appointmentAt: null });
+    r.respond(async url => jsonResponse({ success: true, data: url.endsWith('/members') ? detail.members : url.endsWith(`/${ROOM_QUERY_ID}`) ? detail : [unscheduled, roomQuerySummary()] }));
+    const rooms = await r.room.fetchMyRooms('empty');
+    assert.deepEqual(plain(rooms.map(room => room.id)), [ROOM_QUERY_ID, ROOM_QUERY_ID2]);
+    assert.deepEqual(plain(await r.room.fetchRoomDetail(ROOM_QUERY_ID, 'error')), { ...detail, memberCount: detail.members.length });
+    assert.deepEqual(plain(await r.room.fetchRoomMembers(ROOM_QUERY_ID)), detail.members);
+    assert.deepEqual(r.calls.map(call => call.url), [
+        'https://example.test/api/v1/rooms', `https://example.test/api/v1/rooms/${ROOM_QUERY_ID}`, `https://example.test/api/v1/rooms/${ROOM_QUERY_ID}/members`,
+    ]);
+    assert.ok(r.calls.every(call => call.options.method === 'GET' && call.options.headers.Authorization === 'Bearer test-access' && call.options.body === undefined));
+    assert.equal(r.room.getMyUserId(), ROOM_QUERY_ME);
+    assert.equal(r.room.getMockRoom('room-1'), undefined);
+    assert.deepEqual(plain(r.room.getMockMembers('room-1')), []);
+});
+
+test('방 상세는 실서버의 memberCount 없는 1인 응답을 표시용 인원수로 정리해요', async () => {
+    const r = roomQueryRuntime();
+    const detail = roomQueryDetail();
+    detail.appointmentAt = null;
+    detail.members = [{ ...detail.members[0], joinedAt: '2026-11-11T11:04:52.666533Z', departureStation: null }];
+    assert.equal(Object.hasOwn(detail, 'memberCount'), false);
+    r.respond(async () => jsonResponse({ data: detail, success: true }));
+    const response = await r.room.fetchRoomDetail(ROOM_QUERY_ID);
+    assert.deepEqual(plain(response), { ...detail, memberCount: 1 });
+    assert.equal(r.room.getMockRoom(ROOM_QUERY_ID).memberCount, 1);
+    assert.deepEqual(plain(r.room.getMockMembers(ROOM_QUERY_ID)), detail.members);
+    assert.equal(r.roomCache.readCachedRoomDetail(ROOM_QUERY_ID).memberCount, 1);
+    // 이후 서버가 일치하는 memberCount를 함께 보내도 정상 처리해요.
+    r.respond(async () => jsonResponse({ data: { ...detail, memberCount: 1 }, success: true }));
+    assert.deepEqual(plain(await r.room.fetchRoomDetail(ROOM_QUERY_ID)), plain(response));
+});
+
+test('방 캐시는 상세·멤버·목록을 공유하고 반환값 변경으로 원본이 바뀌지 않아요', async () => {
+    const r = roomQueryRuntime(); const detail = roomQueryDetail();
+    detail.selectedStation = roomQueryStation(99002); detail.status = 'CONFIRMED'; detail.confirmedAt = '2026-11-11T08:00:00Z';
+    let members = detail.members;
+    r.respond(async url => jsonResponse({ success: true, data: url.endsWith('/members') ? members : detail }));
+    const response = await r.room.fetchRoomDetail(ROOM_QUERY_ID);
+    assert.deepEqual(plain(r.room.getMockMembers(ROOM_QUERY_ID)), detail.members);
+    assert.deepEqual(plain(r.room.getMockRoom(ROOM_QUERY_ID).selectedStation), detail.selectedStation);
+    response.members[0].nickname = '반환값 변경'; response.selectedStation.lines[0].color = 'wrong';
+    assert.equal(Object.hasOwn(r.room.getMockRoom(ROOM_QUERY_ID), 'members'), false);
+    const cached = r.roomCache.readCachedRoomDetail(ROOM_QUERY_ID);
+    assert.equal(cached.members[0].nickname, '서버 나'); assert.equal(cached.selectedStation.lines[0].color, '#00a84d');
+    cached.members[0].departureStation.lines[0].color = 'also wrong';
+    assert.equal(r.room.getMockMembers(ROOM_QUERY_ID)[0].departureStation.lines[0].color, '#00a84d');
+    members = roomQueryMembers('MEMBER'); members[0].departureStation = null;
+    await r.room.fetchRoomMembers(ROOM_QUERY_ID);
+    assert.equal(r.room.getMockRoom(ROOM_QUERY_ID).myRole, 'MEMBER');
+    assert.equal(r.roomCache.readCachedRoomDetail(ROOM_QUERY_ID).ownerId, ROOM_QUERY_OTHER);
+    assert.equal(r.roomCache.readCachedRoomDetail(ROOM_QUERY_ID).members[0].departureStation, null);
+});
+
+test('멤버만 먼저 조회해도 캐시에 보관하고 가짜 방 목록은 만들지 않아요', async () => {
+    const r = roomQueryRuntime();
+    r.respond(async () => jsonResponse({ success: true, data: roomQueryMembers() }));
+    await r.room.fetchRoomMembers(ROOM_QUERY_ID);
+    assert.deepEqual(plain(r.room.getMockMembers(ROOM_QUERY_ID)), roomQueryMembers());
+    assert.equal(r.room.getMockRoom(ROOM_QUERY_ID), undefined);
+    assert.deepEqual(plain(r.roomCache.readCachedRooms()), []);
+});
+
+test('실제 빈 목록과 삭제·권한 상실은 이전 방 캐시를 제거해요', async () => {
+    const r = roomQueryRuntime();
+    r.respond(async url => jsonResponse({ success: true, data: url.endsWith('/rooms') ? [roomQuerySummary()] : roomQueryDetail() }));
+    await r.room.fetchMyRooms(); await r.room.fetchRoomDetail(ROOM_QUERY_ID);
+    r.respond(async () => jsonResponse({ success: true, data: [] }));
+    assert.deepEqual(plain(await r.room.fetchMyRooms()), []);
+    assert.equal(r.room.getMockRoom(ROOM_QUERY_ID), undefined); assert.deepEqual(plain(r.room.getMockMembers(ROOM_QUERY_ID)), []);
+    for (const [code, status] of [['ROOM_NOT_FOUND', 404], ['NOT_ROOM_MEMBER', 403]]) {
+        r.respond(async () => jsonResponse({ success: true, data: roomQueryDetail() })); await r.room.fetchRoomDetail(ROOM_QUERY_ID);
+        r.respond(async () => jsonResponse({ success: false, error: { code } }, status));
+        await assert.rejects(r.room.fetchRoomMembers(ROOM_QUERY_ID), { code });
+        assert.equal(r.room.getMockRoom(ROOM_QUERY_ID), undefined);
+    }
+});
+
+test('Refresh Token 복원의 null 사용자 ID는 내 정보 API로 한 번 확인하고 동시 상세 조회를 공유해요', async () => {
+    const r = roomQueryRuntime();
+    r.load('src/stores/auth-store.ts').signIn({ userId: null, nickname: null });
+    let resolveProfile;
+    r.respond(async url => {
+        if (url.endsWith('/users/me')) return await new Promise(resolve => { resolveProfile = resolve; });
+        return jsonResponse({ success: true, data: url.endsWith('/rooms') ? [roomQuerySummary()] : roomQueryDetail() });
+    });
+    const all = Promise.all([r.room.fetchMyRooms(), r.room.fetchRoomDetail(ROOM_QUERY_ID), r.room.fetchRoomDetail(ROOM_QUERY_ID)]);
+    await settle();
+    assert.equal(r.calls.length, 1);
+    resolveProfile(jsonResponse({ success: true, data: { id: ROOM_QUERY_ME, nickname: '서버 나', createdAt: '2026-11-01T09:00:00Z' } }));
+    await all;
+    assert.equal(r.calls.filter(call => call.url.endsWith('/users/me')).length, 1);
+    assert.equal(r.calls.filter(call => call.url.endsWith(`/${ROOM_QUERY_ID}`)).length, 1);
+    assert.equal(r.room.getMyUserId(), ROOM_QUERY_ME);
+});
+
+test('방 조회의 잘못된 응답은 UNKNOWN_ERROR이고 기존 캐시를 오염시키지 않아요', async () => {
+    const r = roomQueryRuntime(); let current = roomQueryDetail();
+    r.respond(async () => jsonResponse({ success: true, data: current }));
+    await r.room.fetchRoomDetail(ROOM_QUERY_ID);
+    const mutations = [];
+    const missing = (select, fields) => fields.forEach(field => mutations.push(value => { delete select(value)[field]; }));
+    missing(value => value, ['id', 'name', 'status', 'myRole', 'maxMembers', 'appointmentAt', 'selectedStation', 'ownerId', 'confirmedAt', 'members']);
+    missing(value => value.members[0], ['userId', 'nickname', 'role', 'joinedAt', 'departureStation']);
+    missing(value => value.members[0].departureStation, ['id', 'name', 'isSupported', 'lines']);
+    mutations.push(value => { value.id = 'room-1'; }, value => { value.ownerId = ROOM_QUERY_OTHER; },
+        value => { value.myRole = 'MEMBER'; }, value => { value.memberCount = '2'; }, value => { value.memberCount = null; },
+        value => { value.memberCount = 1; }, value => { value.memberCount = 3; }, value => { value.status = 'OTHER'; },
+        value => { value.appointmentAt = 'invalid'; }, value => { value.members[0].departureStation.lines[0].lineId = '2'; },
+        value => { value.members[1].userId = value.members[0].userId; }, value => { value.members = []; });
+    for (const mutate of mutations) {
+        current = roomQueryDetail(); mutate(current);
+        await assert.rejects(r.room.fetchRoomDetail(ROOM_QUERY_ID), error => error instanceof r.load('src/types/room.ts').RoomError && error.code === 'UNKNOWN_ERROR');
+        assert.equal(r.room.getMockMembers(ROOM_QUERY_ID)[0].nickname, '서버 나');
+    }
+    const missingCount = roomQuerySummary(); delete missingCount.memberCount;
+    for (const bad of [{ items: [] }, [missingCount], [roomQuerySummary({ id: 12 })], [roomQuerySummary({ memberCount: '2' })], [roomQuerySummary(), roomQuerySummary()]]) {
+        current = bad;
+        await assert.rejects(r.room.fetchMyRooms(), { code: 'UNKNOWN_ERROR' });
+    }
+});
+
+test('방 조회 오류의 404·403·네트워크·401·그 밖의 코드 매핑', async () => {
+    for (const [code, status, expected] of [['ROOM_NOT_FOUND', 404, 'ROOM_NOT_FOUND'], ['NOT_ROOM_MEMBER', 403, 'NOT_ROOM_MEMBER'],
+        ['VALIDATION_ERROR', 400, 'VALIDATION_ERROR'], ['ROOM_BUSY', 409, 'ROOM_BUSY'], ['EXTERNAL_API_ERROR', 502, 'UNKNOWN_ERROR'],
+        ['TOKEN_EXPIRED', 401, 'TOKEN_EXPIRED'], ['TOKEN_INVALID', 401, 'TOKEN_INVALID'], ['TOKEN_FUTURE', 401, 'TOKEN_FUTURE']]) {
+        const r = roomQueryRuntime();
+        // 이 검사는 오류 변환만 확인하고, A-1 갱신 연동은 아래 별도 검사에서 확인해요.
+        r.load('src/services/api/client.ts').setTokenRefresher(null);
+        r.respond(async () => jsonResponse({ success: false, error: { code } }, status));
+        await assert.rejects(r.room.fetchRoomDetail(ROOM_QUERY_ID), error => error.code === expected
+            && (status !== 401 || error instanceof r.load('src/services/api/errors.ts').ApiError));
+        assert.equal(r.calls.length, 1);
+    }
+    const r = roomQueryRuntime(); r.respond(async () => { throw Error(); });
+    await assert.rejects(r.room.fetchMyRooms(), { code: 'NETWORK_ERROR' });
+});
+
+test('방 조회 시간 초과도 기존 10초를 유지하고 재시도하지 않아요', async () => {
+    const r = roomQueryRuntime();
+    r.respond((_url, options) => new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(Error()))));
+    const pending = r.room.fetchRoomDetail(ROOM_QUERY_ID);
+    const rejected = assert.rejects(pending, { code: 'NETWORK_ERROR' });
+    await settle(); assert.equal([...r.timers.values()][0].ms, 10000);
+    r.advance(10000); await rejected;
+    assert.equal(r.calls.length, 1); assert.equal(r.timers.size, 0);
+});
+
+test('계정 변경·로그아웃 뒤 이전 응답은 방 캐시를 되살리거나 다른 계정 캐시를 지우지 않아요', async () => {
+    for (const denied of [false, true]) {
+        const r = roomQueryRuntime(); let resolveOld;
+        r.respond(() => new Promise(resolve => { resolveOld = resolve; }));
+        const old = r.room.fetchRoomDetail(ROOM_QUERY_ID);
+        const rejected = assert.rejects(old, { code: 'AUTH_REQUIRED' }); await settle();
+        await r.load('src/services/auth.ts').clearLocalSession();
+        assert.equal(r.room.getMockRoom(ROOM_QUERY_ID), undefined);
+        const nextUser = '33333333-3333-4333-8333-333333333333';
+        r.load('src/stores/auth-store.ts').signIn({ userId: nextUser, nickname: '다음 사용자' });
+        const latest = roomQueryDetail('OWNER', nextUser); latest.name = '다음 계정 방';
+        r.respond(async () => jsonResponse({ success: true, data: latest }));
+        await r.room.fetchRoomDetail(ROOM_QUERY_ID);
+        resolveOld(denied ? jsonResponse({ success: false, error: { code: 'NOT_ROOM_MEMBER' } }, 403) : jsonResponse({ success: true, data: roomQueryDetail() }));
+        await rejected;
+        assert.equal(r.room.getMyUserId(), nextUser); assert.equal(r.room.getMockRoom(ROOM_QUERY_ID).name, '다음 계정 방');
+    }
+});
+
+test('기존 방 mock 목록·상세·멤버·오류·생성·나가기 흐름은 서버 호출 없이 유지해요', async () => {
+    const r = createRuntime(); const room = r.load('src/services/room.ts'); let calls = 0;
+    r.context.fetch = async () => { calls++; throw Error(); };
+    const list = await finishRoomMock(r, room.fetchMyRooms()); assert.equal(list.length, 4); assert.equal(list.at(-1).appointmentAt, null);
+    assert.deepEqual(plain(await finishRoomMock(r, room.fetchMyRooms('empty'))), []);
+    const failed = room.fetchMyRooms('error'); const rejected = assert.rejects(failed, { code: 'NETWORK_ERROR' }); await finishRoomMock(r, rejected);
+    const detail = await finishRoomMock(r, room.fetchRoomDetail('room-4'));
+    assert.equal(detail.myRole, 'OWNER'); assert.equal(detail.members.length, 2);
+    assert.deepEqual(plain(await finishRoomMock(r, room.fetchRoomMembers('room-4'))), plain(detail.members));
+    const created = await finishRoomMock(r, room.createRoom({ name: '새 mock 방', appointmentAt: null }));
+    assert.equal(room.getMockRoom(created.id).name, '새 mock 방');
+    assert.equal((await finishRoomMock(r, room.leaveRoom(created.id))).roomDeleted, true);
+    assert.equal(room.getMockRoom(created.id), undefined); assert.equal(calls, 0);
+});
+
+test('서버 방에서 후보·투표·채팅은 서버 UUID와 캐시를 사용하고 쓰기 API는 부르지 않아요', async () => {
+    const r = roomQueryRuntime();
+    r.respond(async url => jsonResponse({ success: true, data: url.includes('/stations/')
+            ? { ...roomQueryStation(), latitude: 37.5, longitude: 127, lines: [{ ...roomQueryStation().lines[0], stationCode: 'S1' }] }
+            : roomQueryDetail() }));
+    await r.room.fetchRoomDetail(ROOM_QUERY_ID);
+    assert.deepEqual(plain((await finishRoomMock(r, r.room.fetchProposals(ROOM_QUERY_ID))).items), []);
+    const proposal = await finishRoomMock(r, r.room.createProposal(ROOM_QUERY_ID, 88001));
+    assert.equal(proposal.proposedBy.userId, ROOM_QUERY_ME); assert.equal(proposal.station.id, 88001);
+    assert.equal((await finishRoomMock(r, r.room.voteProposal(ROOM_QUERY_ID, proposal.id))).votedByMe, true);
+    const chat = r.load('src/services/chat.ts');
+    const sent = await finishRoomMock(r, chat.sendChatMessage(ROOM_QUERY_ID, { content: '서버 방의 임시 대화', clientMessageId: 'test-client' }));
+    assert.equal(sent.message.senderId, ROOM_QUERY_ME); assert.equal(sent.message.nickname, '서버 나');
+    const listed = await finishRoomMock(r, chat.fetchChatMessages(ROOM_QUERY_ID));
+    assert.ok(listed.items.some(message => message.content === '서버 방의 임시 대화'));
+    assert.equal(r.calls.filter(call => call.url.endsWith(`/${ROOM_QUERY_ID}`)).length, 1);
+    assert.ok(r.calls.every(call => call.options.method === 'GET'));
+    assert.ok(!r.calls.some(call => /messages|station-proposals|recommendations/.test(call.url)));
+});
+
+test('서버 방 추천 화면은 실제 멤버 출발역 ID로 역 정보를 읽고 계산은 mock으로 유지해요', async () => {
+    const r = roomQueryRuntime(); const detail = roomQueryDetail(); detail.members[1].departureStation = roomQueryStation(99002);
+    r.respond(async url => {
+        const id = Number(url.split('/').at(-1));
+        return jsonResponse({ success: true, data: url.includes('/stations/')
+                ? { ...roomQueryStation(id), latitude: id === 88001 ? 37.5 : 37.6, longitude: id === 88001 ? 127 : 126.9, lines: [{ ...roomQueryStation().lines[0], stationCode: String(id) }] } : detail });
+    });
+    await r.room.fetchRoomDetail(ROOM_QUERY_ID);
+    const reco = r.load('src/services/recommendation.ts');
+    assert.equal(await finishRoomMock(r, reco.fetchLatestRecommendation(ROOM_QUERY_ID)), null);
+    const run = await finishRoomMock(r, reco.createRecommendation(ROOM_QUERY_ID, {}));
+    assert.ok(run.results.length);
+    assert.deepEqual(plain(run.results[0].participantTimes.map(member => member.departureStation.id)), [88001, 99002]);
+    assert.equal(r.calls.filter(call => call.url.includes('/stations/')).length, 2);
+    assert.ok(r.calls.every(call => call.options.method === 'GET'));
+    assert.ok(!r.calls.some(call => call.url.includes('/recommendations')));
+});
+
+function roomQueryScreen(screenPath = 'src/app/rooms/index.tsx', params = {}) {
+    const r = createScreenRuntime(serverEnv, screenPath, runtime => {
+        runtime.external['expo-clipboard'] = { setStringAsync: async () => {} };
+    });
+    r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_ME, nickname: '서버 나' });
+    r.external['expo-router'].useLocalSearchParams = () => params;
+    r.external.react.useCallback = (callback, dependencies) => {
+        const ref = r.external.react.useRef(null);
+        if (!ref.current || dependencies.some((value, index) => value !== ref.current.dependencies[index])) ref.current = { callback, dependencies };
+        return ref.current.callback;
+    };
+    r.external['expo-router'].useFocusEffect = callback => r.external.react.useEffect(callback, [callback]);
+    r.native.ScrollView = 'ScrollView';
+    return r;
+}
+
+test('서버 방 목록 화면의 로딩·빈 목록·실패·재시도·실제 방 표시', async () => {
+    const r = roomQueryScreen(); let outcome = 'empty';
+    r.context.fetch = async () => {
+        if (outcome === 'error') throw Error();
+        return jsonResponse({ success: true, data: outcome === 'empty' ? [] : [roomQuerySummary()] });
+    };
+    assert.ok(findElement(r.render(), element => element.type === 'ActivityIndicator'));
+    await settle(); let view = r.render();
+    assert.ok(findElement(view, element => element.props?.children === '참여 중인 약속방이 없어요'));
+    outcome = 'error';
+    // 새 화면 진입은 별도 runtime으로 확인해요.
+    r.unmount();
+    const failed = roomQueryScreen(); failed.context.fetch = async () => { throw Error(); };
+    failed.render(); await settle(); view = failed.render();
+    assert.ok(findElement(view, element => element.props?.children === '약속방 목록을 불러오지 못했어요'));
+    const retry = findElement(view, element => element.type === 'Pressable' && findElement(element.props.children, child => child.props?.children === '다시 시도'));
+    failed.context.fetch = async () => jsonResponse({ success: true, data: [roomQuerySummary()] });
+    retry.props.onPress(); await settle(); view = failed.render();
+    assert.ok(findElement(view, element => element.props?.room?.id === ROOM_QUERY_ID));
+    failed.unmount();
+});
+
+test('서버 방 상세는 서버의 내 카드·방장 권한·출발역을 사용해요', async () => {
+    for (const role of ['OWNER', 'MEMBER']) {
+        const r = roomQueryScreen('src/app/rooms/[roomId].tsx', { roomId: ROOM_QUERY_ID });
+        r.context.fetch = async () => jsonResponse({ success: true, data: roomQueryDetail(role) });
+        r.render(); await settle(); r.advance(1000); await settle(); const view = r.render();
+        assert.ok(findElement(view, element => element.props?.children === (role === 'OWNER' ? '내 역할 · 방장' : '내 역할 · 멤버')));
+        assert.ok(findElement(view, element => element.props?.children === '나'));
+        assert.ok(findElement(view, element => element.props?.accessibilityLabel === '내 출발역 변경'));
+        const header = findElement(view, element => element.props?.topInset !== undefined && element.props?.onBack);
+        assert.equal(!!findElement(header.props.right, element => element.props?.accessibilityLabel?.startsWith('초대 코드 ')), role === 'OWNER');
+        assert.ok(findElement(view, element => element.props?.myUserId === ROOM_QUERY_ME));
+        r.unmount();
+    }
+});
+
+test('서버 방 상세의 403·404 안내와 인증 오류 중복 안내 없음', async () => {
+    for (const [code, status] of [['ROOM_NOT_FOUND', 404], ['NOT_ROOM_MEMBER', 403], ['TOKEN_INVALID', 401]]) {
+        const r = roomQueryScreen('src/app/rooms/[roomId].tsx', { roomId: ROOM_QUERY_ID });
+        r.context.fetch = async () => jsonResponse({ success: false, error: { code } }, status);
+        r.render(); await settle(); const view = r.render();
+        const error = findElement(view, element => element.props?.error === code);
+        assert.equal(!!error, status !== 401);
+        r.unmount();
+    }
+});
+
+test('방 조회도 A-1의 토큰 갱신을 사용하고 갱신 후 서버 방을 정상 캐시해요', async () => {
+    const r = roomQueryRuntime();
+    await r.load('src/services/token-storage.ts').saveTokens('old-access', 'old-refresh', () => true);
+    r.respond(async (url, options) => {
+        if (url.endsWith('/auth/refresh')) return jsonResponse({ success: true, data: { accessToken: 'new-access', refreshToken: 'new-refresh', accessTokenExpiresIn: 1800 } });
+        if (options.headers.Authorization === 'Bearer old-access') return jsonResponse({ success: false, error: { code: 'TOKEN_EXPIRED' } }, 401);
+        return jsonResponse({ success: true, data: roomQueryDetail() });
+    });
+    const detail = await r.room.fetchRoomDetail(ROOM_QUERY_ID);
+    assert.equal(detail.id, ROOM_QUERY_ID);
+    assert.equal(r.calls.filter(call => call.url.endsWith('/auth/refresh')).length, 1);
+    assert.equal(r.calls.filter(call => call.url.endsWith(`/${ROOM_QUERY_ID}`)).length, 2);
+    assert.equal(r.room.getMockRoom(ROOM_QUERY_ID).name, '서버 모임');
+});
+
+test('멤버 조회 다음 목록 조회도 마지막 멤버 정보와 방장 역할을 유지해요', async () => {
+    const r = roomQueryRuntime();
+    r.respond(async url => jsonResponse({ success: true, data: url.endsWith('/members') ? roomQueryMembers() : [roomQuerySummary()] }));
+    await r.room.fetchRoomMembers(ROOM_QUERY_ID); await r.room.fetchMyRooms();
+    assert.deepEqual(plain(r.room.getMockMembers(ROOM_QUERY_ID)), roomQueryMembers());
+    assert.equal(r.room.getMockRoom(ROOM_QUERY_ID).myRole, 'OWNER');
+});
+
+test('계정 변경 뒤 임시 후보와 채팅은 이전 사용자의 상태를 재사용하지 않아요', async () => {
+    const r = roomQueryRuntime(); let me = ROOM_QUERY_ME;
+    r.respond(async url => jsonResponse({ success: true, data: url.includes('/stations/')
+            ? { ...roomQueryStation(), latitude: 37.5, longitude: 127, lines: [{ ...roomQueryStation().lines[0], stationCode: 'S1' }] }
+            : roomQueryDetail('OWNER', me) }));
+    await r.room.fetchRoomDetail(ROOM_QUERY_ID);
+    await finishRoomMock(r, r.room.createProposal(ROOM_QUERY_ID, 88001));
+    const chat = r.load('src/services/chat.ts');
+    await finishRoomMock(r, chat.sendChatMessage(ROOM_QUERY_ID, { content: '이전 계정 임시 메시지', clientMessageId: 'old-client' }));
+    await r.load('src/services/auth.ts').clearLocalSession();
+    me = '33333333-3333-4333-8333-333333333333';
+    r.load('src/stores/auth-store.ts').signIn({ userId: me, nickname: '다음 사용자' });
+    await r.room.fetchRoomDetail(ROOM_QUERY_ID);
+    assert.equal((await finishRoomMock(r, r.room.fetchProposals(ROOM_QUERY_ID))).items.length, 0);
+    const messages = await finishRoomMock(r, chat.fetchChatMessages(ROOM_QUERY_ID));
+    assert.ok(!messages.items.some(message => message.content === '이전 계정 임시 메시지'));
+});
+
+test('목록의 늦은 응답은 화면 이탈 후 목록 UI를 바꾸지 않아요', async () => {
+    const r = roomQueryScreen(); let resolve;
+    r.context.fetch = () => new Promise(done => { resolve = done; });
+    r.render(); await settle(); r.unmount();
+    resolve(jsonResponse({ success: true, data: [roomQuerySummary()] })); await settle();
+    assert.equal(findElement(r.render(), element => element.props?.room?.id === ROOM_QUERY_ID), null);
+});
+
+test('이전 방의 늦은 상세 응답은 새 방 화면을 덮지 않아요', async () => {
+    const params = { roomId: ROOM_QUERY_ID };
+    const r = roomQueryScreen('src/app/rooms/[roomId].tsx', params); let resolve;
+    r.context.fetch = async url => {
+        if (url.endsWith(`/${ROOM_QUERY_ID}`)) return await new Promise(done => { resolve = done; });
+        return jsonResponse({ success: true, data: { ...roomQueryDetail(), id: ROOM_QUERY_ID2, name: '두 번째 방' } });
+    };
+    r.render(); await settle(); params.roomId = ROOM_QUERY_ID2;
+    r.render(); await settle();
+    resolve(jsonResponse({ success: true, data: roomQueryDetail() })); await settle();
+    const view = r.render();
+    assert.ok(findElement(view, element => element.props?.children === '두 번째 방'));
+    assert.equal(findElement(view, element => element.props?.children === '서버 모임'), null);
     r.unmount();
 });

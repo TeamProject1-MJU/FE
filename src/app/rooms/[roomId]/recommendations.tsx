@@ -1,4 +1,5 @@
 import { formatStationName } from '@/utils/station-name';
+import { ApiError, isAuthError } from '@/services/api/errors';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import {
@@ -95,6 +96,7 @@ export default function RoomRecommendationsScreen() {
     const roomId = String(params.roomId);
     const runIdParam = params.runId ? String(params.runId) : undefined;
     const myUserId = getMyUserId();
+    const requestId = useRef(0);
 
     const [detail, setDetail] = useState<RoomDetail | null>(null);
     const [run, setRun] = useState<RecommendationRun | null>(null);
@@ -120,9 +122,11 @@ export default function RoomRecommendationsScreen() {
     /* ───────── 조회 (8.2 / 8.3) ───────── */
 
     const load = useCallback(async () => {
+        const id = ++requestId.current;
         setLoadError(null);
         try {
             const room = await fetchRoomDetail(roomId);
+            if (id !== requestId.current) return;
             setDetail(room);
             const [list, latest] = await Promise.all([
                 fetchProposals(roomId),
@@ -134,21 +138,26 @@ export default function RoomRecommendationsScreen() {
                         return fetchLatestRecommendation(roomId, fail ? 'error' : undefined);
                     })(),
             ]);
+            if (id !== requestId.current) return;
             setProposals(list);
             setRun(latest);
             setView(latest ? 'result' : 'input');
         } catch (error) {
+            if (id !== requestId.current) return;
+            if (error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
             const code = error instanceof RoomError || error instanceof RecommendationError ? error.code : null;
             setLoadError(code === 'ROOM_NOT_FOUND' || code === 'NOT_ROOM_MEMBER' || code === 'RUN_NOT_FOUND' ? code : 'UNKNOWN');
         } finally {
-            setLoading(false);
+            if (id === requestId.current) setLoading(false);
         }
     }, [roomId, runIdParam]);
 
     // 방 화면 진입·복귀 시 8.2 를 다시 조회해 isStale 을 갱신합니다 (명세 8.2). 계산 중에는 건너뜀
     useFocusEffect(
         useCallback(() => {
-            if (!running) load();
+            if (!running) void load();
+            // DOM ref가 아닌 요청 카운터로 이전 화면의 조회를 무효화해요.
+            return () => { requestId.current++; };
         }, [load, running]),
     );
 
