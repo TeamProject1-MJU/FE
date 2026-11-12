@@ -423,7 +423,7 @@ export async function createRecommendation(
                 participantTimes: best.trips,
                 nearbyAlternatives: nearby,
                 explanation: EXPLANATIONS[criterion](best.station.name, metrics),
-                explanationSource: 'TEMPLATE', // TODO: 실제 연동 시 서버가 OpenAI 설명이면 'AI'
+                explanationSource: 'TEMPLATE', // mock 은 템플릿 설명이에요. 서버 모드는 응답의 explanationSource 를 받아요.
             });
         }
     }

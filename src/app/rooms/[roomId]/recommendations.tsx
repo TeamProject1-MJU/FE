@@ -93,7 +93,8 @@ type LoadError = 'ROOM_NOT_FOUND' | 'NOT_ROOM_MEMBER' | 'RUN_NOT_FOUND' | 'UNKNO
  * 서버 모드(#99): services/recommendation.ts 가 8.1~8.3 을 불러요. ?mock= 은 무시돼요.
  * - 인증 오류(TOKEN_*·401)는 A-1 공통 처리에 맡기고 이 화면에서 따로 안내하지 않아요.
  * - 8.1 시간 초과·연결 실패는 "결과가 저장됐을 수 있어요" 안내를 보여주고, 화면 재진입 시 8.2 로 확인돼요.
- * TODO(범위 밖): WS 수신 시 8.2 재조회, 후보 제안·투표 서버 연동
+ * - "후보로 올리기"는 서버 모드에서 7.15 로 보내요(#101).
+ * TODO(범위 밖): WS 수신 시 8.2 재조회
  */
 export default function RoomRecommendationsScreen() {
     const insets = useSafeAreaInsets();

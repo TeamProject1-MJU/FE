@@ -1809,7 +1809,7 @@ test('"곧 도착" 표시: secondsUntil 이 숫자면 message 와 상관없이 �
     assert.equal(ARRIVING_SOON_SEC, 60);
     assert.equal(Object.hasOwn(format, 'isTimeMessage'), false);
     // secondsUntil 이 숫자면 message(시간 문구든 상태 문구든)와 상관없이 계산해요. 경계: 60 → 1분 0초, 59·0 → 곧 도착
-    for (const message of ['2분 50초 후', '전역 출발', '[2]번째 전역', '성수행 전역 도착', '', null]) {
+    for (const message of ['2분 50초 후', '전역 출발', '[2]번째 전역', '[3]번째 전역 (남영)', '성수행 전역 도착', '', null]) {
         assert.equal(formatNextTrain(train(60, message), 0), '성수행 1분 0초', String(message));
         assert.equal(formatNextTrain(train(59, message), 0), '성수행 곧 도착', String(message));
         assert.equal(formatNextTrain(train(0, message), 0), '성수행 곧 도착', String(message));
@@ -1822,7 +1822,13 @@ test('"곧 도착" 표시: secondsUntil 이 숫자면 message 와 상관없이 �
     assert.equal(formatNextTrain(train(30), 500), '성수행 곧 도착');
     assert.equal(formatNextTrain(train(125), -30), '성수행 2분 5초');
     // secondsUntil 이 null 일 때만 message 를 "성수행 · 문구"로 보여주고, 행선지는 한 번만 나와요.
-    assert.equal(formatNextTrain(train(null, '[2]번째 전역'), 0), '성수행 · [2]번째 전역');
+    // 맨 앞 "[N]" 은 대괄호만 빼고(#103), 괄호 안 역 이름과 나머지 글자는 서버 원문 그대로예요.
+    assert.equal(formatNextTrain(train(null, '[2]번째 전역'), 0), '성수행 · 2번째 전역');
+    assert.equal(formatNextTrain({ destinationName: '의정부', secondsUntil: null, message: '[3]번째 전역 (남영)' }, 0), '의정부행 · 3번째 전역 (남영)');
+    assert.equal(formatNextTrain(train(null, '[12]번째 전역 (남영)'), 0), '성수행 · 12번째 전역 (남영)');
+    assert.equal(formatNextTrain(train(null, '성수행 [3]번째 전역 (남영)'), 0), '성수행 · 3번째 전역 (남영)');
+    assert.equal(formatNextTrain(train(null, '전역 출발 [3]'), 0), '성수행 · 전역 출발 [3]');
+    assert.equal(formatNextTrain(train(null, '[급행] 전역 출발'), 0), '성수행 · [급행] 전역 출발');
     assert.equal(formatNextTrain(train(null, ' 전역 출발 '), 99), '성수행 · 전역 출발');
     assert.equal(formatNextTrain(train(null, '성수행 전역 출발'), 0), '성수행 · 전역 출발');
     assert.equal(formatNextTrain(train(null, '성수행'), 0), '성수행');
@@ -1884,9 +1890,9 @@ test('NextTrains: 첫 승차 구간 조건으로 부르고 카운트다운 중 1
             arrivalTrain({ secondsUntil: 200, message: '전역 출발' }),
         ] })));
     r.advance(20000); await flush();
-    assert.equal(r.text(), '다음 열차 · 성수행 · [2]번째 전역 · 성수행 3분 20초');
+    assert.equal(r.text(), '다음 열차 · 성수행 · 2번째 전역 · 성수행 3분 20초');
     r.advance(1000);
-    assert.equal(r.text(), '다음 열차 · 성수행 · [2]번째 전역 · 성수행 3분 19초');
+    assert.equal(r.text(), '다음 열차 · 성수행 · 2번째 전역 · 성수행 3분 19초');
     r.unmount();
     assert.equal(r.timers.size, 0);
 });

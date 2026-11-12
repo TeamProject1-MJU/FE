@@ -205,7 +205,7 @@ export default function OnboardingIllustration({
 }
 
 const styles = StyleSheet.create({
-    aart: {
+    art: {
         width: '100%',
         maxWidth: 360,
         height: 324,

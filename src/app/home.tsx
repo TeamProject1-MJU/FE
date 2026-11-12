@@ -121,8 +121,7 @@ export default function HomeScreen() {
         Alert.alert('준비 중', `${name} 화면은 다음 작업에서 연결할 예정입니다.`);
     };
 
-    // 출발·도착역 선택 진입점
-    // TODO: 역 검색 화면(StationSearchScreen) 구현 후 '/station-search' 로 교체
+    // 출발·도착역 선택 진입점: 경로 검색 화면을 열고, 그 화면이 출발역 칸의 역 검색(/station-search)을 바로 열어요.
     const openStationSearch = () => {
         router.push({
             pathname: '/route-search',
