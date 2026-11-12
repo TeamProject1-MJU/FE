@@ -25,6 +25,7 @@ import {
     updateRoom,
     type UpdateRoomPatch,
 } from '@/services/room';
+import { ApiError, isAuthError } from '@/services/api/errors';
 import { RoomError, type RoomDetail } from '@/types/room';
 
 const NAVY = '#0f1c3f';
@@ -63,7 +64,7 @@ type MockMode = 'error' | 'busy' | 'load-error';
  *   /rooms/room-4/edit?mock=load-error  → 첫 조회 실패, 다시 시도하면 성공
  *   /rooms/room-2/edit                  → 내가 MEMBER 인 방 → 권한 없음 화면
  *
- * TODO(범위 밖): 실제 PATCH 연동, WS ROOM_UPDATED 수신 시 8.2 재조회로 isStale 갱신
+ * TODO(범위 밖): WS ROOM_UPDATED 수신 시 8.2 재조회로 isStale 갱신
  */
 export default function RoomEditScreen() {
     const insets = useSafeAreaInsets();
@@ -84,6 +85,10 @@ export default function RoomEditScreen() {
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
     const [discardOpen, setDiscardOpen] = useState(false);
+    const requestId = useRef(0);
+    const active = useRef(true);
+    const saveLock = useRef(false);
+    const backTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const loadFailNext = useRef(mock === 'load-error');
     const saveFailNext = useRef<'error' | 'busy' | undefined>(mock === 'error' || mock === 'busy' ? mock : undefined);
@@ -99,12 +104,14 @@ export default function RoomEditScreen() {
 
     const load = useCallback(async () => {
         if (!roomId) return;
+        const id = ++requestId.current;
         setLoading(true);
         setLoadError(null);
         try {
             const fail = loadFailNext.current;
             loadFailNext.current = false; // 다시 시도하면 성공하도록
             const room = await fetchRoomDetail(roomId, fail ? 'error' : undefined);
+            if (id !== requestId.current) return;
             if (room.myRole !== 'OWNER') {
                 // 명세 7.0: 방 정보 수정은 OWNER 만. MEMBER 는 NOT_ROOM_OWNER(403)
                 setDetail(room);
@@ -114,11 +121,13 @@ export default function RoomEditScreen() {
             setDetail(room);
             fillForm(room);
         } catch (error) {
+            if (id !== requestId.current || error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
             setDetail(null);
             const code = error instanceof RoomError ? error.code : null;
             setLoadError(code === 'ROOM_NOT_FOUND' || code === 'NOT_ROOM_MEMBER' ? code : 'UNKNOWN');
+            if (code === 'NOT_ROOM_MEMBER') router.replace('/rooms');
         } finally {
-            setLoading(false);
+            if (id === requestId.current) setLoading(false);
         }
     }, [roomId]);
 
@@ -126,7 +135,14 @@ export default function RoomEditScreen() {
     // saving·saved 를 의존성에 넣으면 저장 요청이 끝날 때마다 다시 조회되어 입력값·오류가 사라져요.
     useFocusEffect(
         useCallback(() => {
-            load();
+            active.current = true;
+            if (!saveLock.current) setSaving(false);
+            void load();
+            return () => {
+                active.current = false;
+                requestId.current++;
+                if (backTimer.current) clearTimeout(backTimer.current);
+            };
         }, [load]),
     );
 
@@ -144,7 +160,7 @@ export default function RoomEditScreen() {
     const timePartial = !!date !== !!time;
     const timeCleared = !!initialAt && !date && !time;
     const timeChanged =
-        !timePartial && !timeCleared && (initialAt?.getTime() ?? null) !== (pickedAt?.getTime() ?? null);
+        !timePartial && !timeCleared && (date !== (initialAt ? toDateValue(initialAt) : '') || time !== (initialAt ? formatTime(initialAt) : ''));
 
     const dirty = nameChanged || timeChanged || timeCleared || timePartial;
     const nameLength = roomNameLength(name);
@@ -162,7 +178,7 @@ export default function RoomEditScreen() {
     };
 
     const save = async () => {
-        if (!detail || saving) return;
+        if (!detail || saving || saved || saveLock.current) return;
         setSaveError('');
         if (!validate()) return;
 
@@ -173,18 +189,28 @@ export default function RoomEditScreen() {
         else if (timeChanged && pickedAt) patch.appointmentAt = pickedAt.toISOString(); // 변경
         if (Object.keys(patch).length === 0) return back();
 
+        saveLock.current = true;
+        const id = requestId.current;
         setSaving(true);
         try {
             const fail = saveFailNext.current;
             saveFailNext.current = undefined; // 다시 시도하면 성공하도록
             await updateRoom(detail.id, patch, fail);
+            if (!active.current || id !== requestId.current) return;
             setSaved(true);
             // 저장 결과는 방 상세·목록이 다시 조회해서 반영합니다 (useFocusEffect)
-            setTimeout(back, 900);
+            backTimer.current = setTimeout(() => { if (active.current && id === requestId.current) back(); }, 900);
         } catch (error) {
+            if (!active.current || id !== requestId.current || error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
+            if (error instanceof RoomError && error.code === 'NOT_ROOM_MEMBER') { router.replace('/rooms'); return; }
+            if (error instanceof RoomError && (error.code === 'NOT_ROOM_OWNER' || error.code === 'ROOM_NOT_FOUND')) {
+                setLoadError(error.code);
+                return;
+            }
             setSaveError(error instanceof RoomError ? error.message : '변경 내용을 저장하지 못했어요. 다시 시도해 주세요.');
         } finally {
-            setSaving(false);
+            saveLock.current = false;
+            if (active.current) setSaving(false);
         }
     };
 
@@ -305,7 +331,7 @@ export default function RoomEditScreen() {
                     <View style={styles.field}>
                         <View style={styles.rowBetween}>
                             <Text style={styles.fieldLabel}>약속 시각 <Text style={styles.optional}>(선택)</Text></Text>
-                            {(date || time) && !saving && !saved && (
+                            {!!(date || time) && !saving && !saved && (
                                 <Pressable
                                     onPress={() => { setDate(''); setTime(''); setFieldError(prev => ({ ...prev, time: undefined })); setSaveError(''); }}
                                     style={styles.clearLink}
@@ -348,7 +374,7 @@ export default function RoomEditScreen() {
                         <View style={styles.staleNote}>
                             <Ionicons name="alert-circle-outline" size={16} color={ORANGE} />
                             <Text style={styles.staleText}>
-                                약속 시각을 바꾸면 이전 추천 결과는 '최신이 아님'으로 표시돼요. 추천·후보·확정 약속역은 그대로 남고, 자동으로 다시 추천하지 않아요.
+                                약속 시각을 바꾸면 이전 추천 결과는 &apos;최신이 아님&apos;으로 표시돼요. 추천·후보·확정 약속역은 그대로 남고, 자동으로 다시 추천하지 않아요.
                             </Text>
                         </View>
                     </View>

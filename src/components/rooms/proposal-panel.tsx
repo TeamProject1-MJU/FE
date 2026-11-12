@@ -4,7 +4,9 @@ import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'rea
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { openStationPicker, type Station } from '@/app/station-search';
+import { ApiError, isAuthError } from '@/services/api/errors';
 import { createProposal, deleteProposal, voteProposal } from '@/services/room';
+import { UNKNOWN_PROPOSER_NAME } from '@/services/room-proposals';
 import { RoomError, type RoomStation, type StationProposal, type StationProposalList } from '@/types/room';
 
 const NAVY = '#0f1c3f';
@@ -55,7 +57,9 @@ type Notice = { tone: 'info' | 'error'; text: string } | null;
  * - 직접 제안은 공통 역 검색 화면(#33, purpose: proposal). 미제공 역은 역 검색 화면이 먼저 막고,
  *   서버(mock)도 STATION_UNSUPPORTED 로 한 번 더 거절해요
  * - 최다 득표 후보도 자동으로 확정하지 않아요. 확정은 OWNER 가 "약속역으로 확정"을 눌러야 해요
- * TODO(범위 밖): 실제 7.14~7.17 연동, WS STATION_PROPOSAL_* 수신 시 7.15 재조회, 동시성(ROOM_BUSY) 재시도 정책
+ * - 서버 모드(#101)는 7.14~7.17 을 불러요. 제안·투표·삭제 뒤에는 부모의 7.15 재조회로 서버 목록에 맞춰요
+ * - 서버 station 에는 lines 가 없어 노선 배지가 비어 보여요. 제안자 닉네임이 비면 "알 수 없음"이에요
+ * TODO(범위 밖): WS STATION_PROPOSAL_* 수신 시 7.15 재조회, 동시성(ROOM_BUSY) 재시도 정책
  */
 export default function ProposalPanel({
     roomId,
@@ -93,10 +97,14 @@ export default function ProposalPanel({
     const topVotes = items[0]?.voteCount ?? 0;
 
     const fail = (error: unknown, fallback: string) => {
+        // 인증 오류는 A-1 공통 처리에 맡기고 패널에서 중복 안내하지 않아요.
+        if (error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
         const message = error instanceof RoomError ? error.message : fallback;
         setNotice({ tone: 'error', text: message });
-        // 목록이 바뀌었을 수 있는 오류는 다시 불러와 맞춰요
-        if (error instanceof RoomError && ['ALREADY_VOTED', 'ALREADY_PROPOSED', 'PROPOSAL_NOT_FOUND', 'PROPOSAL_LIMIT_EXCEEDED'].includes(error.code)) {
+        // 목록이 바뀌었을 수 있는 오류는 서버 목록(7.15)을 다시 불러와 맞춰요.
+        // 방 접근 불가(403·404)는 재조회에서 방 상세의 접근 불가 화면으로 넘어가요. 응답 형식 오류는 제안이 저장됐을 수 있어 다시 맞춰요.
+        if (error instanceof RoomError && ['ALREADY_VOTED', 'ALREADY_PROPOSED', 'PROPOSAL_NOT_FOUND', 'PROPOSAL_LIMIT_EXCEEDED',
+            'NOT_PROPOSAL_OWNER', 'NOT_ROOM_MEMBER', 'ROOM_NOT_FOUND', 'UNKNOWN_ERROR'].includes(error.code)) {
             onReload();
         }
     };
@@ -249,7 +257,9 @@ export default function ProposalPanel({
                                 </Pressable>
 
                                 <Text style={styles.meta} numberOfLines={1}>
-                                    {item.proposedBy.userId === myUserId ? '내가 제안' : `${item.proposedBy.nickname}님 제안`}
+                                    {item.proposedBy.userId === myUserId
+                                        ? '내가 제안'
+                                        : item.proposedBy.nickname === UNKNOWN_PROPOSER_NAME ? `${UNKNOWN_PROPOSER_NAME} 제안` : `${item.proposedBy.nickname}님 제안`}
                                     {item.resultId ? ' · 추천 결과에서' : ''}
                                 </Text>
                                 {(canDelete || (isOwner && !item.isSelected)) && (
