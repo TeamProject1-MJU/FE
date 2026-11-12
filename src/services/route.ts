@@ -85,8 +85,19 @@ function parseSummary(value: unknown): RouteSummary {
         || !['KAKAO', 'ESTIMATED'].includes(value.fareSource as string)) {
         throw new ApiError('UNKNOWN_ERROR');
     }
+    if (['noService', 'arrivesAfterAppointment'].some(key => key in value && typeof value[key] !== 'boolean')
+        || ('serviceNotice' in value && !isNullableString(value.serviceNotice))
+        || ('departureAt' in value && (typeof value.departureAt !== 'string' || !Number.isFinite(Date.parse(value.departureAt))))) {
+        throw new ApiError('UNKNOWN_ERROR');
+    }
     validateWait(value, true);
-    return { ...value, congestion: parseCongestion(value.congestion) } as RouteSummary;
+    return {
+        ...value,
+        noService: value.noService ?? false,
+        serviceNotice: value.serviceNotice ?? null,
+        arrivesAfterAppointment: value.arrivesAfterAppointment ?? false,
+        congestion: parseCongestion(value.congestion),
+    } as RouteSummary;
 }
 
 function parseStationCongestion(value: unknown): RouteStationCongestion {
@@ -119,10 +130,14 @@ function parseStep(value: unknown): RouteStep {
 
 /** station.ts와 같이 unknown 응답을 검사한 뒤 화면 타입으로 넘겨요. 도착 시각 등 서버 값은 계산하지 않아요. */
 function parseRouteSearch(value: unknown): RouteSearchResponse {
-    if (!isRecord(value) || !['KAKAO', 'INTERNAL'].includes(value.routeSource as string) || !Array.isArray(value.routes)) {
+    if (!isRecord(value) || !['KAKAO', 'INTERNAL'].includes(value.routeSource as string) || !Array.isArray(value.routes)
+        || ('appointmentPassed' in value && typeof value.appointmentPassed !== 'boolean')
+        || ('notice' in value && !isNullableString(value.notice))) {
         throw new ApiError('UNKNOWN_ERROR');
     }
     return {
+        appointmentPassed: (value.appointmentPassed ?? false) as boolean,
+        notice: (value.notice ?? null) as string | null,
         routeSource: value.routeSource as RouteSearchResponse['routeSource'],
         routes: value.routes.map(route => {
             if (!isRecord(route) || typeof route.routeId !== 'string'

@@ -1,5 +1,6 @@
+import RouteNotices from '@/components/route/RouteNotices';
 import { formatStationName } from '@/utils/station-name';
-import { formatTotalTime } from '@/components/route/format';
+import { formatClock, formatTotalTime } from '@/components/route/format';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -20,12 +21,6 @@ const BACKGROUND = '#f3f5f8';
 const WHITE = '#ffffff';
 const SECONDARY = '#6b7488';
 const BORDER = '#e6e9ef';
-
-const pad = (value: number) => String(value).padStart(2, '0');
-const formatClock = (iso: string) => {
-    const date = new Date(iso);
-    return Number.isNaN(date.getTime()) ? '' : `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-};
 
 /**
  * 경로 안내 화면 (#35, 상세설계서 그림 21)
@@ -115,6 +110,9 @@ export default function RouteGuideScreen() {
                                 compact
                             />
                         </View>
+
+                        {selected.route.summary.departureAt && <Text style={styles.arrival}>{formatClock(selected.route.summary.departureAt)} 출발 예정</Text>}
+                        <RouteNotices summary={selected.route.summary} />
 
                         <View style={styles.metaRow}>
                             {selected.route.summary.fareSource === 'ESTIMATED' && (

@@ -1,4 +1,4 @@
-import { formatDirection, formatWait } from '@/components/route/format';
+import { formatClock, formatDirection, formatWait } from '@/components/route/format';
 import { type ReactNode, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -17,11 +17,6 @@ const WALK_LINE = '#b9c0cc';
 const LEVEL_ORDER = ['COMFORTABLE', 'RELAXED', 'NORMAL', 'CROWDED', 'VERY_CROWDED'] as const;
 
 const toMinutes = (sec: number) => Math.max(1, Math.round(sec / 60));
-const pad = (value: number) => String(value).padStart(2, '0');
-const formatClock = (iso: string) => {
-    const date = new Date(iso);
-    return Number.isNaN(date.getTime()) ? '' : `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-};
 
 /** 구간 안 정차역 혼잡도 중 가장 높은 값 */
 function stepCongestion(step: RouteStep): CongestionData | null {

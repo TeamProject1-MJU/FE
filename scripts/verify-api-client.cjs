@@ -60,7 +60,8 @@ function createRuntime(env = {}, react = require('react')) {
         if (cache.has(filename)) return cache.get(filename).exports;
         const module = { exports: {} };
         cache.set(filename, module);
-        const code = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
+        const source = fs.readFileSync(filename, 'utf8');
+        const code = ts.transpileModule(source + (relative === 'src/services/route.ts' ? '\nexport { parseRouteSearch as __parseRouteSearch };' : ''), {
             compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
         }).outputText;
         const evaluate = new vm.Script(`(function(require, module, exports) { ${code}\n})`, { filename }).runInContext(context);
@@ -1661,6 +1662,8 @@ test('경로 정상 응답의 서버 값·null·대기 필드 생략을 보존�
         r.context.fetch = async () => jsonResponse({ success: true, data });
         const result = plain(await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination));
         const expected = plain(data);
+        Object.assign(expected, { appointmentPassed: false, notice: null });
+        Object.assign(expected.routes[0].summary, { noService: false, serviceNotice: null, arrivesAfterAppointment: false });
         expected.routes[0].steps[1].stations[1].congestion = missingRouteCongestion();
         assert.deepEqual(result, expected);
         assert.equal(result.routes[0].summary.arrivalAt, '2026-11-11T23:41:17+09:00');
@@ -1669,6 +1672,71 @@ test('경로 정상 응답의 서버 값·null·대기 필드 생략을 보존�
         }
         assert.equal(result.routes[0].steps[1].direction, null);
         assert.equal(result.routes[0].steps[1].directionCode, 'INNER');
+    }
+});
+
+test('120/121 new route fields preserve server times and slots, and default older responses', () => {
+    const r = createRuntime(serverEnv);
+    const parse = r.load('src/services/route.ts').__parseRouteSearch;
+    const old = plain(parse(routeData()));
+    assert.equal(old.appointmentPassed, false); assert.equal(old.notice, null);
+    assert.equal(old.routes[0].summary.noService, false);
+    assert.equal(old.routes[0].summary.serviceNotice, null);
+    assert.equal(old.routes[0].summary.arrivesAfterAppointment, false);
+    assert.equal(old.routes[0].summary.departureAt, undefined);
+    const data = routeData();
+    Object.assign(data, { appointmentPassed: true, notice: '약속 시각이 이미 지나 지금 출발 기준으로 안내합니다.' });
+    Object.assign(data.routes[0].summary, { departureAt: '2026-11-12T05:36:00+09:00', arrivalAt: '2026-11-12T05:51:13+09:00',
+        noService: true, serviceNotice: '요청한 시각에는 이 경로를 운행하는 열차가 없어 첫차(11월 12일 05:36 출발) 기준으로 안내합니다.', arrivesAfterAppointment: true });
+    Object.assign(data.routes[0].steps[1].stations[0], { slotStart: '05:30', slotDate: '2026-11-12', firstTrain: true });
+    const result = plain(parse(data));
+    assert.equal(result.appointmentPassed, true); assert.equal(result.notice, data.notice);
+    assert.deepEqual(result.routes[0].summary, data.routes[0].summary);
+    assert.deepEqual(result.routes[0].steps[1].stations[0], data.routes[0].steps[1].stations[0]);
+    assert.equal(r.load('src/components/route/format.ts').formatClock(data.routes[0].summary.departureAt), '05:36');
+});
+
+test('120/121 malformed new fields fail parsing with UNKNOWN_ERROR', () => {
+    const r = createRuntime(serverEnv); const parse = r.load('src/services/route.ts').__parseRouteSearch;
+    for (const [field, invalid] of [['appointmentPassed', ['true', 1, null]], ['notice', [false, 1, {}]],
+        ['noService', ['false', 0, null]], ['serviceNotice', [true, 12, []]],
+        ['arrivesAfterAppointment', ['true', 1, null]], ['departureAt', [null, 123, 'invalid']]]) {
+        for (const value of invalid) {
+            const data = routeData();
+            (['appointmentPassed', 'notice'].includes(field) ? data : data.routes[0].summary)[field] = value;
+            assert.throws(() => parse(data), { code: 'UNKNOWN_ERROR' }, field);
+        }
+    }
+});
+
+test('120/121 service notice and late badge render only for active flags in both card states', () => {
+    const r = createRuntime(); const notices = r.load('src/components/route/RouteNotices.tsx').default;
+    const card = r.load('src/components/route/RouteCard.tsx').default;
+    for (const noService of [false, true]) for (const serviceNotice of [null, '첫차 기준 안내']) for (const arrivesAfterAppointment of [false, true]) {
+        const route = r.load('src/services/route.ts').__parseRouteSearch(routeData()).routes[0];
+        Object.assign(route.summary, { noService, serviceNotice, arrivesAfterAppointment });
+        const view = notices({ summary: route.summary });
+        assert.equal(!!findElement(view, e => e.props?.children === '첫차 기준 안내'), noService && serviceNotice !== null);
+        assert.equal(!!findElement(view, e => e.props?.children === '약속 시각보다 늦게 도착해요'), arrivesAfterAppointment);
+        for (const expanded of [false, true]) assert.ok(findElement(card({ route, expanded }), e => e.type === notices));
+    }
+});
+
+test('120/121 result notice needs appointmentPassed and non-null notice; roomId follows room context', async () => {
+    for (const appointmentPassed of [false, true]) for (const notice of [null, '이미 지난 약속 안내']) for (const roomId of [undefined, 'room-120']) {
+        const r = routeScreenRuntime({ departure: '강남', destination: '사당', roomId }); const bodies = [];
+        r.context.fetch = async (url, options) => {
+            if (url.endsWith('/routes/search')) {
+                bodies.push(JSON.parse(options.body));
+                return jsonResponse({ success: true, data: { ...routeData(), appointmentPassed, notice } });
+            }
+            return jsonResponse({ success: true, data: stationSearchData([url.includes(encodeURIComponent('강남')) ? serverRouteStation(88001, '강남') : serverRouteStation(99002, '사당')]) });
+        };
+        r.render(); await settle(); r.render(); await settle(); const view = r.render();
+        assert.equal(!!findElement(view, e => e.props?.children === '이미 지난 약속 안내'), appointmentPassed && notice !== null);
+        assert.equal(bodies.length, 1);
+        assert.deepEqual(bodies[0], { originStationId: 88001, destinationStationId: 99002, ...(roomId ? { roomId } : {}) });
+        assert.equal(Object.hasOwn(bodies[0], 'departAt'), false); r.unmount();
     }
 });
 
@@ -1692,7 +1760,7 @@ test('경로가 내려주는 선택 대기 필드는 검사 후 그대로 보존
     Object.assign(data.routes[0].steps[1], { waitSec: null, waitKind: 'NONE', nextTrains: [] });
     r.context.fetch = async () => jsonResponse({ success: true, data });
     const result = plain(await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination));
-    assert.deepEqual(result.routes[0].summary, data.routes[0].summary);
+    assert.deepEqual(result.routes[0].summary, { ...data.routes[0].summary, noService: false, serviceNotice: null, arrivesAfterAppointment: false });
     assert.equal(result.routes[0].steps[1].waitSec, null);
     assert.deepEqual(result.routes[0].steps[1].nextTrains, []);
 });
@@ -1787,6 +1855,11 @@ test('mock 경로의 기존 대기·도착 시각·오류 동작 유지, 서버 
     const pending = service.searchRoute(origin, destination, { roomId: 'mock-room' });
     r.advance(800); const result = await pending;
     assert.ok(result.routes.length);
+    assert.equal(result.appointmentPassed, false); assert.equal(result.notice, null);
+    for (const route of result.routes) {
+        assert.equal(route.summary.noService, false); assert.equal(route.summary.serviceNotice, null);
+        assert.equal(route.summary.arrivesAfterAppointment, false); assert.equal(route.summary.departureAt, undefined);
+    }
     const first = result.routes.find(route => route.routeId === 'r1');
     assert.ok(first.summary.totalWithWaitSec); assert.ok(Number.isFinite(Date.parse(first.summary.arrivalAt)));
     const unsupported = service.searchRoute({ ...origin, isSupported: false }, destination);
@@ -3942,6 +4015,17 @@ async function pumpScreen(r) { for (let i = 0; i < 6; i++) { r.render(); await s
 const textOf = node => node == null || typeof node === 'boolean' ? '' : Array.isArray(node) ? node.map(textOf).join('') : typeof node === 'object' ? textOf(node.props?.children) : String(node);
 const findText = (view, text) => findElement(view, element => element.type === 'Text' && textOf(element) === text);
 const findTextIncluding = (view, text) => findElement(view, element => element.type === 'Text' && textOf(element).includes(text));
+
+test('120/121 room recommendation route navigation carries roomId', async () => {
+    const r = recoScreen(); const pushes = [];
+    r.external['expo-router'].router.push = value => pushes.push(value);
+    r.recoRespond(async () => ok(recoRun()));
+    const view = await pumpScreen(r);
+    const button = findElement(view, e => e.type === 'Pressable' && findTextIncluding(e.props.children, '경로 자세히'));
+    assert.ok(button); button.props.onPress();
+    assert.equal(pushes[0].pathname, '/route-search');
+    assert.equal(pushes[0].params.roomId, ROOM_QUERY_ID); r.unmount();
+});
 
 test('추천 화면(서버): 빈 기록은 입력 보기, 계산 버튼 연타는 8.1 한 번, 결과의 혼잡도 null 은 점·라벨·문구만 숨겨요', async () => {
     const r = recoScreen();

@@ -306,7 +306,7 @@ export default function RoomRecommendationsScreen() {
     const openRoute = (item: RecommendationResult) => {
         router.push({
             pathname: '/route-search',
-            params: { departure: me?.departureStation?.name ?? '', destination: item.recommendedStation.name },
+            params: { departure: me?.departureStation?.name ?? '', destination: item.recommendedStation.name, roomId },
         });
     };
 
