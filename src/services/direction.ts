@@ -1,19 +1,25 @@
 /**
  * AI 표지판 방향 확인 서비스 (#37, API 명세 v1.12 9.1)
  *
- * TODO: 백엔드 연동 시 POST /ai/direction-check (multipart/form-data) 로 교체합니다.
+ * 서버 모드: POST /ai/direction-check (multipart/form-data), 인증은 공통 API 클라이언트가 처리합니다.
  * - image: 촬영·선택한 사진 (JPG/PNG, 서버는 저장하지 않음)
  * - route: JSON 문자열 { stationId, lineId, direction?, headsign }
- * - 응답 목표 5초 이내, 오류: IMAGE_INVALID(400) / AI_QUOTA_EXCEEDED(429) / AI_UNAVAILABLE(503)
+ * - 서버 분석 대기와 업로드 시간을 포함해 요청당 30초를 기다립니다.
  *
- * 지금은 실제 촬영·업로드·AI 분석 없이 '예시 사진'을 골라 결과 흐름만 확인합니다.
+ * mock 모드에서는 기존 예시 사진 5종을 사용합니다.
  */
 
+import { post } from '@/services/api/client';
+import { useMock as isMockMode } from '@/services/api/config';
+import { ApiError, isAuthError } from '@/services/api/errors';
 import {
     DirectionCheckError,
     type DirectionCheckResponse,
     type DirectionCheckRoute,
     type SignInfo,
+    type DirectionPhoto,
+    type DirectionReason,
+    type DirectionErrorCode,
 } from '@/types/direction';
 
 const MOCK_DELAY_MS = 1500;
@@ -106,7 +112,7 @@ export function buildSamples(expected: Expected): Sample[] {
 }
 
 /** 9.1 mock: 고른 예시 사진에 맞는 응답을 돌려줍니다. */
-export async function checkDirection(sample: Sample, expected: Expected): Promise<DirectionCheckResponse> {
+async function checkMockDirection(sample: Sample, expected: Expected): Promise<DirectionCheckResponse> {
     await wait(MOCK_DELAY_MS);
 
     const expectedInfo: SignInfo = {
@@ -156,5 +162,50 @@ export async function checkDirection(sample: Sample, expected: Expected): Promis
         case 'serverError':
         default:
             throw new DirectionCheckError('AI_UNAVAILABLE', 'AI가 잠시 응답하지 않아요.');
+    }
+}
+
+export const DIRECTION_CHECK_TIMEOUT_MS = 30000;
+const reasons: readonly string[] = ['LINE_NOT_ON_ROUTE', 'DIRECTION_MISMATCH', 'NOT_A_SIGN', 'UNREADABLE', 'MISSING_INFO'];
+const errorCodes: readonly string[] = ['IMAGE_INVALID', 'AI_QUOTA_EXCEEDED', 'AI_UNAVAILABLE', 'STATION_NOT_FOUND', 'VALIDATION_ERROR', 'NETWORK_ERROR'];
+const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+export function parseDirectionResponse(value: unknown): DirectionCheckResponse {
+    const invalid = () => new DirectionCheckError('UNKNOWN_ERROR', '분석 응답을 확인하지 못했어요. 다시 시도해 주세요.');
+    if (!record(value) || !['CORRECT', 'WRONG', 'RETAKE'].includes(String(value.result)) ||
+        typeof value.message !== 'string' || !(value.reason === null || typeof value.reason === 'string') ||
+        (value.result === 'CORRECT' && value.reason !== null) || (value.result !== 'CORRECT' && value.reason === null)) throw invalid();
+    const sign = (input: unknown, nullable: boolean): SignInfo => {
+        if (!record(input)) throw invalid();
+        for (const key of ['stationName', 'lineName', 'headsign']) {
+            if (typeof input[key] !== 'string' && !(nullable && input[key] === null)) throw invalid();
+        }
+        return { stationName: input.stationName as string | null, lineName: input.lineName as string | null, headsign: input.headsign as string | null };
+    };
+    const unknownReason = value.reason !== null && !reasons.includes(value.reason as string);
+    return {
+        result: value.result as DirectionCheckResponse['result'],
+        reason: value.reason === null ? null : unknownReason ? 'UNKNOWN' : value.reason as DirectionReason,
+        recognized: sign(value.recognized, true), expected: sign(value.expected, false),
+        message: unknownReason ? '표지판과 경로를 다시 확인해 주세요.' : value.message,
+    };
+}
+
+export function checkDirection(photo: DirectionPhoto, route: DirectionCheckRoute): Promise<DirectionCheckResponse>;
+export function checkDirection(sample: Sample, expected: Expected): Promise<DirectionCheckResponse>;
+export async function checkDirection(input: DirectionPhoto | Sample, route: DirectionCheckRoute | Expected): Promise<DirectionCheckResponse> {
+    if (isMockMode()) return checkMockDirection(input as Sample, route as Expected);
+    const photo = input as DirectionPhoto;
+    const form = new FormData();
+    if (photo.file) form.append('image', photo.file, photo.fileName);
+    else form.append('image', { uri: photo.uri, type: photo.mimeType, name: photo.fileName } as unknown as Blob);
+    form.append('route', JSON.stringify({ stationId: route.stationId, lineId: route.lineId, headsign: route.headsign, ...(route.direction ? { direction: route.direction } : {}) }));
+    try {
+        return parseDirectionResponse(await post<unknown>('/ai/direction-check', form, { timeoutMs: DIRECTION_CHECK_TIMEOUT_MS }));
+    } catch (error) {
+        if (isAuthError(error)) throw error;
+        if (error instanceof DirectionCheckError) throw error;
+        const code = error instanceof ApiError && errorCodes.includes(error.code) ? error.code as DirectionErrorCode : 'UNKNOWN_ERROR';
+        throw new DirectionCheckError(code, '방향을 확인하지 못했어요.');
     }
 }

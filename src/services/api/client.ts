@@ -47,10 +47,12 @@ async function request<T>(method: string, path: string, body: unknown, options: 
         Accept: 'application/json',
         'Content-Type': 'application/json; charset=utf-8',
     };
+    const multipart = typeof FormData !== 'undefined' && body instanceof FormData;
+    if (multipart) delete headers['Content-Type'];
     const generation = generationProvider();
     const token = options.auth === false ? null : await accessTokenProvider?.();
     if (token) headers.Authorization = `Bearer ${token}`;
-    const serializedBody = body === undefined ? undefined : JSON.stringify(body);
+    const serializedBody = multipart ? body : body === undefined ? undefined : JSON.stringify(body);
     const controller = new AbortController();
     const timeoutMs = options.timeoutMs !== undefined && Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
         ? options.timeoutMs : REQUEST_TIMEOUT_MS;
@@ -113,6 +115,8 @@ async function request<T>(method: string, path: string, body: unknown, options: 
                 throw refreshError;
             }
             if (generation !== generationProvider()) throw error;
+            // FormData is reusable: RN getParts() maps its stored parts on each send.
+            // File URIs/Blobs must remain available until this request (including retry) settles.
             return request<T>(method, path, body, options, true);
         }
         await authFailureHandler?.();

@@ -16,7 +16,7 @@ function createRuntime(env = {}, react = require('react')) {
     let now = 0;
     const context = vm.createContext({
         process: { env },
-        AbortController,
+        AbortController, FormData, Blob,
         URL, TextEncoder, TextDecoder, atob, __DEV__: false,
         console,
         fetch: async () => { throw new Error('검사에서 지정하지 않은 요청입니다.'); },
@@ -90,6 +90,82 @@ function createRuntime(env = {}, react = require('react')) {
 const serverEnv = { EXPO_PUBLIC_API_BASE_URL: ' https://example.test/api/v1/// ', EXPO_PUBLIC_USE_MOCK: 'false' };
 const jsonResponse = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(payload) });
 const plain = value => JSON.parse(JSON.stringify(value));
+
+const directionRoute114 = { stationId: 105, lineId: 2, headsign: '사당 방면', direction: 'INNER' };
+const directionData114 = (result = 'CORRECT') => ({ result, reason: result === 'CORRECT' ? null : 'UNREADABLE',
+    recognized: { stationName: null, lineName: null, headsign: null }, expected: { stationName: '강남', lineName: '2호선', headsign: '사당 방면' }, message: '안내' });
+const directionPhoto114 = { uri: 'file:///temporary.jpg', mimeType: 'image/jpeg', fileName: 'direction.jpg', file: new Blob(['jpeg'], { type: 'image/jpeg' }) };
+
+test('114 multipart 원본·헤더와 JSON 요청의 기존 헤더·본문을 유지', async () => {
+    const r = createRuntime(serverEnv); const client = r.load('src/services/api/client.ts'); const calls = [];
+    client.setAccessTokenProvider(() => 'token');
+    r.context.fetch = async (url, options) => { calls.push(options); return jsonResponse({ success: true, data: null }); };
+    const body = new FormData(); body.append('route', '{}');
+    await client.post('/upload', body); await client.post('/json', { text: '한글', count: 2 });
+    assert.equal(calls[0].body, body); assert.deepEqual(plain(calls[0].headers), { Accept: 'application/json', Authorization: 'Bearer token' });
+    assert.deepEqual(plain(calls[1].headers), { Accept: 'application/json', 'Content-Type': 'application/json; charset=utf-8', Authorization: 'Bearer token' });
+    assert.equal(calls[1].body, '{"text":"한글","count":2}');
+});
+
+test('114 FormData는 401 갱신 후 같은 파트를 재전송하고 인증 실패는 공통 처리', async () => {
+    const r = createRuntime(serverEnv); const client = r.load('src/services/api/client.ts'); let token = 'old'; const calls = [];
+    client.setAccessTokenProvider(() => token); client.setTokenRefresher(async () => { token = 'new'; });
+    r.context.fetch = async (_url, options) => { calls.push(options); return calls.length === 1
+        ? jsonResponse({ success: false, error: { code: 'TOKEN_EXPIRED' } }, 401) : jsonResponse({ success: true, data: directionData114() }); };
+    await r.load('src/services/direction.ts').checkDirection(directionPhoto114, directionRoute114);
+    assert.equal(calls.length, 2); assert.equal(calls[0].body, calls[1].body);
+    assert.equal(calls[1].headers.Authorization, 'Bearer new'); assert.equal(calls[1].headers['Content-Type'], undefined);
+    assert.equal(calls[1].body.get('route'), JSON.stringify({ stationId: 105, lineId: 2, headsign: '사당 방면', direction: 'INNER' }));
+});
+
+test('114 응답 3종·인식 null·미지 reason 일반 안내', () => {
+    const parse = createRuntime().load('src/services/direction.ts').parseDirectionResponse;
+    for (const result of ['CORRECT', 'WRONG', 'RETAKE']) assert.deepEqual(plain(parse(directionData114(result))), directionData114(result));
+    const unknown = parse({ ...directionData114('WRONG'), reason: 'FUTURE_REASON', message: '미래 안내' });
+    assert.equal(unknown.reason, 'UNKNOWN'); assert.equal(unknown.message, '표지판과 경로를 다시 확인해 주세요.');
+});
+
+test('114 잘못된 응답은 UNKNOWN_ERROR', () => {
+    const parse = createRuntime().load('src/services/direction.ts').parseDirectionResponse;
+    for (const value of [null, [], {}, { ...directionData114(), result: 'FUTURE' }, { ...directionData114(), reason: 1 },
+        { ...directionData114(), reason: 'UNREADABLE' }, { ...directionData114('WRONG'), reason: null },
+        { ...directionData114(), recognized: { stationName: null, lineName: 2, headsign: null } },
+        { ...directionData114(), expected: { stationName: null, lineName: '2', headsign: '사당' } },
+        { ...directionData114(), message: null }, { ...directionData114(), recognized: {} }]) assert.throws(() => parse(value), { code: 'UNKNOWN_ERROR' });
+});
+
+test('114 서버 오류 전체 매핑 및 인증 오류 전달', async () => {
+    for (const code of ['IMAGE_INVALID', 'AI_QUOTA_EXCEEDED', 'AI_UNAVAILABLE', 'STATION_NOT_FOUND', 'VALIDATION_ERROR', 'NETWORK_ERROR', 'FUTURE_ERROR', 'TOKEN_INVALID']) {
+        const r = createRuntime(serverEnv); let authFailures = 0;
+        r.load('src/services/api/client.ts').setAuthFailureHandler(() => { authFailures++; });
+        r.context.fetch = async () => { if (code === 'NETWORK_ERROR') throw Error(); return jsonResponse({ success: false, error: { code } }, code === 'TOKEN_INVALID' ? 401 : 400); };
+        await assert.rejects(r.load('src/services/direction.ts').checkDirection(directionPhoto114, directionRoute114), { code: code === 'FUTURE_ERROR' ? 'UNKNOWN_ERROR' : code });
+        assert.equal(authFailures, code === 'TOKEN_INVALID' ? 1 : 0);
+    }
+});
+
+test('114 서버 업로드 파트 및 30초 제한·실제 timeout', async () => {
+    const r = createRuntime(serverEnv); const service = r.load('src/services/direction.ts'); let body;
+    r.context.fetch = (_url, options) => { assert.equal(_url, 'https://example.test/api/v1/ai/direction-check'); body = options.body;
+        return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(Error()))); };
+    const pending = service.checkDirection(directionPhoto114, { stationId: 105, lineId: 2, headsign: '사당 방면' });
+    const rejected = assert.rejects(pending, { code: 'NETWORK_ERROR' }); await settle();
+    assert.ok(service.DIRECTION_CHECK_TIMEOUT_MS >= 30000); assert.equal([...r.timers.values()][0].ms, service.DIRECTION_CHECK_TIMEOUT_MS);
+    assert.equal(body.get('image').name, 'direction.jpg'); assert.deepEqual(JSON.parse(body.get('route')), { stationId: 105, lineId: 2, headsign: '사당 방면' });
+    r.advance(service.DIRECTION_CHECK_TIMEOUT_MS); await rejected;
+});
+
+test('114 mock 예시 5종은 서버 호출 없이 기존 동작 유지', async () => {
+    const r = createRuntime(); const service = r.load('src/services/direction.ts');
+    const expected = { ...directionRoute114, stationName: '강남', lineName: '2호선' };
+    for (const sample of service.buildSamples(expected)) {
+        const pending = service.checkDirection(sample, expected);
+        const rejected = sample.id === 'serverError' ? assert.rejects(pending, { code: 'AI_UNAVAILABLE' }) : null;
+        r.advance(1500);
+        if (rejected) await rejected;
+        else assert.equal((await pending).result, sample.id === 'correct' ? 'CORRECT' : sample.id === 'blurry' ? 'RETAKE' : 'WRONG');
+    }
+});
 
 test('#117 이벤트별 갱신 대상과 추천 안내 판단', () => {
     const r = createRuntime();
@@ -5564,6 +5640,72 @@ function room107TrackFocus(r) {
     r.focus = () => { exit = enter(); };
     return r;
 }
+
+function directionScreen114(params = { stationId: '105', lineId: '2', headsign: '사당 방면' }) {
+    const deleted = []; const saves = []; const alerts = []; let permission = true; let size = 1000;
+    const r = createScreenRuntime(serverEnv, 'src/app/ai-direction.tsx', runtime => {
+        runtime.native.ScrollView = 'ScrollView'; runtime.native.Image = 'Image'; runtime.native.Platform.OS = 'ios';
+        runtime.native.Alert = { alert: (...args) => alerts.push(args) }; runtime.native.Linking = { openSettings: async () => {} };
+        runtime.external['expo-image-picker'] = {
+            requestCameraPermissionsAsync: async () => ({ granted: permission }), requestMediaLibraryPermissionsAsync: async () => ({ granted: permission }),
+            launchCameraAsync: async () => ({ canceled: false, assets: [{ uri: 'file:///cache/source.heic', width: 4000, height: 3000, mimeType: 'image/heic' }] }),
+        };
+        runtime.external['expo-image-picker'].launchImageLibraryAsync = runtime.external['expo-image-picker'].launchCameraAsync;
+        runtime.external['expo-file-system'] = { Paths: { cache: { uri: 'file:///cache/' } }, File: class {
+            constructor(uri) { this.uri = uri; } get exists() { return true; } get size() { return size; } delete() { deleted.push(this.uri); }
+        } };
+        runtime.external['expo-image-manipulator'] = { SaveFormat: { JPEG: 'jpeg' }, ImageManipulator: { manipulate: () => ({
+            resize: value => saves.push(value), release() {}, renderAsync: async () => ({ release() {}, saveAsync: async options => {
+                saves.push(options); return { uri: 'file:///cache/output.jpg' };
+            } }),
+        }) } };
+    });
+    r.external['expo-router'].useLocalSearchParams = () => params;
+    r.external.react.useCallback = (callback, dependencies) => {
+        const ref = r.external.react.useRef(null);
+        if (!ref.current || dependencies.some((value, index) => value !== ref.current.dependencies[index])) ref.current = { callback, dependencies };
+        return ref.current.callback;
+    };
+    r.external['expo-router'].useFocusEffect = callback => r.external.react.useEffect(callback, [callback]);
+    const component = r.render().type; r.screen.default = component;
+    return Object.assign(r, { deleted, saves, alerts, deny: () => { permission = false; }, oversized: () => { size = 6000000; } });
+}
+function directionButton114(view, label) {
+    return findElement(view, e => e.type?.name === 'ServerButton' && e.props.label === label);
+}
+
+test('114 화면 경로 누락 차단·권한 거부·JPEG 축소와 5MB 초과 차단', async () => {
+    const missing = directionScreen114({}); assert.ok(directionButton114(missing.render(), '경로 검색'));
+    assert.equal(directionButton114(missing.render(), '표지판 촬영'), null); missing.unmount();
+    const denied = directionScreen114(); directionButton114(denied.render(), '표지판 촬영').props.onPress();
+    // Deny before the asynchronous permission continuation.
+    denied.unmount();
+    const r = directionScreen114(); r.deny(); directionButton114(r.render(), '갤러리 선택').props.onPress();
+    await settle(); assert.equal(r.alerts.length, 1); assert.equal(r.saves.length, 0); r.unmount();
+    const large = directionScreen114(); large.oversized(); directionButton114(large.render(), '갤러리 선택').props.onPress();
+    for (let i = 0; i < 5; i++) await settle();
+    assert.equal(large.saves.filter(value => value.format === 'jpeg').length, 3);
+    assert.equal(directionButton114(large.render(), 'AI로 확인하기'), null); assert.ok(large.deleted.length); large.unmount();
+});
+
+test('114 화면 이중 제출·이탈 및 계정 전환 후 응답 폐기·임시 파일 정리', async () => {
+    for (const stale of ['none', 'unmount', 'account']) {
+        const r = directionScreen114(); directionButton114(r.render(), '표지판 촬영').props.onPress();
+        for (let i = 0; i < 4; i++) await settle();
+        assert.deepEqual(plain(r.saves[0]), { width: 2560, height: 1920 }); assert.equal(r.saves[1].compress, 0.85);
+        let finish; let calls = 0;
+        r.context.fetch = () => { calls++; return new Promise(resolve => { finish = resolve; }); };
+        const submit = directionButton114(r.render(), 'AI로 확인하기'); assert.ok(submit);
+        submit.props.onPress(); submit.props.onPress(); await settle(); assert.equal(calls, 1);
+        assert.equal(directionButton114(r.render(), 'AI로 확인하기').props.disabled, true);
+        if (stale === 'unmount') r.unmount();
+        if (stale === 'account') await r.load('src/services/auth.ts').clearLocalSession();
+        finish(jsonResponse({ success: true, data: directionData114() }));
+        for (let i = 0; i < 4; i++) await settle();
+        if (stale !== 'unmount') assert.equal(!!findElement(r.render(), e => e.props?.children === '올바른 방향이에요'), stale === 'none');
+        assert.ok(r.deleted.includes('file:///cache/output.jpg')); r.unmount();
+    }
+});
 
 test('107 요청 중 이탈 후 다시 돌아오면 늦은 성공 안내 없이 처리 중 버튼이 해제돼요', async () => {
     for (const screen of ['selected', 'leave']) {
