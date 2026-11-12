@@ -274,7 +274,8 @@ export function useRoomChat(roomId: string, mock?: string) {
                     const page = await fetchChatMessages(roomId);
                     if (!ctx.valid() || id !== pollId) return;
                     const replies = page.items.filter(item => item.senderType === 'AI'
-                        || item.senderType === 'SYSTEM' && /AI|링크로|답변/.test(item.content));
+                        || item.senderType === 'SYSTEM' && (item.content.startsWith('AI 사용 한도를 초과해')
+                            || item.content.startsWith('AI가 답변을 만들지 못했어요')));
                     for (const [key, question] of waiting) {
                         if (replies.some(reply => Date.parse(reply.createdAt) > Date.parse(question.createdAt))) waiting.delete(key);
                     }
@@ -428,14 +429,14 @@ export function useRoomChat(roomId: string, mock?: string) {
         }));
 
         try {
-            // 결과를 모르는 실패의 재전송은 먼저 서버 저장 여부를 확인해요. 본문·작성자·시각을 함께 비교해요.
+            // 폰·서버 시계 대신 조회 직전 화면에 없던 ID와 작성자·본문으로 저장 여부를 확인해요.
             if (!isMockMode() && entry.status === 'failed') {
+                const knownIds = new Set(state.messages.map(message => message.id));
                 const latest = await fetchChatMessages(roomId);
                 if (!ctx.valid() || actionId !== ctx.actionId) return;
                 update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, latest.items) }));
-                const saved = latest.items.find(message => message.senderType === 'USER'
-                    && message.senderId === getSession()?.userId && message.content === entry.content
-                    && Date.parse(message.createdAt) >= Date.parse(entry.createdAt));
+                const saved = latest.items.find(message => !knownIds.has(message.id) && message.senderType === 'USER'
+                    && message.senderId === getSession()?.userId && message.content === entry.content);
                 if (saved) {
                     update(ctx, previous => ({ ...previous, pending: previous.pending.filter(item => item.clientId !== entry.clientId) }));
                     if (saved.content.includes('@링크로')) ctx.poll(saved);

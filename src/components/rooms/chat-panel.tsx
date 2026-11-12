@@ -231,7 +231,7 @@ export default function RoomChatPanel({
                 }}
                 scrollEventThrottle={32}
                 onScroll={({ nativeEvent }) => {
-                    if (!isMockMode() && nativeEvent.contentOffset.y <= 40) loadOlder();
+                    if (!isMockMode() && !controller.historyError && nativeEvent.contentOffset.y <= 40) loadOlder();
                     scrollOffset.current =
                         nativeEvent.contentOffset.y;
 

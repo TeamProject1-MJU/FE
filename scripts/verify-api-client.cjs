@@ -2118,6 +2118,68 @@ test('118 훅 재전송은 최신 조회로 저장된 동일 메시지를 확인
     assert.equal(posts, 1); assert.equal(gets, 2); assert.equal(r.render().pending.length, 0); assert.equal(r.render().messages.length, 1); r.unmount();
 });
 
+test('118 재전송은 폰보다 과거인 서버 시각이어도 새 ID의 동일 본문을 저장된 메시지로 판단해요', async () => {
+    const r = chat118Hook(); let saved; let posts = 0;
+    r.context.fetch = async (_url, options) => {
+        if (options.method === 'POST') {
+            posts++;
+            saved = chat118Message({ content: JSON.parse(options.body).content, createdAt: new Date(Date.now() - 3600_000).toISOString() });
+            throw TypeError('저장 후 응답 유실');
+        }
+        return ok({ items: saved ? [saved] : [], hasMore: false, nextCursor: null });
+    };
+    r.render(); await settle(); r.render().setDraft('시계가 달라도 중복 방지'); r.render().send(); await settle();
+    const entry = r.render().pending[0];
+    assert.ok(Date.parse(entry.createdAt) > Date.parse(saved.createdAt));
+    r.render().retrySend(entry); await settle();
+    assert.equal(posts, 1); assert.equal(r.render().pending.length, 0);
+    assert.deepEqual(plain(r.render().messages), [saved]); r.unmount();
+});
+
+test('118 재전송 확인은 화면에 있던 ID·다른 작성자·다른 본문을 저장된 메시지로 오인하지 않아요', async () => {
+    const r = chat118Hook(); let posts = 0;
+    const old = chat118Message({ content: '같은 본문' });
+    r.context.fetch = async (_url, options) => {
+        if (options.method === 'POST') {
+            posts++;
+            if (posts === 1) throw TypeError('전송 실패');
+            return ok({ message: chat118Message({ id: ROOM_QUERY_ME, content: old.content }), aiPending: false });
+        }
+        return ok({ items: posts === 0 ? [old] : [old,
+            chat118Message({ id: ROOM_QUERY_ID, senderId: ROOM_QUERY_OTHER, content: old.content }),
+            chat118Message({ id: ROOM_QUERY_ID2, content: '다른 본문' })], hasMore: false, nextCursor: null });
+    };
+    r.render(); await settle(); r.render().setDraft(old.content); r.render().send(); await settle();
+    r.render().retrySend(r.render().pending[0]); await settle();
+    await settle();
+    assert.equal(posts, 2); assert.equal(r.render().pending.length, 0); r.unmount();
+});
+
+test('118 AI 재조회는 AI·링크로 닉네임 입장 안내를 무시하고 지정된 실패 안내만 감지해요', async () => {
+    for (const failure of ['AI 사용 한도를 초과해 답변하지 못했어요.', 'AI가 답변을 만들지 못했어요. 다시 시도해 주세요.']) {
+        const r = chat118Hook(); let items = [];
+        r.context.fetch = async (_url, options) => ok(options.method === 'POST'
+            ? { message: chat118Message(), aiPending: true } : { items, hasMore: false, nextCursor: null });
+        r.render(); await settle(); r.render().setDraft('@링크로 질문'); r.render().send(); await settle();
+        items = [chat118Message({ id: ROOM_QUERY_ID, senderType: 'SYSTEM', senderId: null, nickname: null,
+            content: 'AI링크로님이 참여했어요.', createdAt: '2026-11-12T10:00:03Z' })];
+        r.advance(3000); await settle(); assert.equal(r.render().aiPending, 1);
+        items.unshift(chat118Message({ id: ROOM_QUERY_ID2, senderType: 'SYSTEM', senderId: null, nickname: null,
+            content: failure, createdAt: '2026-11-12T10:00:06Z' }));
+        r.advance(3000); await settle(); assert.equal(r.render().aiPending, 0);
+        assert.equal(r.timers.size, 0); r.unmount();
+    }
+});
+
+test('118 목록 검증 오류는 조회 안내, 전송 검증 오류는 본문 규칙을 표시해요', async () => {
+    const r = roomQueryRuntime(); const chat = r.load('src/services/chat.ts');
+    r.respond(async () => recoFail('VALIDATION_ERROR', 400, { cursor: 'invalid' }));
+    await assert.rejects(chat.fetchChatMessages(ROOM_QUERY_ID), error => error.code === 'VALIDATION_ERROR'
+        && error.message === '대화를 불러오지 못했어요. 다시 시도해 주세요.');
+    await assert.rejects(chat.sendChatMessage(ROOM_QUERY_ID, { content: '본문' }), error => error.code === 'VALIDATION_ERROR'
+        && error.message.includes('1,000자'));
+});
+
 test('118 훅 AI 최대 60초·blur·계정 변경 뒤 재조회 중단', async () => {
     for (const stop of ['deadline', 'blur', 'account']) {
         const r = chat118Hook(); let calls = 0;

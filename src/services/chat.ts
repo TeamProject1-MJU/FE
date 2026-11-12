@@ -83,7 +83,7 @@ function parseChatPage(value: unknown): ChatMessagePage {
     return { items: value.items.map(parseChatMessage), hasMore: value.hasMore, nextCursor: value.nextCursor as string | null };
 }
 
-async function chatRequest<T>(roomId: string, request: () => Promise<unknown>, parse: (value: unknown) => T): Promise<T> {
+async function chatRequest<T>(roomId: string, request: () => Promise<unknown>, parse: (value: unknown) => T, validationMessage = contentRule): Promise<T> {
     const scope = getRoomCacheScope();
     try {
         const raw = await request();
@@ -96,7 +96,7 @@ async function chatRequest<T>(roomId: string, request: () => Promise<unknown>, p
             removeCachedRoom(roomId, scope);
             throw new RoomError(error.code as 'NOT_ROOM_MEMBER' | 'ROOM_NOT_FOUND', '이 약속방에 접근할 수 없어요.', roomId);
         }
-        if (error instanceof ApiError && error.code === 'VALIDATION_ERROR') throw new RoomError('VALIDATION_ERROR', contentRule, roomId);
+        if (error instanceof ApiError && error.code === 'VALIDATION_ERROR') throw new RoomError('VALIDATION_ERROR', validationMessage, roomId);
         if (error instanceof RoomError) throw error;
         throw new RoomError(error instanceof ApiError && error.code === 'NETWORK_ERROR' ? 'NETWORK_ERROR' : 'UNKNOWN_ERROR',
             '채팅 요청 결과를 확인하지 못했어요. 다시 시도해 주세요.', roomId);
@@ -292,7 +292,7 @@ export async function fetchChatMessages(
     if (!isMockMode()) {
         return chatRequest(roomId, () => get<unknown>(`/rooms/${encodeURIComponent(roomId)}/messages`, {
             query: { cursor: options.cursor, size: options.size ?? 30 },
-        }), parseChatPage);
+        }), parseChatPage, '대화를 불러오지 못했어요. 다시 시도해 주세요.');
     }
     await wait(350);
 
