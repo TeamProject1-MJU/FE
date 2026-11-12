@@ -1,6 +1,8 @@
 import { fetchRoomDetail, getMyUserId } from '@/services/room';
+import { get, post } from '@/services/api/client';
+import { ApiError, isAuthError } from '@/services/api/errors';
 import { useMock as isMockMode } from '@/services/api/config';
-import { assertRoomCacheScope, getRoomCacheScope, readCachedRoomDetail, subscribeRoomCacheReset } from '@/services/room-cache';
+import { removeCachedRoom, assertRoomCacheScope, getRoomCacheScope, readCachedRoomDetail, subscribeRoomCacheReset } from '@/services/room-cache';
 import { RoomError, type RoomDetail } from '@/types/room';
 import { subscribeRoomMockChanges } from '@/stores/room-mock-events';
 import type {
@@ -53,12 +55,52 @@ export function toChatApiContent(content: string) {
 }
 
 export function toChatDisplayContent(content: string) {
-    return content.replace(/@linkro/gi, '@링크로');
+    return isMockMode() ? content.replace(/@linkro/gi, '@링크로') : content;
 }
 
 /** 명세 10.1의 전송 내용 기준으로 글자 수를 계산해요. */
 export function chatContentLength(content: string) {
-    return Array.from(toChatApiContent(content).trim()).length;
+    return Array.from(isMockMode() ? toChatApiContent(content).trim() : content).length;
+}
+
+const contentRule = '메시지는 공백만 입력할 수 없고 NUL 문자 없이 1,000자까지 보낼 수 있어요.';
+const record = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+const uuid = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
+const invalidResponse = (): never => { throw new ApiError('UNKNOWN_ERROR'); };
+
+export function parseChatMessage(value: unknown): ChatMessage {
+    if (!record(value) || !uuid(value.id) || typeof value.senderType !== 'string' || !['USER', 'AI', 'SYSTEM'].includes(value.senderType)
+        || typeof value.content !== 'string' || typeof value.createdAt !== 'string' || !Number.isFinite(Date.parse(value.createdAt))
+        || value.meta !== null || !(value.nickname === null || typeof value.nickname === 'string')
+        || (value.senderType === 'USER' ? !uuid(value.senderId) : value.senderId !== null || value.nickname !== null)) return invalidResponse();
+    return { id: value.id, senderType: value.senderType as ChatMessage['senderType'], senderId: value.senderId as string | null,
+        nickname: value.nickname, content: value.content, createdAt: value.createdAt, meta: null };
+}
+
+function parseChatPage(value: unknown): ChatMessagePage {
+    if (!record(value) || !Array.isArray(value.items) || typeof value.hasMore !== 'boolean'
+        || (value.hasMore ? !uuid(value.nextCursor) || value.items.length === 0 : value.nextCursor !== null)) return invalidResponse();
+    return { items: value.items.map(parseChatMessage), hasMore: value.hasMore, nextCursor: value.nextCursor as string | null };
+}
+
+async function chatRequest<T>(roomId: string, request: () => Promise<unknown>, parse: (value: unknown) => T): Promise<T> {
+    const scope = getRoomCacheScope();
+    try {
+        const raw = await request();
+        assertRoomCacheScope(scope);
+        return parse(raw);
+    } catch (error) {
+        if (isAuthError(error) || error instanceof ApiError && error.code.startsWith('TOKEN_')) throw error;
+        assertRoomCacheScope(scope);
+        if (error instanceof ApiError && ['NOT_ROOM_MEMBER', 'ROOM_NOT_FOUND'].includes(error.code)) {
+            removeCachedRoom(roomId, scope);
+            throw new RoomError(error.code as 'NOT_ROOM_MEMBER' | 'ROOM_NOT_FOUND', '이 약속방에 접근할 수 없어요.', roomId);
+        }
+        if (error instanceof ApiError && error.code === 'VALIDATION_ERROR') throw new RoomError('VALIDATION_ERROR', contentRule, roomId);
+        if (error instanceof RoomError) throw error;
+        throw new RoomError(error instanceof ApiError && error.code === 'NETWORK_ERROR' ? 'NETWORK_ERROR' : 'UNKNOWN_ERROR',
+            '채팅 요청 결과를 확인하지 못했어요. 다시 시도해 주세요.', roomId);
+    }
 }
 
 function storeKey(roomId: string, mock?: ChatMockScenario) {
@@ -232,7 +274,7 @@ function getMessages(detail: RoomDetail, mock?: ChatMockScenario) {
 }
 
 /**
- * TODO: API v1.12 10.2
+ * API v1.12 10.2
  * GET /api/v1/rooms/{roomId}/messages?cursor={uuid}&size=30
  *
  * 실제 API는 서버가 정렬해요.
@@ -247,6 +289,11 @@ export async function fetchChatMessages(
         mock?: ChatMockScenario;
     } = {},
 ): Promise<ChatMessagePage> {
+    if (!isMockMode()) {
+        return chatRequest(roomId, () => get<unknown>(`/rooms/${encodeURIComponent(roomId)}/messages`, {
+            query: { cursor: options.cursor, size: options.size ?? 30 },
+        }), parseChatPage);
+    }
     await wait(350);
 
     const detail = await requireChatMember(roomId);
@@ -348,15 +395,14 @@ async function finishMockAi(
 }
 
 /**
- * TODO: API v1.12 10.1
+ * API v1.12 10.1
  * POST /api/v1/rooms/{roomId}/messages { content }
  *
- * AI 수신은 추후 명세 11장 MESSAGE_CREATED에 연결해요.
- * 현재는 mock 비동기 응답이에요.
+ * 서버 AI 답변은 use-room-chat의 임시 REST 재조회로 받아요.
+ * mock은 기존 비동기 응답을 유지해요.
  *
  * clientId는 로컬 재시도 중복 방지용이며 API 요청 본문에 추가하지 않아요.
- * 실제 서버 전송 결과를 모르는 네트워크 실패의 중복 방지는
- * 백엔드와 확인해야 해요.
+ * 서버 전송 결과를 모르는 실패는 훅에서 최신 페이지를 확인한 뒤 재시도해요.
  */
 export async function sendChatMessage(
     roomId: string,
@@ -366,6 +412,16 @@ export async function sendChatMessage(
         mock?: ChatMockScenario;
     } = {},
 ): Promise<SendChatMessageResult> {
+    if (!isMockMode()) {
+        const content = request.content;
+        if (typeof content !== 'string' || !content.trim() || content.includes('\0') || [...content].length > 1000) {
+            throw new RoomError('VALIDATION_ERROR', contentRule);
+        }
+        return chatRequest(roomId, () => post<unknown>(`/rooms/${encodeURIComponent(roomId)}/messages`, { content }), raw => {
+            if (!record(raw) || typeof raw.aiPending !== 'boolean') return invalidResponse();
+            return { message: parseChatMessage(raw.message), aiPending: raw.aiPending };
+        });
+    }
     const content = toChatApiContent(request.content).trim();
 
     if (!content || Array.from(content).length > 1000) {

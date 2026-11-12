@@ -14,6 +14,7 @@ import {
 
 import type { useRoomChat } from '@/hooks/use-room-chat';
 import { toChatDisplayContent } from '@/services/chat';
+import { useMock as isMockMode } from '@/services/api/config';
 import type { PendingChatMessage } from '@/types/chat';
 import type { RoomMember } from '@/types/room';
 
@@ -96,7 +97,7 @@ export default function RoomChatPanel({
                 message.senderId === myUserId;
 
             const nickname =
-                members.find(
+                (!isMockMode() ? message.nickname : null) ?? members.find(
                     member => member.userId === message.senderId,
                 )?.nickname ??
                 message.nickname ??
@@ -114,7 +115,7 @@ export default function RoomChatPanel({
                                 : 'other',
                 name:
                     message.senderType === 'AI'
-                        ? '@링크로'
+                        ? (isMockMode() ? '@링크로' : '링크로')
                         : mine
                             ? `${nickname} · 나`
                             : nickname,
@@ -230,6 +231,7 @@ export default function RoomChatPanel({
                 }}
                 scrollEventThrottle={32}
                 onScroll={({ nativeEvent }) => {
+                    if (!isMockMode() && nativeEvent.contentOffset.y <= 40) loadOlder();
                     scrollOffset.current =
                         nativeEvent.contentOffset.y;
 
@@ -448,7 +450,7 @@ export default function RoomChatPanel({
                         color="#15664e"
                     />
                     <Text style={styles.aiText}>
-                        @링크로가 답변을 작성하고 있어요…
+                        {isMockMode() ? '@링크로가 답변을 작성하고 있어요…' : '링크로가 답변 중...'}
                     </Text>
                 </View>
             )}

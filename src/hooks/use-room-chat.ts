@@ -14,6 +14,9 @@ import type {
     PendingChatMessage,
 } from '@/types/chat';
 import { RoomError } from '@/types/room';
+import { useMock as isMockMode } from '@/services/api/config';
+import { getRoomCacheScope } from '@/services/room-cache';
+import { useAuthStatus, getSession } from '@/stores/auth-store';
 
 type State = {
     scope: string;
@@ -32,6 +35,12 @@ type State = {
 };
 
 type Context = {
+    actionId: number;
+    focused: boolean;
+    valid: () => boolean;
+    stopPolling: () => void;
+    poll: (message: ChatMessage) => void;
+    aiPending: number;
     scope: string;
     active: boolean;
     loaded: boolean;
@@ -99,8 +108,15 @@ const denied = (error: unknown) =>
 let clientSequence = 1;
 
 export function useRoomChat(roomId: string, mock?: string) {
+    useAuthStatus();
     const scenario = parseMock(mock);
-    const scope = `${roomId}:${scenario ?? 'normal'}`;
+    let account = 'mock';
+    if (!isMockMode()) {
+        try { account = getRoomCacheScope(); } catch { account = 'signedOut'; }
+    }
+    const scope = `${account}:${roomId}:${scenario ?? 'normal'}`;
+    const currentScope = useRef(scope);
+    currentScope.current = scope;
 
     const [state, setState] = useState<State>(() => initial(scope));
     const context = useRef<Context | null>(null);
@@ -108,10 +124,10 @@ export function useRoomChat(roomId: string, mock?: string) {
 
     const update = useCallback(
         (ctx: Context, change: (previous: State) => State) => {
-            if (!ctx.active) return;
+            if (!ctx.valid()) return;
 
             setState(previous =>
-                ctx.active
+                ctx.valid()
                     ? change(
                         previous.scope === ctx.scope
                             ? previous
@@ -126,7 +142,7 @@ export function useRoomChat(roomId: string, mock?: string) {
     const refresh = useCallback(async () => {
         const ctx = context.current;
 
-        if (!ctx?.active || ctx.scope !== scope) return;
+        if (!ctx?.valid() || ctx.scope !== scope) return;
 
         if (ctx.refreshing) {
             ctx.refreshAgain = true;
@@ -134,6 +150,7 @@ export function useRoomChat(roomId: string, mock?: string) {
         }
 
         ctx.refreshing = true;
+        const actionId = ctx.actionId;
 
         update(ctx, previous => ({
             ...previous,
@@ -150,7 +167,7 @@ export function useRoomChat(roomId: string, mock?: string) {
                     mock: scenario,
                 });
 
-                if (!ctx.active) return;
+                if (!ctx.valid() || actionId !== ctx.actionId) return;
 
                 if (!ctx.loaded) {
                     ctx.cursor = page.nextCursor;
@@ -170,11 +187,12 @@ export function useRoomChat(roomId: string, mock?: string) {
                         previous.messages,
                         [...page.items].reverse(),
                     ),
-                    aiPending: getPendingChatAiCount(roomId, scenario),
+                    aiPending: isMockMode() ? getPendingChatAiCount(roomId, scenario) : ctx.aiPending,
                 }));
             } while (ctx.refreshAgain && ctx.active);
         } catch (error) {
-            if (denied(error)) ctx.blocked = true;
+            if (!ctx.valid() || actionId !== ctx.actionId) return;
+            if (denied(error)) { ctx.blocked = true; ctx.stopPolling(); }
 
             update(ctx, previous => ({
                 ...previous,
@@ -192,11 +210,25 @@ export function useRoomChat(roomId: string, mock?: string) {
                 ...previous,
                 refreshing: false,
             }));
+            if (ctx.refreshAgain && ctx.valid() && ctx.focused) {
+                ctx.refreshAgain = false;
+                void refresh();
+            }
         }
     }, [roomId, scenario, scope, update]);
 
     useEffect(() => {
         const ctx: Context = {
+            actionId: 0,
+            focused: true,
+            valid: () => {
+                if (!ctx.active || context.current !== ctx || currentScope.current !== ctx.scope) return false;
+                if (isMockMode()) return true;
+                try { return getRoomCacheScope() === account; } catch { return false; }
+            },
+            stopPolling: () => {},
+            poll: () => {},
+            aiPending: 0,
             scope,
             active: true,
             loaded: false,
@@ -212,6 +244,57 @@ export function useRoomChat(roomId: string, mock?: string) {
         context.current = ctx;
         draftRef.current = '';
 
+        // REST 1단계 전용 임시 수신: 3초 간격, 최대 60초. 실시간 수신 도입 시 이 블록을 교체해요.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let expiry: ReturnType<typeof setTimeout> | undefined;
+        let pollId = 0;
+        const waiting = new Map<string, ChatMessage>();
+        ctx.stopPolling = () => {
+            pollId++;
+            clearTimeout(timer);
+            clearTimeout(expiry);
+            waiting.clear();
+            ctx.aiPending = 0;
+            update(ctx, previous => ({ ...previous, aiPending: 0 }));
+        };
+        ctx.poll = message => {
+            if (isMockMode() || !ctx.valid() || ctx.blocked || !ctx.focused) return;
+            const running = waiting.size > 0;
+            waiting.set(message.id, message);
+            ctx.aiPending = waiting.size;
+            update(ctx, previous => ({ ...previous, aiPending: ctx.aiPending }));
+            if (running) return;
+            clearTimeout(timer);
+            clearTimeout(expiry);
+            const id = ++pollId;
+            expiry = setTimeout(() => ctx.stopPolling(), 60_000);
+            const tick = async () => {
+                if (!ctx.valid() || id !== pollId) return;
+                try {
+                    const page = await fetchChatMessages(roomId);
+                    if (!ctx.valid() || id !== pollId) return;
+                    const replies = page.items.filter(item => item.senderType === 'AI'
+                        || item.senderType === 'SYSTEM' && /AI|링크로|답변/.test(item.content));
+                    for (const [key, question] of waiting) {
+                        if (replies.some(reply => Date.parse(reply.createdAt) > Date.parse(question.createdAt))) waiting.delete(key);
+                    }
+                    ctx.aiPending = waiting.size;
+                    update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, page.items), aiPending: ctx.aiPending }));
+                } catch (error) {
+                    if (!ctx.valid() || id !== pollId) return;
+                    if (denied(error)) {
+                        ctx.blocked = true;
+                        ctx.stopPolling();
+                        update(ctx, previous => ({ ...previous, status: 'error', blocked: true, error: errorText(error), messages: [], pending: [] }));
+                        return;
+                    }
+                }
+                if (ctx.valid() && id === pollId && waiting.size) timer = setTimeout(tick, 3000);
+                else if (id === pollId) ctx.stopPolling();
+            };
+            timer = setTimeout(tick, 3000);
+        };
+
         const unsubscribe = subscribeChat(roomId, () => {
             update(ctx, previous => ({
                 ...previous,
@@ -223,21 +306,33 @@ export function useRoomChat(roomId: string, mock?: string) {
 
         return () => {
             ctx.active = false;
+            ctx.stopPolling();
             unsubscribe();
         };
-    }, [roomId, scenario, scope, refresh, update]);
+    }, [account, roomId, scenario, scope, refresh, update]);
 
     useFocusEffect(
         useCallback(() => {
+            if (context.current) context.current.focused = true;
             void refresh();
-        }, [refresh]),
+            const ctx = context.current;
+            return () => {
+                if (ctx && !isMockMode()) {
+                    ctx.actionId++;
+                    ctx.focused = false;
+                    ctx.stopPolling();
+                    update(ctx, previous => ({ ...previous, pending: previous.pending.map(entry => entry.status === 'sending'
+                        ? { ...entry, status: 'failed', errorMessage: '전송 결과를 확인하지 못했어요. 다시 시도하면 저장 여부를 먼저 확인해요.' } : entry) }));
+                }
+            };
+        }, [refresh, update]),
     );
 
     const loadOlder = async () => {
         const ctx = context.current;
 
         if (
-            !ctx?.active ||
+            !ctx?.valid() ||
             ctx.scope !== scope ||
             !ctx.loaded ||
             ctx.blocked ||
@@ -249,6 +344,7 @@ export function useRoomChat(roomId: string, mock?: string) {
         }
 
         ctx.historyLoading = true;
+        const actionId = ctx.actionId;
 
         update(ctx, previous => ({
             ...previous,
@@ -262,7 +358,7 @@ export function useRoomChat(roomId: string, mock?: string) {
                 mock: scenario,
             });
 
-            if (!ctx.active) return;
+            if (!ctx.valid() || actionId !== ctx.actionId) return;
 
             ctx.cursor = page.nextCursor;
             ctx.hasMore = page.hasMore;
@@ -276,8 +372,11 @@ export function useRoomChat(roomId: string, mock?: string) {
                 ),
             }));
         } catch (error) {
+            if (!ctx.valid() || actionId !== ctx.actionId) return;
             if (denied(error)) {
-                void refresh();
+                ctx.blocked = true;
+                ctx.stopPolling();
+                update(ctx, previous => ({ ...previous, status: 'error', blocked: true, error: errorText(error), messages: [], pending: [] }));
                 return;
             }
 
@@ -299,7 +398,7 @@ export function useRoomChat(roomId: string, mock?: string) {
         const ctx = context.current;
 
         if (
-            !ctx?.active ||
+            !ctx?.valid() ||
             ctx.scope !== scope ||
             !ctx.loaded ||
             ctx.blocked ||
@@ -309,6 +408,7 @@ export function useRoomChat(roomId: string, mock?: string) {
         }
 
         ctx.sending.add(entry.clientId);
+        const actionId = ctx.actionId;
 
         const queued = {
             ...entry,
@@ -328,11 +428,28 @@ export function useRoomChat(roomId: string, mock?: string) {
         }));
 
         try {
+            // 결과를 모르는 실패의 재전송은 먼저 서버 저장 여부를 확인해요. 본문·작성자·시각을 함께 비교해요.
+            if (!isMockMode() && entry.status === 'failed') {
+                const latest = await fetchChatMessages(roomId);
+                if (!ctx.valid() || actionId !== ctx.actionId) return;
+                update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, latest.items) }));
+                const saved = latest.items.find(message => message.senderType === 'USER'
+                    && message.senderId === getSession()?.userId && message.content === entry.content
+                    && Date.parse(message.createdAt) >= Date.parse(entry.createdAt));
+                if (saved) {
+                    update(ctx, previous => ({ ...previous, pending: previous.pending.filter(item => item.clientId !== entry.clientId) }));
+                    if (saved.content.includes('@링크로')) ctx.poll(saved);
+                    return;
+                }
+            }
             const result = await sendChatMessage(
                 roomId,
                 { content: entry.content },
                 { clientId: entry.clientId, mock: scenario },
             );
+
+            if (!ctx.valid() || actionId !== ctx.actionId) return;
+            if (result.aiPending) ctx.poll(result.message);
 
             update(ctx, previous => ({
                 ...previous,
@@ -343,10 +460,11 @@ export function useRoomChat(roomId: string, mock?: string) {
                 pending: previous.pending.filter(
                     item => item.clientId !== entry.clientId,
                 ),
-                aiPending: getPendingChatAiCount(roomId, scenario),
+                aiPending: isMockMode() ? getPendingChatAiCount(roomId, scenario) : ctx.aiPending,
             }));
         } catch (error) {
-            if (denied(error)) ctx.blocked = true;
+            if (!ctx.valid() || actionId !== ctx.actionId) return;
+            if (denied(error)) { ctx.blocked = true; ctx.stopPolling(); }
 
             update(ctx, previous =>
                 ctx.blocked
@@ -380,7 +498,7 @@ export function useRoomChat(roomId: string, mock?: string) {
     const setDraft = (value: string) => {
         const ctx = context.current;
 
-        if (!ctx?.active || ctx.scope !== scope) return;
+        if (!ctx?.valid() || ctx.scope !== scope) return;
 
         draftRef.current = value;
 
@@ -395,7 +513,7 @@ export function useRoomChat(roomId: string, mock?: string) {
         const ctx = context.current;
 
         if (
-            !ctx?.active ||
+            !ctx?.valid() ||
             ctx.scope !== scope ||
             !ctx.loaded ||
             ctx.blocked
@@ -403,12 +521,12 @@ export function useRoomChat(roomId: string, mock?: string) {
             return;
         }
 
-        const content = draftRef.current.trim();
+        const content = isMockMode() ? draftRef.current.trim() : draftRef.current;
 
-        if (!content || chatContentLength(content) > 1000) {
+        if (!content.trim() || (!isMockMode() && content.includes('\0')) || chatContentLength(content) > 1000) {
             update(ctx, previous => ({
                 ...previous,
-                inputError: '메시지는 1,000자까지 입력해 주세요.',
+                inputError: isMockMode() ? '메시지는 1,000자까지 입력해 주세요.' : '공백만 입력할 수 없고 NUL 문자 없이 1,000자까지 입력해 주세요.',
             }));
             return;
         }
@@ -450,6 +568,8 @@ export function useRoomChat(roomId: string, mock?: string) {
             current.status === 'ready' &&
             !current.blocked &&
             length > 0 &&
+            !!current.draft.trim() &&
+            (isMockMode() || !current.draft.includes('\0')) &&
             length <= 1000,
     };
 }
