@@ -211,6 +211,61 @@ test('116 repeated validation/access/internal errors abandon only the offending 
     }
 });
 
+test('116 confirmed subscription resets room failures before a new consecutive failure streak', async () => {
+    for (const code of ['VALIDATION_ERROR', 'ACCESS_DENIED', 'INTERNAL_ERROR']) {
+        const r = await realtimeRuntime(); const rejected = [];
+        r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onRejected: value => rejected.push(value) });
+        let socket = await r.connect();
+        const fail = async () => {
+            socket.receive('ERROR', { message: code, 'receipt-id': r.receipt(socket, RT_ROOM) });
+            socket = await r.reconnect();
+        };
+        await fail(); await fail();
+        socket.receive('RECEIPT', { 'receipt-id': r.receipt(socket, RT_ROOM) });
+        // Force a fresh SUBSCRIBE while retaining the same room registration and failure counter.
+        socket.close(); socket = await r.reconnect();
+        await fail(); await fail();
+        assert.deepEqual(rejected, []); assert.equal(socket.commands('SUBSCRIBE').length, 1);
+        socket.receive('ERROR', { message: code, 'receipt-id': r.receipt(socket, RT_ROOM) });
+        assert.deepEqual(rejected, [code]);
+        r.service.dispose();
+    }
+});
+
+test('116 CONNECTED resets unidentified failures while three consecutive failures still reject', async () => {
+    const r = await realtimeRuntime(); const rejected = [];
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onRejected: code => rejected.push(code) });
+    let socket = await r.connect();
+    const fail = () => socket.receive('ERROR', { message: 'INTERNAL_ERROR', 'receipt-id': 'unidentified' });
+    for (let index = 0; index < 4; index++) { fail(); socket = await r.reconnect(); }
+    assert.deepEqual(rejected, []); assert.equal(socket.commands('SUBSCRIBE').length, 1);
+    // Do not send CONNECTED between these errors.
+    for (let index = 0; index < 3; index++) {
+        fail();
+        if (index < 2) { r.advance(1000 * 2 ** index); await settle(); socket = r.sockets.at(-1); socket.open(); }
+    }
+    assert.deepEqual(rejected, ['INTERNAL_ERROR']); r.service.dispose();
+});
+
+test('116 drop diagnostics contain only check names in development and stay silent in production', async () => {
+    for (const development of [false, true]) {
+        const r = await realtimeRuntime(); const logs = [];
+        r.context.__DEV__ = development;
+        r.context.console = { ...console, debug: (...args) => logs.push(args.join(' ')) };
+        r.service.subscribeRoomEvents(RT_ROOM, () => {}); const socket = await r.connect();
+        const subscription = socket.commands('SUBSCRIBE')[0].match(/\nid:([^\n]+)/)[1];
+        socket.receive('MESSAGE', { subscription }, 'secret-invalid-json');
+        r.event(socket, RT_ROOM, { at: 'secret-invalid-at', payload: { secret: 'private-body' } });
+        r.event(socket, RT_ROOM, { type: 'secret-unknown-type' });
+        r.event(socket, RT_ROOM, { roomId: RT_OTHER });
+        const drops = logs.filter(line => line.startsWith('[realtime] drop:'));
+        assert.deepEqual(drops, development ? ['[realtime] drop: invalid JSON', '[realtime] drop: invalid at', '[realtime] drop: unknown type', '[realtime] drop: roomId mismatch'] : []);
+        assert.equal(logs.some(line => /secret|private-body|opaque-access/.test(line)), false);
+        if (!development) assert.deepEqual(logs, []);
+        r.service.dispose();
+    }
+});
+
 test('116 exponential retry delays, cap, jitter and CONNECTED reset; first connection has no recovery callback', async () => {
     for (const [random, factor] of [[() => 0, 0.8], [() => 0.5, 1], [() => 1, 1.2]]) {
         const r = await realtimeRuntime({ random }); let recovered = 0;

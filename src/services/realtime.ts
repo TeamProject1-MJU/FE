@@ -14,7 +14,11 @@ const eventTypes = [
     'STATION_PROPOSAL_VOTE_CHANGED', 'SELECTED_STATION_CHANGED',
 ] as const;
 export type RoomEvent = { type: typeof eventTypes[number]; roomId: string; payload: Record<string, unknown>; at: string };
-export type RoomEventOptions = { onReconnected?: () => void; onRejected?: (code: string) => void };
+export type RoomEventOptions = {
+    onReconnected?: () => void;
+    /** NOT_ROOM_MEMBER / ROOM_NOT_FOUND는 접근 불가, 그 외 코드는 반복 실패로 구독을 포기한 경우예요. */
+    onRejected?: (code: string) => void;
+};
 type Registration = { listener: (event: RoomEvent) => void; options: RoomEventOptions; connected: boolean };
 type Room = { listeners: Set<Registration>; unsubscribe?: () => void; failures: number };
 type Frame = { headers: Record<string, string>; body: string };
@@ -148,20 +152,27 @@ export function createRealtimeService(dependencies: {
         await clearLocalSession(generation);
     }
     function deliver(roomId: string, room: Room, body: string, connection: number) {
-        if (!current(connection) || rooms.get(roomId) !== room) return;
+        const drop = (reason: string) => {
+            if (typeof __DEV__ !== 'undefined' && __DEV__) console.debug(`[realtime] drop: ${reason}`);
+        };
+        if (!current(connection) || rooms.get(roomId) !== room) return drop('inactive subscription');
         try {
             const value: unknown = JSON.parse(body);
-            if (!record(value) || typeof value.type !== 'string' || !(eventTypes as readonly string[]).includes(value.type)
-                || typeof value.roomId !== 'string' || !uuid.test(value.roomId) || value.roomId.toLowerCase() !== roomId
-                || !record(value.payload) || typeof value.at !== 'string'
+            if (!record(value)) return drop('invalid envelope');
+            if (typeof value.type !== 'string') return drop('invalid type');
+            if (!(eventTypes as readonly string[]).includes(value.type)) return drop('unknown type');
+            if (typeof value.roomId !== 'string' || !uuid.test(value.roomId)) return drop('invalid roomId');
+            if (value.roomId.toLowerCase() !== roomId) return drop('roomId mismatch');
+            if (!record(value.payload)) return drop('invalid payload');
+            if (typeof value.at !== 'string'
                 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|\+00:00)$/.test(value.at) || !Number.isFinite(Date.parse(value.at))
-                || new Date(value.at).toISOString().slice(0, 19) !== value.at.slice(0, 19)) return;
+                || new Date(value.at).toISOString().slice(0, 19) !== value.at.slice(0, 19)) return drop('invalid at');
             const event = { type: value.type, roomId: value.roomId, payload: value.payload, at: value.at } as RoomEvent;
             for (const registration of [...room.listeners]) {
                 if (!current(connection) || rooms.get(roomId) !== room) break;
                 if (room.listeners.has(registration)) safely(() => registration.listener(event));
             }
-        } catch { /* Malformed frames are ignored. */ }
+        } catch { drop('invalid JSON'); }
     }
     function subscribe(roomId: string, room: Room, connection: number) {
         if (!transport || room.unsubscribe || !room.listeners.size) return;
@@ -169,7 +180,9 @@ export function createRealtimeService(dependencies: {
         const receipt = `receipt-${serial}`;
         pending.set(receipt, roomId);
         room.unsubscribe = transport.subscribe(roomId, id, receipt, body => deliver(roomId, room, body, connection), () => {
-            if (current(connection)) { pending.delete(receipt); authRetried = false; }
+            if (current(connection) && rooms.get(roomId) === room) {
+                pending.delete(receipt); authRetried = false; room.failures = 0;
+            }
         });
         for (const registration of [...room.listeners]) {
             const reconnect = registration.connected;
@@ -245,7 +258,7 @@ export function createRealtimeService(dependencies: {
                 socketFactory: dependencies.socketFactory ?? ((url, protocols) => new WebSocket(url, protocols)),
                 connected: () => {
                     if (!current(connection)) return;
-                    starting = false; attempt = 0; authRetried = false; setState('open');
+                    starting = false; attempt = 0; authRetried = false; unidentifiedFailures = 0; setState('open');
                     for (const [id, room] of rooms) {
                         if (!current(connection)) break;
                         subscribe(id, room, connection);
