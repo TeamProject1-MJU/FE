@@ -164,6 +164,15 @@ export default function RoomDetailScreen() {
             if (id === proposalsRequestId.current) setProposals({ status: 'ready', list });
         } catch (error) {
             if (id !== proposalsRequestId.current) return;
+            // 인증 오류는 A-1 공통 처리에 맡기고 패널에 따로 안내하지 않아요.
+            if (error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
+            // 서버가 방 접근 불가(403·404)라고 하면 방 상세와 같은 접근 불가 화면을 보여줘요(방 캐시는 서비스가 비워요).
+            if (error instanceof RoomError && (error.code === 'ROOM_NOT_FOUND' || error.code === 'NOT_ROOM_MEMBER')) {
+                requestId.current++;
+                setDetail(null);
+                setLoadError(error.code);
+                return;
+            }
             setProposals({ status: 'error', message: error instanceof RoomError ? error.message : '네트워크 상태를 확인하고 다시 시도해 주세요.' });
         }
     }, [roomId, params.mock]);

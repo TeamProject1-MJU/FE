@@ -282,6 +282,13 @@ export default function RoomRecommendationsScreen() {
             await createProposal(detail.id, item.recommendedStation.id, item.resultId);
             setNotice(`${formatStationName(item.recommendedStation.name)}을 약속역 후보로 올렸어요. 약속방의 '약속역 후보' 탭에서 투표할 수 있어요.`);
         } catch (error) {
+            // 인증 오류는 A-1 공통 처리에 맡기고, 방 접근 불가(403·404)는 기존 접근 불가 화면으로 보여줘요.
+            if (error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
+            if (error instanceof RoomError && (error.code === 'ROOM_NOT_FOUND' || error.code === 'NOT_ROOM_MEMBER')) {
+                requestId.current++;
+                setLoadError(error.code);
+                return;
+            }
             setNotice(error instanceof RoomError ? error.message : '후보를 올리지 못했어요. 다시 시도해 주세요.');
         } finally {
             try {

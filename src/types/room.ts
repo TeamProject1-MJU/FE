@@ -65,7 +65,8 @@ export type RoomDetail = RoomSummary & {
 /**
  * 7.15 약속역 후보 항목 (7.14 응답 + 득표 정보)
  * - 1인 1표(방 전체), 투표 후 변경·취소 불가. 후보가 삭제되면 그 표도 함께 사라져요 (7.17)
- * - station 은 명세상 { id, name } 이에요. lines 는 화면 노선 배지용 (TODO: 응답에 없으면 역 목록에서 채움)
+ * - station 은 서버가 { id, name } 만 보내요(#101). 서비스가 lines 를 빈 배열, isSupported 를 true 로 채워요(노선 배지 숨김)
+ * - proposedBy.nickname 이 비어 있으면 서비스가 "알 수 없음"으로 정리해요
  */
 export type StationProposal = {
     id: string;
