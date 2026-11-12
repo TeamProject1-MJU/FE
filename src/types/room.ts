@@ -109,7 +109,7 @@ export type LeaveRoomScenario =
     | 'leave-tie'
     | 'leave-successor';
 
-/** 7.8 나가기 응답 */
+/** 7.7 나가기 응답: 새 방장 사용자 UUID는 서버가 결정해요. */
 export type LeaveRoomResult = {
     roomDeleted: boolean;
     newOwnerId: string | null;

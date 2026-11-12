@@ -4124,3 +4124,361 @@ test('106 약속 시각 미정·해제 후 View에 빈 문자열 텍스트를 �
         r.unmount();
     }
 });
+
+/* ---------- 방 나가기·최종 약속역 서버 연동 (#107) ---------- */
+function room107Seed(r, role = 'OWNER') {
+    const detail = { ...roomQueryDetail(role), memberCount: 2 };
+    r.roomCache.cacheRoomDetail(detail, r.roomCache.getRoomCacheScope());
+    r.roomCache.cacheRoomInviteCode(ROOM_QUERY_ID, 'OLD123', r.roomCache.getRoomCacheScope());
+    return detail;
+}
+const room107Failure = (code, status = 403) => jsonResponse({ success: false, error: { code } }, status);
+
+test('107 나가기 DELETE는 본문 없이 인증을 보내고 서버의 세 결과를 그대로 사용하며 방 캐시를 비워요', async () => {
+    for (const result of [
+        { roomDeleted: false, newOwnerId: null },
+        { roomDeleted: false, newOwnerId: ROOM_QUERY_OTHER },
+        { roomDeleted: true, newOwnerId: null },
+    ]) {
+        const r = roomQueryRuntime(); room107Seed(r);
+        r.load('src/services/api/client.ts').setAccessTokenProvider(() => 'test-access');
+        r.respond(async () => ok(result));
+        assert.deepEqual(plain(await r.room.leaveRoom(ROOM_QUERY_ID, 'leave-busy')), result);
+        assert.equal(r.calls.length, 1);
+        const call = r.calls[0];
+        assert.equal(call.url, `https://example.test/api/v1/rooms/${ROOM_QUERY_ID}/members/me`);
+        assert.equal(call.options.method, 'DELETE');
+        assert.equal(call.options.body, undefined);
+        assert.equal(call.options.headers.Authorization, 'Bearer test-access');
+        assert.equal(r.roomCache.readCachedRoom(ROOM_QUERY_ID), undefined);
+        assert.equal(r.roomCache.readCachedRoomDetail(ROOM_QUERY_ID), undefined);
+        assert.deepEqual(plain(r.roomCache.readCachedMembers(ROOM_QUERY_ID)), []);
+        assert.equal(r.roomCache.findCachedRoomIdByCode('OLD123'), undefined);
+        assert.equal(r.roomCache.readCachedRooms().length, 0);
+    }
+});
+
+test('107 나가기 응답의 누락·잘못된 타입·자기 승계·삭제와 승계 동시 응답은 UNKNOWN_ERROR이고 캐시를 보존해요', async () => {
+    for (const raw of [null, [], {}, { roomDeleted: false }, { roomDeleted: 'false', newOwnerId: null },
+        { roomDeleted: false, newOwnerId: 1 }, { roomDeleted: false, newOwnerId: 'not-uuid' },
+        { roomDeleted: true, newOwnerId: ROOM_QUERY_OTHER }, { roomDeleted: false, newOwnerId: ROOM_QUERY_ME }]) {
+        const r = roomQueryRuntime(); room107Seed(r); r.respond(async () => ok(raw));
+        await assert.rejects(r.room.leaveRoom(ROOM_QUERY_ID), { code: 'UNKNOWN_ERROR' });
+        assert.ok(r.roomCache.readCachedRoom(ROOM_QUERY_ID));
+    }
+});
+
+test('107 나가기 응답 유실 뒤 403·404 재요청은 이미 나간 방 안내와 캐시 제거로 정리해요', async () => {
+    for (const [code, status] of [['NOT_ROOM_MEMBER', 403], ['ROOM_NOT_FOUND', 404]]) {
+        const r = roomQueryRuntime(); room107Seed(r);
+        r.respond(async () => { throw Error(); });
+        await assert.rejects(r.room.leaveRoom(ROOM_QUERY_ID), { code: 'NETWORK_ERROR' });
+        assert.ok(r.roomCache.readCachedRoom(ROOM_QUERY_ID), '불확실한 네트워크 실패에서 먼저 지우지 않아요');
+        r.respond(async () => room107Failure(code, status));
+        await assert.rejects(r.room.leaveRoom(ROOM_QUERY_ID), error => error.code === code && error.message.includes('이미 나간 방'));
+        assert.equal(r.roomCache.readCachedRoom(ROOM_QUERY_ID), undefined);
+        assert.equal(r.calls.length, 2);
+    }
+});
+
+test('107 나가기 처리 중·검증·서버·인증 오류는 구분하고 실패한 요청을 자동 재시도하지 않아요', async () => {
+    for (const [code, status, expected] of [['ROOM_BUSY', 409, 'ROOM_BUSY'], ['VALIDATION_ERROR', 400, 'VALIDATION_ERROR'],
+        ['INTERNAL_ERROR', 500, 'UNKNOWN_ERROR'], ['TOKEN_INVALID', 401, 'TOKEN_INVALID'], ['TOKEN_CUSTOM', 401, 'TOKEN_CUSTOM']]) {
+        const r = roomQueryRuntime(); room107Seed(r); r.respond(async () => room107Failure(code, status));
+        await assert.rejects(r.room.leaveRoom(ROOM_QUERY_ID), { code: expected });
+        assert.equal(r.calls.length, 1);
+        if (status !== 401) assert.ok(r.roomCache.readCachedRoom(ROOM_QUERY_ID)); // 401은 A-1이 로그아웃하며 캐시를 비울 수 있어요.
+    }
+});
+
+test('107 약속역 PUT·DELETE는 서버 ID만 보내고 null 성공 뒤 상세의 역·상태·확정 시각으로 캐시를 갱신해요', async () => {
+    const r = roomQueryRuntime(); const detail = room107Seed(r);
+    let timestamp = 0;
+    r.respond(async (_url, options) => {
+        if (options.method !== 'GET') {
+            const selected = options.method === 'PUT' ? roomQueryStation(JSON.parse(options.body).stationId) : null;
+            Object.assign(detail, { selectedStation: selected, status: selected ? 'CONFIRMED' : 'OPEN', confirmedAt: selected ? `2035-02-10T10:30:0${timestamp++}Z` : null });
+            return ok(null);
+        }
+        return ok(detail);
+    });
+    for (const id of [99002, 99002, 77001, null, null]) {
+        const value = await r.room.setSelectedStation(ROOM_QUERY_ID, id === null ? null : { ...roomQueryStation(id), name: '요청 이름을 서버값 대신 쓰지 않아요' }, 'busy');
+        assert.equal(value, undefined);
+        const [write, reload] = r.calls.slice(-2);
+        assert.equal(write.url, `https://example.test/api/v1/rooms/${ROOM_QUERY_ID}/selected-station`);
+        assert.equal(write.options.method, id === null ? 'DELETE' : 'PUT');
+        assert.deepEqual(write.options.body === undefined ? undefined : JSON.parse(write.options.body), id === null ? undefined : { stationId: id });
+        assert.equal(reload.options.method, 'GET'); assert.equal(reload.url, `https://example.test/api/v1/rooms/${ROOM_QUERY_ID}`);
+        const cached = r.roomCache.readCachedRoomDetail(ROOM_QUERY_ID);
+        assert.deepEqual(plain(cached.selectedStation), detail.selectedStation);
+        assert.equal(cached.confirmedAt, detail.confirmedAt); assert.equal(cached.status, detail.status);
+        assert.equal(cached.appointmentAt, detail.appointmentAt); assert.equal(cached.memberCount, 2);
+    }
+    assert.equal(timestamp, 3, '같은 역 재지정도 서버가 새 confirmedAt을 내려줘요');
+});
+
+test('107 약속역 잘못된 ID는 요청 전에 VALIDATION_ERROR이고 mock 역 목록·후보 여부로 서버 ID를 막지 않아요', async () => {
+    const r = roomQueryRuntime(); r.respond(async (_url, options) => ok(options.method === 'GET' ? roomQueryDetail() : null));
+    for (const id of [undefined, null, '31', 1.5, Number.MAX_SAFE_INTEGER + 1, NaN]) {
+        await assert.rejects(r.room.setSelectedStation(ROOM_QUERY_ID, { ...roomQueryStation(), id }), { code: 'VALIDATION_ERROR' });
+    }
+    assert.equal(r.calls.length, 0);
+    await r.room.setSelectedStation(ROOM_QUERY_ID, roomQueryStation(99002));
+    assert.equal(JSON.parse(r.calls[0].options.body).stationId, 99002);
+});
+
+test('107 약속역 성공 응답은 null만 허용하고 204·객체·누락을 가짜 상세로 보정하지 않아요', async () => {
+    for (const clearing of [false, true]) for (const raw of [{}, [], { selectedStation: roomQueryStation() }, undefined]) {
+        const r = roomQueryRuntime(); room107Seed(r);
+        r.respond(async () => raw === undefined ? { ok: true, status: 204, text: async () => '' } : ok(raw));
+        await assert.rejects(r.room.setSelectedStation(ROOM_QUERY_ID, clearing ? null : roomQueryStation()), { code: 'UNKNOWN_ERROR' });
+        assert.equal(r.calls.length, 1); assert.equal(r.roomCache.readCachedRoom(ROOM_QUERY_ID).selectedStation, null);
+    }
+});
+
+test('107 약속역의 권한·없는 방·미지원 역·처리 중·인증 오류와 코드 캐시를 구분해요', async () => {
+    for (const clearing of [false, true]) for (const [code, status] of [['NOT_ROOM_OWNER', 403], ['NOT_ROOM_MEMBER', 403], ['ROOM_NOT_FOUND', 404],
+        ['STATION_NOT_FOUND', 404], ['STATION_UNSUPPORTED', 422], ['ROOM_BUSY', 409], ['VALIDATION_ERROR', 400], ['TOKEN_INVALID', 401]]) {
+        const r = roomQueryRuntime(); room107Seed(r); r.respond(async () => room107Failure(code, status));
+        await assert.rejects(r.room.setSelectedStation(ROOM_QUERY_ID, clearing ? null : roomQueryStation()), { code });
+        assert.equal(r.calls.length, 1);
+        if (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND') assert.equal(r.roomCache.readCachedRoom(ROOM_QUERY_ID), undefined);
+        else if (status !== 401) assert.ok(r.roomCache.readCachedRoom(ROOM_QUERY_ID));
+        if (code === 'NOT_ROOM_OWNER') assert.equal(r.roomCache.readCachedRoomCode(ROOM_QUERY_ID), undefined);
+    }
+});
+
+test('107 약속역 저장 뒤 재조회 실패는 저장 완료를 안내하고 입력 역으로 캐시를 덮지 않아요', async () => {
+    const r = roomQueryRuntime(); room107Seed(r);
+    r.respond(async (_url, options) => { if (options.method === 'PUT') return ok(null); throw Error(); });
+    await assert.rejects(r.room.setSelectedStation(ROOM_QUERY_ID, roomQueryStation()), error => error.code === 'NETWORK_ERROR' && error.message.includes('변경은 저장했지만'));
+    assert.equal(r.roomCache.readCachedRoom(ROOM_QUERY_ID).selectedStation, null);
+    assert.deepEqual(r.calls.map(call => call.options.method), ['PUT', 'GET']);
+});
+
+test('107 네트워크·요청/본문 10초 초과는 NETWORK_ERROR이고 나가기·지정·해제 재전송은 없어요', async () => {
+    for (const operation of ['leave', 'set', 'clear']) for (const phase of ['network', 'request', 'body']) {
+        const r = roomQueryRuntime(); room107Seed(r);
+        r.respond((_url, options) => {
+            if (phase === 'network') throw Error();
+            const waiting = () => new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(Error())));
+            return phase === 'request' ? waiting() : { ok: true, status: 200, text: waiting };
+        });
+        const pending = operation === 'leave' ? r.room.leaveRoom(ROOM_QUERY_ID) : r.room.setSelectedStation(ROOM_QUERY_ID, operation === 'clear' ? null : roomQueryStation());
+        const rejected = assert.rejects(pending, { code: 'NETWORK_ERROR' }); await settle();
+        if (phase !== 'network') { assert.equal([...r.timers.values()][0].ms, 10000); r.advance(10000); }
+        await rejected; assert.equal(r.calls.length, 1); assert.ok(r.roomCache.readCachedRoom(ROOM_QUERY_ID));
+    }
+});
+
+test('107 같은 계정·방의 나가기와 약속역 저장 연타는 한 요청만 보내요', async () => {
+    const r = roomQueryRuntime(); let resolve;
+    r.respond(() => new Promise(done => { resolve = done; }));
+    const leave = r.room.leaveRoom(ROOM_QUERY_ID); await settle();
+    await assert.rejects(r.room.leaveRoom(ROOM_QUERY_ID), { code: 'ROOM_BUSY' });
+    await assert.rejects(r.room.setSelectedStation(ROOM_QUERY_ID, roomQueryStation()), { code: 'ROOM_BUSY' });
+    assert.equal(r.calls.length, 1); resolve(ok({ roomDeleted: false, newOwnerId: null })); await leave;
+    r.respond(async (_url, options) => ok(options.method === 'GET' ? roomQueryDetail() : null));
+    await r.room.setSelectedStation(ROOM_QUERY_ID, roomQueryStation());
+});
+
+test('107 나간 뒤 늦게 끝난 이전 목록·상세·멤버 조회가 제거한 방을 캐시에 되살리지 않아요', async () => {
+    for (const operation of ['list', 'detail', 'members']) {
+        const r = roomQueryRuntime(); const detail = room107Seed(r); let resolve;
+        r.respond(async (_url, options) => options.method === 'GET' ? await new Promise(done => { resolve = done; }) : ok({ roomDeleted: false, newOwnerId: null }));
+        const pending = operation === 'list' ? r.room.fetchMyRooms() : operation === 'detail' ? r.room.fetchRoomDetail(ROOM_QUERY_ID) : r.room.fetchRoomMembers(ROOM_QUERY_ID);
+        await settle(); await r.room.leaveRoom(ROOM_QUERY_ID);
+        resolve(ok(operation === 'list' ? [roomQuerySummary()] : operation === 'detail' ? detail : detail.members)); await pending;
+        assert.equal(r.roomCache.readCachedRoom(ROOM_QUERY_ID), undefined); assert.equal(r.roomCache.readCachedMembers(ROOM_QUERY_ID).length, 0);
+    }
+});
+
+test('107 약속역 변경 이전의 상세 응답은 최신 서버 확정값을 캐시에서 덮지 않아요', async () => {
+    const r = roomQueryRuntime(); let resolveOld; let gets = 0; const updated = roomQueryDetail();
+    Object.assign(updated, { status: 'CONFIRMED', selectedStation: roomQueryStation(99002), confirmedAt: '2035-02-10T10:30:00Z' });
+    r.respond(async (_url, options) => options.method !== 'GET' ? ok(null) : ++gets === 1 ? await new Promise(done => { resolveOld = done; }) : ok(updated));
+    const old = r.room.fetchRoomDetail(ROOM_QUERY_ID); await settle();
+    await r.room.setSelectedStation(ROOM_QUERY_ID, roomQueryStation(99002)); resolveOld(ok(roomQueryDetail())); await old;
+    assert.equal(r.roomCache.readCachedRoomDetail(ROOM_QUERY_ID).selectedStation.id, 99002);
+});
+
+test('107 계정 전환 뒤 늦은 나가기·지정·해제 성공/오류가 새 계정 방을 지우거나 덮지 않아요', async () => {
+    for (const operation of ['leave', 'set', 'clear']) for (const fail of [false, true]) {
+        const r = roomQueryRuntime(); let resolve;
+        r.respond(() => new Promise(done => { resolve = done; }));
+        const pending = operation === 'leave' ? r.room.leaveRoom(ROOM_QUERY_ID) : r.room.setSelectedStation(ROOM_QUERY_ID, operation === 'clear' ? null : roomQueryStation());
+        const rejected = assert.rejects(pending, { code: 'AUTH_REQUIRED' }); await settle();
+        r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_OTHER, nickname: '새 계정' });
+        const fresh = { ...roomQueryDetail('OWNER', ROOM_QUERY_OTHER), memberCount: 2, name: '새 계정 방' };
+        r.roomCache.cacheRoomDetail(fresh, r.roomCache.getRoomCacheScope());
+        resolve(fail ? room107Failure('ROOM_NOT_FOUND', 404) : ok(operation === 'leave' ? { roomDeleted: true, newOwnerId: null } : null));
+        await rejected; assert.equal(r.roomCache.readCachedRoom(ROOM_QUERY_ID).name, '새 계정 방'); assert.equal(r.calls.length, 1);
+    }
+});
+
+test('107 서버 나가기 미리보기는 서버 사용자 ID를 사용하고 승계 이름을 계산하지 않아요', () => {
+    const r = roomQueryRuntime();
+    const owner = r.room.previewLeave({ ...roomQueryDetail(), memberCount: 2 });
+    assert.equal(owner.willDelete, false); assert.equal(owner.willTransfer, true); assert.equal(owner.nextOwner, null); assert.equal(owner.nextOwnerId, null);
+    assert.equal(r.room.previewLeave({ ...roomQueryDetail('MEMBER'), memberCount: 2 }).willTransfer, false);
+    assert.equal(r.room.previewLeave({ ...roomQueryDetail(), memberCount: 1, members: [roomQueryMembers()[0]] }).willDelete, true);
+});
+
+function room107Hook(detail = { ...roomQueryDetail(), memberCount: 2 }) {
+    const r = roomQueryScreen('src/hooks/use-selected-station.ts'); let changes = 0; const routes = [];
+    const props = { detail, onChanged: async () => { changes++; } };
+    r.screen.default = () => r.screen.useSelectedStation(props);
+    r.context.fetch = async (_url, options) => ok(options.method === 'GET' ? detail : null);
+    r.external['expo-router'].router.replace = route => routes.push(route);
+    return Object.assign(r, { props, routes, changes: () => changes });
+}
+
+test('107 약속역 확인창은 연타를 막고 같은 역 재확정 시 확정 시각 갱신을 안내해요', async () => {
+    const detail = { ...roomQueryDetail(), memberCount: 2, selectedStation: roomQueryStation() };
+    const r = room107Hook(detail); let resolve; let writes = 0;
+    r.context.fetch = async (_url, options) => options.method === 'PUT' ? (++writes, await new Promise(done => { resolve = done; })) : ok(detail);
+    let hook = r.render(); hook.choose(detail.selectedStation); hook = r.render();
+    const first = hook.submit(); const second = hook.submit(); await settle(); assert.equal(writes, 1);
+    resolve(ok(null)); await Promise.all([first, second]); hook = r.render();
+    assert.match(hook.notice.text, /확정 시각을 갱신했어요/); assert.equal(hook.request, null); assert.equal(r.changes(), 1); r.unmount();
+});
+
+test('107 약속역 확인창의 권한·접근 불가·미지원 역·처리 중·인증 오류 안내를 구분해요', async () => {
+    for (const [code, status] of [['NOT_ROOM_OWNER', 403], ['NOT_ROOM_MEMBER', 403], ['ROOM_NOT_FOUND', 404], ['ROOM_BUSY', 409], ['STATION_UNSUPPORTED', 422], ['TOKEN_INVALID', 401]]) {
+        const r = room107Hook(); r.context.fetch = async () => room107Failure(code, status);
+        let hook = r.render(); hook.choose(roomQueryStation()); hook = r.render(); await hook.submit(); hook = r.render();
+        if (status === 401) { assert.equal(hook.notice, null); assert.equal(r.changes(), 0); }
+        else if (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND') assert.deepEqual(r.routes, ['/rooms']);
+        else { assert.equal(hook.notice.error, true); if (code === 'ROOM_BUSY') assert.equal(hook.notice.retry, true); if (code === 'STATION_UNSUPPORTED') assert.equal(hook.notice.pick, true); }
+        if (code === 'NOT_ROOM_OWNER') assert.equal(r.changes(), 1);
+        r.unmount();
+    }
+});
+
+test('107 약속역 저장 중 화면 이탈·계정 전환 뒤 늦은 응답은 안내·이동·재조회를 하지 않아요', async () => {
+    for (const changeAccount of [false, true]) {
+        const r = room107Hook(); let resolve;
+        r.context.fetch = async (_url, options) => options.method === 'PUT' ? await new Promise(done => { resolve = done; }) : ok(roomQueryDetail());
+        let hook = r.render(); hook.choose(roomQueryStation()); hook = r.render(); const pending = hook.submit(); await settle();
+        if (changeAccount) r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_OTHER, nickname: '새 계정' }); else r.unmount();
+        resolve(ok(null)); await pending; assert.equal(r.changes(), 0); assert.deepEqual(r.routes, []);
+        if (changeAccount) { assert.equal(r.render().notice, null); r.unmount(); }
+    }
+});
+
+function room107LeaveSheet(detail = { ...roomQueryDetail(), memberCount: 2 }) {
+    const r = roomQueryScreen('src/components/rooms/room-leave-sheet.tsx'); const component = r.screen.default;
+    const left = []; const routes = []; const props = { detail, bottomInset: 0, onClose() {}, onLeft: value => left.push(value) };
+    r.screen.default = () => component(props);
+    r.external['expo-router'].router.replace = route => routes.push(route);
+    return Object.assign(r, { left, routes, props });
+}
+const room107LeaveButton = view => findElement(view, element => element.type?.name === 'Action' && element.props.danger);
+
+test('107 나가기 확인창은 서버 모드 승계 대상 이름을 단정하지 않고 연타 한 번만 전송해요', async () => {
+    const r = room107LeaveSheet(); let resolve; let count = 0;
+    r.context.fetch = async () => { count++; return await new Promise(done => { resolve = done; }); };
+    let view = r.render(); assert.ok(findTextIncluding(view, '다음 입장 순서의 멤버')); assert.equal(findTextIncluding(view, '서버 동료님에게'), null);
+    const button = room107LeaveButton(view); button.props.onPress(); button.props.onPress(); await settle(); assert.equal(count, 1);
+    resolve(ok({ roomDeleted: false, newOwnerId: ROOM_QUERY_OTHER })); await settle(); await settle();
+    assert.deepEqual(plain(r.left), [{ roomDeleted: false, newOwnerId: ROOM_QUERY_OTHER }]); r.unmount();
+});
+
+test('107 나가기 확인창은 이미 나간 방을 목록으로 안내하고 ROOM_BUSY 재시도·인증 오류를 구분해요', async () => {
+    for (const [code, status] of [['NOT_ROOM_MEMBER', 403], ['ROOM_NOT_FOUND', 404], ['ROOM_BUSY', 409], ['TOKEN_INVALID', 401]]) {
+        const r = room107LeaveSheet(); r.context.fetch = async () => room107Failure(code, status);
+        let view = r.render(); room107LeaveButton(view).props.onPress(); await settle(); await settle(); view = r.render();
+        if (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND') {
+            const button = findElement(view, element => element.type?.name === 'Action' && element.props.label === '목록으로');
+            assert.ok(button); button.props.onPress(); assert.deepEqual(r.routes, ['/rooms']);
+        } else if (code === 'ROOM_BUSY') assert.equal(room107LeaveButton(view).props.label, '다시 시도');
+        else assert.equal(findTextIncluding(view, '나가기를 완료하지 못했어요'), null);
+        assert.equal(r.left.length, 0); r.unmount();
+    }
+});
+
+test('107 나가기 확인창을 떠난 뒤 성공 응답은 이전 화면에서 목록 이동을 호출하지 않아요', async () => {
+    const r = room107LeaveSheet(); let resolve;
+    r.context.fetch = () => new Promise(done => { resolve = done; });
+    room107LeaveButton(r.render()).props.onPress(); await settle(); r.unmount();
+    resolve(ok({ roomDeleted: true, newOwnerId: null })); await settle(); await settle(); assert.deepEqual(r.left, []); assert.deepEqual(r.routes, []);
+});
+
+test('107 mock 약속역 확정·해제·나가기·승계 미리보기는 기존 동작이고 서버를 호출하지 않아요', async () => {
+    const r = createRuntime(); const room = r.load('src/services/room.ts'); let count = 0;
+    r.context.fetch = () => { count++; throw Error(); };
+    const station = r.load('src/mocks/stations.ts').MOCK_STATIONS[0];
+    await finishRoomMock(r, room.setSelectedStation('room-4', station));
+    assert.equal(room.getMockRoom('room-4').selectedStation.id, station.id);
+    await finishRoomMock(r, room.setSelectedStation('room-4', null)); assert.equal(room.getMockRoom('room-4').selectedStation, null);
+    const detail = await finishRoomMock(r, room.fetchRoomDetail('room-4'));
+    assert.equal(room.previewLeave(detail).nextOwner, '유나');
+    const result = await finishRoomMock(r, room.leaveRoom('room-4')); assert.equal(result.roomDeleted, false); assert.ok(result.newOwnerId); assert.equal(count, 0);
+});
+
+function room107TrackFocus(r) {
+    let enter; let exit;
+    r.external['expo-router'].useFocusEffect = callback => {
+        enter = callback;
+        r.external.react.useEffect(() => { exit = callback(); return exit; }, [callback]);
+    };
+    r.blur = () => exit?.();
+    r.focus = () => { exit = enter(); };
+    return r;
+}
+
+test('107 요청 중 이탈 후 다시 돌아오면 늦은 성공 안내 없이 처리 중 버튼이 해제돼요', async () => {
+    for (const screen of ['selected', 'leave']) {
+        const r = room107TrackFocus(screen === 'selected' ? room107Hook() : room107LeaveSheet()); let resolve;
+        r.context.fetch = async (_url, options) => options.method === 'GET' ? ok(roomQueryDetail()) : await new Promise(done => { resolve = done; });
+        let pending;
+        if (screen === 'selected') { let hook = r.render(); hook.choose(roomQueryStation()); hook = r.render(); pending = hook.submit(); }
+        else room107LeaveButton(r.render()).props.onPress();
+        await settle(); r.blur(); r.focus();
+        resolve(ok(screen === 'selected' ? null : { roomDeleted: false, newOwnerId: null }));
+        if (pending) await pending; else { await settle(); await settle(); }
+        const view = r.render();
+        if (screen === 'selected') { assert.equal(view.busy, false); assert.equal(r.changes(), 0); assert.equal(view.notice, null); }
+        else { assert.equal(room107LeaveButton(view).props.disabled, false); assert.equal(r.left.length, 0); }
+        r.unmount();
+    }
+});
+
+test('107 일반 멤버는 약속역 지정 확인창을 열지 못하고 취소는 서버를 호출하지 않아요', () => {
+    const member = room107Hook({ ...roomQueryDetail('MEMBER'), memberCount: 2 }); let calls = 0;
+    member.context.fetch = () => { calls++; throw Error(); };
+    member.render().choose(roomQueryStation()); assert.equal(member.render().request, null); member.unmount();
+    const owner = room107Hook(); owner.context.fetch = () => { calls++; throw Error(); };
+    owner.render().choose(roomQueryStation()); assert.ok(owner.render().request);
+    owner.render().cancel(); assert.equal(owner.render().request, null); assert.equal(calls, 0); owner.unmount();
+});
+
+test('107 방 상세는 서버 나가기 세 결과로 목록 이동 문구를 정하고 상세 기록을 닫아요', async () => {
+    for (const result of [{ roomDeleted: false, newOwnerId: null }, { roomDeleted: false, newOwnerId: ROOM_QUERY_OTHER }, { roomDeleted: true, newOwnerId: null }]) {
+        const r = roomQueryScreen('src/app/rooms/[roomId].tsx', { roomId: ROOM_QUERY_ID }); const routes = []; let dismissed = 0;
+        r.external['expo-router'].router.canDismiss = () => true;
+        r.external['expo-router'].router.dismissAll = () => { dismissed++; };
+        r.external['expo-router'].router.replace = route => routes.push(route);
+        r.context.fetch = async url => ok(url.endsWith('/invite-code') ? { roomCode: 'OLD123' } : url.includes('/station-proposals') ? proposalList([]) : roomQueryDetail());
+        let view = await pumpScreen(r);
+        findElement(findElement(view, element => element.type?.name === 'Header').props.right, element => element.props?.accessibilityLabel === '약속방 나가기').props.onPress(); view = r.render();
+        const sheet = findElement(view, element => element.type?.name === 'RoomLeaveSheet'); assert.ok(sheet);
+        sheet.props.onLeft(result);
+        assert.equal(dismissed, 1); assert.equal(routes[0].pathname, '/rooms');
+        assert.equal(routes[0].params.leaveResult, result.roomDeleted ? 'deleted' : result.newOwnerId ? 'transferred' : 'left');
+        if (result.newOwnerId) assert.equal(routes[0].params.nextOwnerName, '서버 동료'); r.unmount();
+    }
+});
+
+test('107 서버가 정한 새 방장과 약속역은 남은 계정의 재조회에서도 같은 값으로 표시돼요', async () => {
+    const r = roomQueryRuntime();
+    r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_OTHER, nickname: '서버 동료' });
+    const detail = { ...roomQueryDetail('OWNER', ROOM_QUERY_OTHER), members: [roomQueryMembers('OWNER', ROOM_QUERY_OTHER)[0]],
+        selectedStation: roomQueryStation(99002), status: 'CONFIRMED', confirmedAt: '2035-02-10T10:30:00Z' };
+    r.respond(async url => ok(url.endsWith('/invite-code') ? { roomCode: 'NEW123' } : detail));
+    const actual = await r.room.fetchRoomDetail(ROOM_QUERY_ID);
+    assert.equal(actual.ownerId, ROOM_QUERY_OTHER); assert.equal(actual.myRole, 'OWNER'); assert.equal(actual.memberCount, 1);
+    assert.equal(actual.selectedStation.id, 99002); assert.equal(actual.confirmedAt, detail.confirmedAt);
+    assert.equal((await r.room.fetchInviteCode(ROOM_QUERY_ID)).roomCode, 'NEW123');
+});

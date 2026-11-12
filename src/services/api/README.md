@@ -2,7 +2,7 @@
 
 `.env.example`을 `.env`로 복사합니다. `EXPO_PUBLIC_USE_MOCK`은 생략하면 `true`이고, 정확히 `true`일 때만 mock입니다. 서버를 쓰려면 `false`와 `/api/v1`까지 포함한 `EXPO_PUBLIC_API_BASE_URL`을 설정하고 앱을 완전히 새로고침합니다. 환경변수는 빌드에 포함되므로 토큰은 넣지 않습니다.
 
-현재 인증, 내 정보·닉네임 수정·탈퇴(`services/user.ts`), 역 검색·역 상세·노선 목록(`services/station.ts`), 혼잡도 조회(`services/congestion.ts`), 경로 검색(`services/route.ts`), 실시간 도착정보(`services/arrivals.ts`), 방 목록·상세·멤버 조회(`services/room.ts`), 중간역 추천(`services/recommendation.ts`), 약속역 후보 제안·목록·삭제·투표(`services/room.ts` → `services/room-proposals.ts`)가 서버 모드를 지원해요.
+현재 인증, 내 정보·닉네임 수정·탈퇴(`services/user.ts`), 역 검색·역 상세·노선 목록(`services/station.ts`), 혼잡도 조회(`services/congestion.ts`), 경로 검색(`services/route.ts`), 실시간 도착정보(`services/arrivals.ts`), 방 생성·참여·목록·상세·멤버 조회·수정·초대 코드·나가기·최종 약속역(`services/room.ts`), 중간역 추천(`services/recommendation.ts`), 약속역 후보 제안·목록·삭제·투표(`services/room.ts` → `services/room-proposals.ts`)가 서버 모드를 지원해요.
 
 ```ts
 import { get, post, delete as apiDelete } from '@/services/api/client';
@@ -297,3 +297,26 @@ const card = room ? toHomeMeeting(room) : null; // 방 이름·약속 시각·�
 - 홈에 들어올 때마다 다시 불러오되, 같은 계정에서 이미 보여주던 카드는 로딩으로 되돌리지 않아요. 화면을 떠난 뒤 온 응답과 로그인 세대가 바뀐 뒤 온 응답은 버려요. 결과는 계정(로그인 세대:userId, room-cache 범위와 같은 기준)과 함께 들고 있어서, 계정이 바뀌면 다시 불러오기 전에도 이전 계정의 방을 보여주지 않아요.
 - 로딩은 카드 자리의 불러오는 중 표시, 서버 오류는 "약속을 불러오지 못했어요"와 눌러서 다시 시도예요. 경로 탐색·AI 표지판·약속방 버튼은 그대로 쓸 수 있어요. 인증 오류(`TOKEN_*`·401)는 화면 안내 없이 A-1 흐름에 맡겨요.
 - 홈의 지도 그림(MockMap)은 지도 표시(B-4) 범위라 그대로예요. 도착정보·혼잡도 영역은 홈에 없어서 이번에 추가하지 않았어요.
+
+## 방 나가기·방장 승계·최종 약속역 (#107, 명세 7.7·7.10·7.11)
+
+```ts
+import { leaveRoom, setSelectedStation } from '@/services/room';
+
+const result = await leaveRoom(roomId); // DELETE /rooms/{roomId}/members/me, body 없음
+// result: { roomDeleted: boolean, newOwnerId: 사용자 UUID | null }
+await setSelectedStation(roomId, supportedStation); // PUT …/selected-station { stationId }
+await setSelectedStation(roomId, null); // DELETE …/selected-station, body 없음
+```
+
+- 서버 모드는 `room-query.ts`가 요청·unknown 응답 검사·계정 가드·캐시 갱신을 담당해요. mock 분기는 기존 동작·실패 플래그를 유지해요.
+- 나가기 결과의 삭제 여부와 새 방장은 서버 값만 사용해요. `newOwnerId`는 사용자 UUID예요. 방 삭제와 승계가 동시에 오거나 자신에게 승계하는 등 잘못된 응답은 UNKNOWN_ERROR예요. 성공하면 공용 캐시의 해당 방·멤버·초대 코드를 제거해요.
+- 나가기 403 NOT_ROOM_MEMBER·404 ROOM_NOT_FOUND도 캐시를 비우고 '이미 나간 방이거나 삭제된 약속방'으로 안내해요. 응답 유실 후 사용자가 재시도한 경우에도 정리할 수 있어요. 네트워크 오류·ROOM_BUSY만으로는 방을 먼저 지우지 않아요. 목록 이동 시 기존 상세 화면 기록도 정리해요.
+- 서버 나가기 확인창은 mock 사용자 ID를 사용하지 않아요. 현재 멤버 목록으로 마지막 멤버 여부를 안내하되, 승계할 이름을 계산하지 않고 서버의 입장 순서를 안내해요. 최종 성공 문구는 응답의 newOwnerId로 표시해요.
+- 약속역 지정은 안전한 정수 stationId 하나만 보내요. null 역은 해제를 뜻하지만 `{ id: null }`처럼 잘못된 역 객체는 VALIDATION_ERROR예요. 후보 등록 여부·표 수·mock 역 목록으로 서버 역 ID를 제한하지 않아요. 현재 OWNER 여부와 지원 여부는 서버가 최종 판단해요.
+- PUT·DELETE는 반드시 200 data:null 응답을 검사한 뒤 방 상세 GET으로 selectedStation·status·confirmedAt을 갱신해요. 같은 역 재지정의 confirmedAt도 서버 값을 그대로 사용하며 '확정 시각을 갱신했어요'로 안내해요. 이미 미확정인 역의 해제도 서비스에서는 DELETE를 보내고 성공으로 처리해요.
+- 기존 후보·투표·약속 시각을 지우거나 계산하지 않아요. 화면은 성공 후 상세·후보 목록을 다시 조회하고, 방 목록·홈은 복귀 시 기존 조회로 갱신해요.
+- ROOM_BUSY·NOT_ROOM_OWNER·NOT_ROOM_MEMBER·ROOM_NOT_FOUND·STATION_UNSUPPORTED·STATION_NOT_FOUND·VALIDATION_ERROR를 구분해요. 형식 오류·알 수 없는 오류는 UNKNOWN_ERROR, 네트워크·기존 10초 제한은 NETWORK_ERROR예요. TOKEN_*·401은 기존 A-1에 맡겨 중복 안내하지 않아요.
+- sessionGeneration:userId 범위를 요청 전후 검사하고, 같은 계정·방의 나가기/약속역 변경 연타를 막아요. 나가기 전에 시작한 목록·상세·멤버 조회는 제거한 방을 캐시에 되살리지 못해요. 계정·방 변경·화면 이탈 뒤 늦은 응답은 이전 화면의 성공 문구·이동을 실행하지 않아요. 화면 복귀 시 처리 중 버튼도 해제해요.
+- 서버 성공 뒤 상세 GET만 실패하면 '변경은 저장했지만 최신 정보를 불러오지 못했어요'라고 안내해요. 자동 재전송은 추가하지 않아요. 재저장 시 같은 역의 confirmedAt이 다시 갱신될 수 있어요.
+- BE 실시간 이벤트·SYSTEM 메시지·WebSocket, 후보·투표 API 변경은 범위 밖이에요. 기존 채팅의 mock SYSTEM 메시지가 실제 서버 이벤트를 수신한 것은 아니에요.

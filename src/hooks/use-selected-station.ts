@@ -1,5 +1,8 @@
 import { formatStationName } from '@/utils/station-name';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import { ApiError, isAuthError } from '@/services/api/errors';
+import { getSessionGeneration } from '@/services/auth';
 
 import { openStationPicker } from '@/app/station-search';
 import { setSelectedStation } from '@/services/room';
@@ -56,16 +59,17 @@ export function useSelectedStation({
     const consumed = useRef(new Set<string>());
     const mounted = useRef(false);
 
-    useEffect(() => {
+    const actionId = useRef(0);
+    const currentRoom = useRef(detail?.id);
+    useFocusEffect(useCallback(() => {
+        currentRoom.current = detail?.id;
         mounted.current = true;
-
-        return () => {
-            mounted.current = false;
-        };
-    }, []);
+        if (!inFlight.current) setBusy(false);
+        return () => { mounted.current = false; actionId.current++; };
+    }, [detail?.id]));
 
     const choose = (station: RoomStation | null) => {
-        if (!detail || detail.myRole !== 'OWNER' || inFlight.current) return;
+        if (!detail || currentRoom.current !== detail.id || detail.myRole !== 'OWNER' || inFlight.current) return;
         if (station === null && detail.selectedStation === null) return;
 
         setNotice(null);
@@ -82,13 +86,16 @@ export function useSelectedStation({
         setRequest(null);
         setNotice(null);
 
+        const generation = getSessionGeneration();
         openStationPicker(
             {
                 purpose: 'selected-station',
                 contextLabel: detail.name,
                 selectedStationId: detail.selectedStation?.id,
             },
-            choose,
+            station => {
+                if (generation === getSessionGeneration() && currentRoom.current === detail.id) choose(station);
+            },
         );
     };
 
@@ -114,19 +121,25 @@ export function useSelectedStation({
 
         if (failure) consumed.current.add(key);
 
+        const id = ++actionId.current;
+        const generation = getSessionGeneration();
+        const isCurrent = () => mounted.current && id === actionId.current
+            && currentRoom.current === request.roomId && generation === getSessionGeneration();
         try {
             await setSelectedStation(request.roomId, request.station, failure);
-            if (!mounted.current) return;
+            if (!isCurrent()) return;
 
             // API 7.4·7.15를 재조회해요.
             // 방 목록은 기존 useFocusEffect로 복귀할 때 재조회해요.
             await onChanged();
-            if (!mounted.current) return;
+            if (!isCurrent()) return;
 
             setRequest(null);
             setNotice({
                 roomId: request.roomId,
-                text: request.station
+                text: request.station && request.previous?.id === request.station.id
+                    ? `${selectedStationName(request.station)}의 확정 시각을 갱신했어요.`
+                    : request.station
                     ? `${selectedStationName(request.station)}${
                         request.previous
                             ? '으로 약속역을 변경했어요.'
@@ -138,7 +151,7 @@ export function useSelectedStation({
                 pick: false,
             });
         } catch (error) {
-            if (!mounted.current) return;
+            if (!isCurrent() || error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
 
             const code = error instanceof RoomError ? error.code : null;
             const retry =
@@ -162,16 +175,14 @@ export function useSelectedStation({
 
             if (!retry) setRequest(null);
 
-            if (
-                code === 'NOT_ROOM_OWNER' ||
-                code === 'NOT_ROOM_MEMBER' ||
-                code === 'ROOM_NOT_FOUND'
-            ) {
+            if (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND') {
+                router.replace('/rooms');
+            } else if (code === 'NOT_ROOM_OWNER') {
                 await onChanged();
             }
         } finally {
             inFlight.current = false;
-            if (mounted.current) setBusy(false);
+            if (mounted.current && currentRoom.current === request.roomId && generation === getSessionGeneration()) setBusy(false);
         }
     };
 

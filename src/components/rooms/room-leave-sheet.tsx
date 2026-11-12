@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { router } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
 import {
     ActivityIndicator,
     Keyboard,
@@ -12,6 +12,8 @@ import {
     View,
 } from 'react-native';
 
+import { ApiError, isAuthError } from '@/services/api/errors';
+import { getSessionGeneration } from '@/services/auth';
 import { leaveRoom, previewLeave } from '@/services/room';
 import {
     RoomError,
@@ -45,7 +47,16 @@ export default function RoomLeaveSheet({
     const [error, setError] = useState<LeaveError | null>(null);
     const inFlight = useRef(false);
     const mounted = useRef(false);
-    const { willDelete, nextOwner } = previewLeave(detail);
+    const actionId = useRef(0);
+    const currentRoom = useRef(detail.id);
+    const { willDelete, nextOwner, willTransfer } = previewLeave(detail);
+    const transferring = !!nextOwner || willTransfer;
+
+    useFocusEffect(useCallback(() => {
+        currentRoom.current = detail.id;
+        mounted.current = true;
+        return () => { mounted.current = false; actionId.current++; };
+    }, [detail.id]));
 
     useEffect(() => {
         mounted.current = true;
@@ -83,12 +94,16 @@ export default function RoomLeaveSheet({
         setBusy(true);
         setError(null);
 
+        const id = ++actionId.current;
+        const generation = getSessionGeneration();
+        const isCurrent = () => mounted.current && currentRoom.current === detail.id
+            && id === actionId.current && generation === getSessionGeneration();
         let result: LeaveRoomResult | undefined;
 
         try {
             result = await leaveRoom(detail.id, mock);
         } catch (failure) {
-            if (mounted.current) {
+            if (isCurrent() && !(failure instanceof ApiError && (isAuthError(failure) || failure.code.startsWith('TOKEN_')))) {
                 setError({
                     message:
                         failure instanceof RoomError
@@ -103,13 +118,13 @@ export default function RoomLeaveSheet({
         } finally {
             inFlight.current = false;
 
-            if (mounted.current) {
+            if (mounted.current && currentRoom.current === detail.id && generation === getSessionGeneration()) {
                 setBusy(false);
             }
         }
 
         // 성공 후 화면 이동은 요청 실패 처리와 분리해요.
-        if (result && mounted.current) {
+        if (result && isCurrent()) {
             onLeft(result);
         }
     };
@@ -120,7 +135,7 @@ export default function RoomLeaveSheet({
             ? '다시 시도'
             : willDelete
                 ? '방 삭제하고 나가기'
-                : nextOwner
+                : transferring
                     ? '승계하고 나가기'
                     : '나가기';
 
@@ -156,7 +171,7 @@ export default function RoomLeaveSheet({
                     >
                         {willDelete
                             ? '방을 삭제하고 나갈까요?'
-                            : nextOwner
+                            : transferring
                                 ? '방장을 넘기고 나갈까요?'
                                 : '약속방에서 나갈까요?'}
                     </Text>
@@ -167,10 +182,10 @@ export default function RoomLeaveSheet({
                             : '나간 뒤에는 이 방의 대화와 후보를 볼 수 없어요. 다른 멤버의 약속방은 유지돼요.'}
                     </Text>
 
-                    {nextOwner && !willDelete && (
+                    {transferring && !willDelete && (
                         <View style={styles.ownerBox}>
                             <Text style={styles.ownerText}>
-                                {nextOwner}님에게 방장 권한을 넘겨요.
+                                {nextOwner ? `${nextOwner}님에게 방장 권한을 넘겨요.` : '다음 입장 순서의 멤버가 방장이 돼요. 승계 대상은 서버에서 정해요.'}
                             </Text>
                         </View>
                     )}

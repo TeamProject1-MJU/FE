@@ -2,14 +2,14 @@
  * 약속방 서비스 (#42, API 명세 v1.12 7.1~7.3, 7.5, 7.8)
  *
  * #94·#97: 7.1 생성·7.2 참여·7.3 목록·7.4 상세·7.6 멤버 조회는 서버 모드를 지원해요.
- * TODO: 나머지 API는 기존 mock을 유지하고 후속 이슈에서 연동해요.
+ * #106·#107·#101: 초대 코드·출발역·방 수정·나가기·약속역·후보도 서버 모드를 지원해요.
  * - GET    /rooms                    내 방 목록
  * - POST   /rooms                    방 생성 { name, appointmentAt } (정원 4명 고정)
  * - POST   /rooms/join               초대 코드로 참여 { roomCode }
  * - GET    /rooms/{roomId}           방 상세 (7.4, 초대 코드 미포함)
  * - PATCH  /rooms/{roomId}           방 정보 수정 (OWNER)
- * - PATCH  /rooms/{roomId}/members/me  내 출발역 설정/변경 (7.7, #48)
- * - DELETE /rooms/{roomId}/members/me  나가기 (7.8)
+ * - PATCH  /rooms/{roomId}/members/me  내 출발역 설정/변경 (7.5, #48)
+ * - DELETE /rooms/{roomId}/members/me  나가기 (7.7)
  * - GET    /rooms/{roomId}/invite-code  초대 코드 (7.9, OWNER, #47)
  * - PUT    /rooms/{roomId}/selected-station  약속역 확정 (7.10, OWNER)
  * - DELETE /rooms/{roomId}/selected-station  약속역 해제 (7.11, OWNER, 후보는 유지)
@@ -25,7 +25,7 @@ import { MOCK_STATIONS } from '@/mocks/stations';
 import { useMock as isMockMode } from '@/services/api/config';
 import { fetchStation } from '@/services/station';
 import { getSession } from '@/stores/auth-store';
-import { createServerRoom, joinServerRoom, fetchServerInviteCode, updateServerDeparture, updateServerRoom, fetchServerRoomDetail, fetchServerRoomMembers, fetchServerRooms } from '@/services/room-query';
+import { createServerRoom, joinServerRoom, fetchServerInviteCode, leaveServerRoom, setServerSelectedStation, updateServerDeparture, updateServerRoom, fetchServerRoomDetail, fetchServerRoomMembers, fetchServerRooms } from '@/services/room-query';
 import { createServerProposal, deleteServerProposal, fetchServerProposals, voteServerProposal } from '@/services/room-proposals';
 import { assertRoomCacheScope, getRoomCacheScope, readCachedMembers, readCachedRoom, subscribeRoomCacheReset } from '@/services/room-cache';
 import { emitRoomMockChange } from '@/stores/room-mock-events';
@@ -695,7 +695,7 @@ const selectedStationInFlight = new Set<string>();
  * 7.10 PUT /api/v1/rooms/{roomId}/selected-station { stationId }
  * 7.11 DELETE /api/v1/rooms/{roomId}/selected-station
  *
- * TODO: 실제 API로 교체해요. 기존 Promise<void> 반환 형태를 유지해요.
+ * #107: 서버 모드에서도 Promise<void>를 유지하며 null 성공 뒤 방 상세를 재조회해요.
  * TODO: SELECTED_STATION_CHANGED·SYSTEM 메시지 연동은 이번 범위 밖이에요.
  *
  * 현재 OWNER 권한과 역의 지원 여부를 저장 직전에 확인해요.
@@ -707,6 +707,12 @@ export async function setSelectedStation(
     station: RoomStation | null,
     mock?: SelectedStationMock,
 ): Promise<void> {
+    if (!isMockMode()) {
+        if (station !== null && !Number.isSafeInteger(station?.id)) {
+            throw new RoomError('VALIDATION_ERROR', '약속역을 다시 선택해 주세요.');
+        }
+        return setServerSelectedStation(roomId, station === null ? null : station.id);
+    }
     if (selectedStationInFlight.has(roomId)) {
         throw new RoomError(
             'ROOM_BUSY',
@@ -1156,7 +1162,7 @@ function applyRoomLeave(
 }
 
 /**
- * TODO: API v1.12 7.8
+ * #107 / API 7.7
  * DELETE /api/v1/rooms/{roomId}/members/me
  *
  * 응답 { roomDeleted, newOwnerId }와
@@ -1170,6 +1176,7 @@ export async function leaveRoom(
     roomId: string,
     mock?: LeaveRoomMock,
 ): Promise<LeaveRoomResult> {
+    if (!isMockMode()) return leaveServerRoom(roomId);
     if (selectedStationInFlight.has(roomId)) {
         throw new RoomError(
             'ROOM_BUSY',
@@ -1203,6 +1210,13 @@ export async function leaveRoom(
 
 /** 나가기 확인 문구와 실제 승계에 같은 정렬 기준을 사용해요. */
 export function previewLeave(detail: RoomDetail) {
+    if (!isMockMode()) {
+        const me = detail.members.find(member => member.userId === getMyUserId());
+        const others = detail.members.filter(member => member.userId !== me?.userId);
+        // 서버 정렬·동시 입장에 따라 대상이 바뀔 수 있어 이름을 미리 계산하지 않아요.
+        return { willDelete: !!me && others.length === 0, nextOwner: null, nextOwnerId: null,
+            willTransfer: me?.role === 'OWNER' && others.length > 0 };
+    }
     const me = detail.members.find(
         item => item.userId === ME.userId,
     );
@@ -1219,6 +1233,7 @@ export function previewLeave(detail: RoomDetail) {
         willDelete: !!me && rest.length === 0,
         nextOwner: next?.nickname ?? null,
         nextOwnerId: next?.userId ?? null,
+        willTransfer: !!next,
     };
 }
 

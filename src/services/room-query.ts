@@ -1,10 +1,10 @@
-import { get, post, patch } from '@/services/api/client';
+import { get, post, patch, put, delete as apiDelete } from '@/services/api/client';
 import { ApiError, isAuthError } from '@/services/api/errors';
 import { getSessionGeneration } from '@/services/auth';
 import { fetchMe } from '@/services/user';
 import { getAuthStatus, getSession } from '@/stores/auth-store';
 import { assertRoomCacheScope, cacheRoomInviteCode, clearCachedRoomCode, cacheCreatedRoom, cacheJoinedRoom, findCachedRoomIdByCode, cacheRoomDetail, cacheRoomList, cacheRoomMembers, getRoomCacheScope, removeCachedRoom } from '@/services/room-cache';
-import { RoomError, type CreateRoomRequest, type CreatedRoom, type RoomDetail, type RoomErrorCode, type RoomMember, type RoomStation, type RoomSummary } from '@/types/room';
+import { RoomError, type CreateRoomRequest, type CreatedRoom, type LeaveRoomResult, type RoomDetail, type RoomErrorCode, type RoomMember, type RoomStation, type RoomSummary } from '@/types/room';
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const isId = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
@@ -227,11 +227,14 @@ export const fetchServerInviteCode = (roomId: string): Promise<{ roomCode: strin
     (value, scope) => cacheRoomInviteCode(roomId, value.roomCode, scope), roomId,
 );
 
-async function patchRoom(roomId: string, suffix: string, body: unknown, reload: () => Promise<unknown>): Promise<void> {
+async function mutateRoom(roomId: string, suffix: string, body: unknown, reload: () => Promise<unknown>, method: 'PATCH' | 'PUT' | 'DELETE' = 'PATCH', expectedScope?: string): Promise<void> {
     try {
         const scope = await ensureUser();
+        if (expectedScope) assertRoomCacheScope(expectedScope);
         try {
-            const raw = await patch<unknown>(`/rooms/${encodeURIComponent(roomId)}${suffix}`, body);
+            const path = `/rooms/${encodeURIComponent(roomId)}${suffix}`;
+            const raw = method === 'DELETE' ? await apiDelete<unknown>(path)
+                : method === 'PUT' ? await put<unknown>(path, body) : await patch<unknown>(path, body);
             assertRoomCacheScope(scope);
             if (raw !== null) return invalid();
         } catch (error) {
@@ -261,7 +264,7 @@ export async function updateServerDeparture(roomId: string, request: { departure
     if (!Number.isSafeInteger(request?.departureStationId)) {
         throw new RoomError('VALIDATION_ERROR', '출발역을 다시 선택해 주세요.');
     }
-    await patchRoom(roomId, '/members/me', { departureStationId: request.departureStationId }, () => fetchServerRoomMembers(roomId));
+    await mutateRoom(roomId, '/members/me', { departureStationId: request.departureStationId }, () => fetchServerRoomMembers(roomId));
 }
 
 export async function updateServerRoom(roomId: string, request: { name?: string; appointmentAt?: string | null }): Promise<void> {
@@ -281,5 +284,60 @@ export async function updateServerRoom(roomId: string, request: { name?: string;
             body.appointmentAt = new Date(request.appointmentAt).toISOString();
         }
     }
-    await patchRoom(roomId, '', body, () => fetchServerRoomDetail(roomId));
+    await mutateRoom(roomId, '', body, () => fetchServerRoomDetail(roomId));
+}
+
+
+/** #107: 나가기·약속역 변경을 같은 계정·방에서 동시에 보내지 않아요. */
+const pendingRoomActions = new Set<string>();
+async function roomAction<T>(roomId: string, action: (scope: string) => Promise<T>): Promise<T> {
+    let key: string | undefined;
+    try {
+        const scope = await ensureUser();
+        key = `${scope}:${roomId}`;
+        if (pendingRoomActions.has(key)) throw new RoomError('ROOM_BUSY', '다른 요청을 처리하고 있어요. 잠시 후 다시 시도해 주세요.');
+        pendingRoomActions.add(key);
+        try { return await action(scope); }
+        finally { pendingRoomActions.delete(key); }
+    } catch (error) { return mapRoomError(error); }
+}
+
+/** 7.7: 승계·삭제 판단은 서버 값만 사용하며 재요청의 403·404도 캐시를 비워요. */
+export function leaveServerRoom(roomId: string): Promise<LeaveRoomResult> {
+    return roomAction(roomId, async scope => {
+        let raw: unknown;
+        try {
+            raw = await apiDelete<unknown>(`/rooms/${encodeURIComponent(roomId)}/members/me`);
+        } catch (error) {
+            if (error instanceof ApiError && (error.code.startsWith('TOKEN_') || isAuthError(error))) throw error;
+            assertRoomCacheScope(scope);
+            if (error instanceof ApiError && (error.code === 'NOT_ROOM_MEMBER' || error.code === 'ROOM_NOT_FOUND')) {
+                writeVersion++;
+                removeCachedRoom(roomId, scope);
+                throw new RoomError(error.code, '이미 나간 방이거나 삭제된 약속방이에요. 목록에서 현재 상태를 확인해 주세요.');
+            }
+            throw error;
+        }
+        assertRoomCacheScope(scope);
+        if (!isRecord(raw) || typeof raw.roomDeleted !== 'boolean'
+            || !(raw.newOwnerId === null || isId(raw.newOwnerId))
+            || raw.roomDeleted && raw.newOwnerId !== null
+            || raw.newOwnerId === getSession()?.userId) return invalid();
+        writeVersion++;
+        removeCachedRoom(roomId, scope);
+        return { roomDeleted: raw.roomDeleted, newOwnerId: raw.newOwnerId };
+    });
+}
+
+/** 7.10·7.11: null 성공 뒤 방 상세를 조회하고 confirmedAt도 서버 값을 사용해요. */
+export function setServerSelectedStation(roomId: string, stationId: number | null): Promise<void> {
+    if (stationId !== null && !Number.isSafeInteger(stationId)) {
+        return Promise.reject(new RoomError('VALIDATION_ERROR', '약속역을 다시 선택해 주세요.'));
+    }
+    return roomAction(roomId, async scope => {
+        assertRoomCacheScope(scope);
+        await mutateRoom(roomId, '/selected-station', stationId === null ? undefined : { stationId },
+            () => fetchServerRoomDetail(roomId), stationId === null ? 'DELETE' : 'PUT', scope);
+        assertRoomCacheScope(scope);
+    });
 }
