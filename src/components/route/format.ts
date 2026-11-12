@@ -1,5 +1,13 @@
 import type { RouteStep, RouteSummary } from '@/types/route';
 
+/** Use Korean service time regardless of the device timezone. */
+export function formatClock(iso: string) {
+    const time = Date.parse(iso);
+    if (!Number.isFinite(time)) return '';
+    const date = new Date(time + 9 * 60 * 60 * 1000);
+    return `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`;
+}
+
 export function formatTotalTime(summary: RouteSummary) {
     const minutes = Math.round((summary.totalWithWaitSec ?? summary.totalTimeSec) / 60);
     return `${summary.totalWithWaitSec != null ? '대기 포함 ' : ''}${summary.totalWithWaitSec != null && summary.waitKind === 'ESTIMATED' ? '약 ' : ''}${minutes}분`;

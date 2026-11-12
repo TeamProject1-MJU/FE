@@ -1,4 +1,5 @@
-import { formatDirection, formatTotalTime, formatWait } from '@/components/route/format';
+import RouteNotices from '@/components/route/RouteNotices';
+import { formatClock, formatDirection, formatTotalTime, formatWait } from '@/components/route/format';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -14,13 +15,7 @@ const BORDER = '#e6e9ef';
 const WALK = '#c9ced8';
 
 const LEVEL_ORDER = ['COMFORTABLE', 'RELAXED', 'NORMAL', 'CROWDED', 'VERY_CROWDED'] as const;
-
-const pad = (value: number) => String(value).padStart(2, '0');
 const toMinutes = (sec: number) => Math.round(sec / 60);
-const formatClock = (iso: string) => {
-    const date = new Date(iso);
-    return Number.isNaN(date.getTime()) ? '' : `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-};
 
 export function formatFare(route: Route) {
     return `${route.summary.fare.toLocaleString('ko-KR')}원`;
@@ -67,6 +62,7 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
                 </Text>
                 <Congestion congestion={summary.congestion} compact />
                 <Ionicons name="chevron-down" size={17} color={NAVY} />
+                <RouteNotices summary={summary} />
             </Pressable>
         );
     }
@@ -96,6 +92,7 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
                     <Text style={styles.minutes}>
                         {formatTotalTime(summary)}
                     </Text>
+                    {summary.departureAt && <Text style={styles.arrival}>{formatClock(summary.departureAt)} 출발</Text>}
                     {!!arrival && <Text style={styles.arrival}>{arrival} 도착</Text>}
                 </View>
 
@@ -117,6 +114,8 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
                     </View>
                 </View>
             </View>
+
+            <RouteNotices summary={summary} />
 
             <View style={styles.divider} />
 

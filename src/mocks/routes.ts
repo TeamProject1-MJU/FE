@@ -165,6 +165,9 @@ function route(
         routeId,
         routeType,
         summary: {
+            noService: false,
+            serviceNotice: null,
+            arrivesAfterAppointment: false,
             totalTimeSec: minutes * 60,
             // 도착 시각은 검색할 때 services/route.ts 에서 현재 시각 기준으로 다시 계산합니다.
             arrivalAt: '',
@@ -240,9 +243,9 @@ export function findMockRoutes(from: string, to: string): MockRouteResult {
     const pair = `${from}>${to}`;
 
     if (from === '서울역' || to === '서울역') return { kind: 'error' };
-    if (pair === '건대입구>사당') return { kind: 'success', data: { routeSource: 'KAKAO', routes: GEONDAE_TO_SADANG } };
-    if (pair === '사당>건대입구') return { kind: 'success', data: { routeSource: 'KAKAO', routes: SADANG_TO_GEONDAE } };
-    if (pair === '홍대입구>잠실') return { kind: 'success', data: { routeSource: 'INTERNAL', routes: HONGDAE_TO_JAMSIL_INTERNAL } };
+    if (pair === '건대입구>사당') return { kind: 'success', data: { appointmentPassed: false, notice: null, routeSource: 'KAKAO', routes: GEONDAE_TO_SADANG } };
+    if (pair === '사당>건대입구') return { kind: 'success', data: { appointmentPassed: false, notice: null, routeSource: 'KAKAO', routes: SADANG_TO_GEONDAE } };
+    if (pair === '홍대입구>잠실') return { kind: 'success', data: { appointmentPassed: false, notice: null, routeSource: 'INTERNAL', routes: HONGDAE_TO_JAMSIL_INTERNAL } };
 
     return { kind: 'notFound' };
 }

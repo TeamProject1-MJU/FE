@@ -84,6 +84,7 @@ export default function RouteSearchScreen() {
         destination?: string;
         focus?: Field;
         arrivals?: string;
+        roomId?: string;
     }>();
 
     const [departure, setDeparture] = useState<StationSummary | null>(null);
@@ -162,7 +163,7 @@ export default function RouteSearchScreen() {
         setSearch({ status: 'loading' });
 
         try {
-            const data = await searchRoute(from, to);
+            const data = await searchRoute(from, to, params.roomId ? { roomId: params.roomId } : {});
             if (id !== requestId.current) return;
             setSearch({ status: 'success', data });
         } catch (error) {
@@ -174,7 +175,7 @@ export default function RouteSearchScreen() {
             const code = error instanceof RouteSearchError ? error.code : 'EXTERNAL_API_ERROR';
             setSearch({ status: 'error', code });
         }
-    }, []);
+    }, [params.roomId]);
 
     // 두 역이 정해지면 바로 검색합니다 (별도 검색 버튼 없음).
     useEffect(() => {
@@ -287,6 +288,13 @@ export default function RouteSearchScreen() {
                     <View style={styles.inputError}>
                         <Ionicons name="alert-circle-outline" size={17} color="#dc5050" />
                         <Text style={styles.inputErrorText}>{inputError}</Text>
+                    </View>
+                )}
+
+                {search.status === 'success' && search.data.appointmentPassed && !!search.data.notice && (
+                    <View style={styles.notice}>
+                        <Ionicons name="alert-circle-outline" size={17} color="#c58a00" />
+                        <Text style={styles.noticeText}>{search.data.notice}</Text>
                     </View>
                 )}
 

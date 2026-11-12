@@ -70,6 +70,10 @@ export type RouteStep = {
 };
 
 export type RouteSummary = {
+    departureAt?: string;
+    noService: boolean;
+    serviceNotice: string | null;
+    arrivesAfterAppointment: boolean;
     waitSec?: number | null;
     waitKind?: WaitKind;
     transferWaitSec?: number;
@@ -99,6 +103,8 @@ export type RouteSearchRequest = {
 };
 
 export type RouteSearchResponse = {
+    appointmentPassed: boolean;
+    notice: string | null;
     routeSource: RouteSource;
     routes: Route[];
 };
