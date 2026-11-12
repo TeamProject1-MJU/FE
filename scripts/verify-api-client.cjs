@@ -2178,6 +2178,32 @@ test('118 타임아웃 뒤 새로고침·화면 복귀로 저장된 메시지가
     }
 });
 
+test('118 서버에 닿지 못한 전송은 화면 복귀 후 옛 동일 본문을 성공으로 오인하지 않고 POST를 재시도해요', async () => {
+    const r = chat118Hook(); let posts = 0;
+    const old = chat118Message({ id: ROOM_QUERY_ID, content: '같은 본문을 새로 보내요' });
+    const items = [old];
+    r.context.fetch = async (_url, options) => {
+        if (options.method === 'POST') {
+            posts++;
+            if (posts === 1) throw TypeError('서버에 도달하기 전 연결 실패');
+            const message = chat118Message({ id: ROOM_QUERY_ID2, content: JSON.parse(options.body).content });
+            items.unshift(message); return ok({ message, aiPending: false });
+        }
+        return ok({ items, hasMore: false, nextCursor: null });
+    };
+    r.render(); await settle(); assert.equal(r.render().messages[0].id, old.id);
+    r.render().setDraft(old.content); r.render().send(); await settle();
+    const failed = r.render().pending[0]; assert.equal(failed.status, 'failed'); assert.equal(posts, 1);
+    r.blur(); r.focus(); await settle();
+    assert.deepEqual(plain(r.render().messages), [old]);
+    assert.equal(r.render().pending[0].clientId, failed.clientId);
+    r.render().retrySend(r.render().pending[0]); await settle(); await settle();
+    assert.equal(posts, 2, '복귀 후 재시도는 POST를 정확히 한 번 더 보내야 해요');
+    assert.equal(r.render().pending.length, 0);
+    assert.deepEqual(new Set(r.render().messages.map(message => message.id)), new Set([old.id, ROOM_QUERY_ID2]));
+    r.unmount();
+});
+
 test('118 의도적으로 같은 본문을 두 번 보내면 두 번째 기준의 첫 메시지를 저장 결과로 오인하지 않아요', async () => {
     const r = chat118Hook(); let posts = 0; const items = [];
     r.context.fetch = async (_url, options) => {

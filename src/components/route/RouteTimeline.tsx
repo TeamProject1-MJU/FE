@@ -1,3 +1,4 @@
+import { formatStationName } from '@/utils/station-name';
 import { formatDirection, formatWait } from '@/components/route/format';
 import { type ReactNode, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -105,7 +106,7 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains }: Props)
                                 <View style={styles.row}>
                                     <Tag label="승차" color={color} />
                                     <Text style={styles.stationName} numberOfLines={1}>
-                                        {first?.name}
+                                        {formatStationName(first?.name)}
                                     </Text>
                                     <View style={styles.flex} />
                                     <Congestion congestion={stepCongestion(step)} slot={step.stations?.[0]} compact />
@@ -144,7 +145,7 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains }: Props)
                                         <View key={`${index}-${stop.id}-${stop.order}`} style={styles.stopRow}>
                                             <View style={[styles.stopDot, { borderColor: color }]} />
                                             <Text style={styles.stopName} numberOfLines={1}>
-                                                {stop.name}
+                                                {formatStationName(stop.name)}
                                             </Text>
                                             <View
                                                 style={[
@@ -194,7 +195,7 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains }: Props)
                                     <View style={styles.row}>
                                         <Tag label="도착" color={MINT_DEEP} background="#e8f8f1" />
                                         <Text style={styles.stationName} numberOfLines={1}>
-                                            {last?.name}
+                                            {formatStationName(last?.name)}
                                         </Text>
                                     </View>
                                     {!!arrival && <Text style={styles.arrivalText}>{arrival} 도착 예정</Text>}
@@ -209,7 +210,7 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains }: Props)
                                     <View style={styles.row}>
                                         <Tag label="하차" color="#4b5468" background="#eef1f5" />
                                         <Text style={styles.stationName} numberOfLines={1}>
-                                            {last?.name}
+                                            {formatStationName(last?.name)}
                                         </Text>
                                     </View>
                                 </View>

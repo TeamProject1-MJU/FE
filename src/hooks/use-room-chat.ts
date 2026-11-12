@@ -324,7 +324,6 @@ export function useRoomChat(roomId: string, mock?: string) {
                 if (ctx && !isMockMode()) {
                     ctx.actionId++;
                     ctx.focused = false;
-                    ctx.sendBaseline.clear();
                     ctx.stopPolling();
                     update(ctx, previous => ({ ...previous, pending: previous.pending.map(entry => entry.status === 'sending'
                         ? { ...entry, status: 'failed', errorMessage: '전송 결과를 확인하지 못했어요. 다시 시도하면 저장 여부를 먼저 확인해요.' } : entry) }));

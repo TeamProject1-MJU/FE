@@ -1,3 +1,4 @@
+import { formatStationName } from '@/utils/station-name';
 import { formatDirection, formatTotalTime, formatWait } from '@/components/route/format';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -151,7 +152,7 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
 
                         <View style={styles.stepBody}>
                             <View style={styles.row}>
-                                <Text style={styles.stationName}>{step.stops[0]?.name}</Text>
+                                <Text style={styles.stationName}>{formatStationName(step.stops[0]?.name)}</Text>
                                 {transferWalk != null && (
                                     <Text style={styles.greenText}>  환승 도보 {transferWalk}분</Text>
                                 )}
@@ -176,7 +177,7 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
                     <View style={[styles.endDot, { backgroundColor: subwaySteps.at(-1)?.line?.color ?? NAVY }]} />
                 </View>
                 <View style={[styles.row, styles.stepBody]}>
-                    <Text style={styles.stationName}>{lastStop} 도착</Text>
+                    <Text style={styles.stationName}>{formatStationName(lastStop)} 도착</Text>
                     {!!arrival && <Text style={styles.greenText}>  {arrival} 도착 예정</Text>}
                 </View>
             </View>
