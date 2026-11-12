@@ -41,6 +41,10 @@ import {
 import { RoomError, type RoomErrorCode, type RoomDetail } from '@/types/room';
 import { useMock as isMockMode } from '@/services/api/config';
 import { ApiError, isAuthError } from '@/services/api/errors';
+import { useRoomEvents, roomEventsScope } from '@/hooks/use-room-events';
+import { mergeRoomUpdated, parseSelectedStationEvent } from '@/services/room-events';
+import { cacheRoomDetail, clearCachedRoomCode, getRoomCacheScope, removeCachedRoom } from '@/services/room-cache';
+import { fetchLatestRecommendation } from '@/services/recommendation';
 
 const NAVY = '#0f1c3f';
 const MINT = '#2bcf9a';
@@ -83,7 +87,7 @@ type LoadError = 'ROOM_NOT_FOUND' | 'NOT_ROOM_MEMBER' | 'UNKNOWN';
  *   /rooms/room-2?tab=vote&mock=propose-error    → 첫 직접 제안 실패(NETWORK_ERROR), 다시 하면 성공
  *   /rooms/room-2?tab=vote&mock=vote-error       → 첫 투표 실패(NETWORK_ERROR), 다시 하면 성공
  * 서버 모드: 방 정보·멤버·초대 코드·방 수정·출발역·후보·투표는 services/room*.ts 로 서버를 불러요.
- * TODO: 약속역 확정·해제(7.10·7.11), 나가기(7.8), 채팅(10장), WebSocket 실시간 갱신은 아직 서버 연동 전이에요(후속 이슈).
+ * 서버 모드에서는 방 상태 이벤트를 구독하고 조용히 갱신하며, 재연결 시 놓친 변경을 재조회합니다(#117).
  */
 export default function RoomDetailScreen() {
     const insets = useSafeAreaInsets();
@@ -137,6 +141,20 @@ export default function RoomDetailScreen() {
     const [tab, setTab] = useState<Tab>(params.tab === 'vote' ? 'vote' : 'chat');
     const [sheet, setSheet] = useState<Sheet>(null);
     const [notice, setNotice] = useState('');
+    const accountScope = roomEventsScope();
+    const stationEvent = useRef({ roomId, at: -Infinity, revision: 0 });
+    const summaryEvent = useRef<{ revision: number; payload: unknown }>({ revision: 0, payload: null });
+    useEffect(() => { stationEvent.current = { roomId, at: -Infinity, revision: 0 }; }, [roomId, accountScope]);
+    useEffect(() => { summaryEvent.current = { revision: 0, payload: null }; }, [roomId, accountScope]);
+    const detailRef = useRef(detail);
+    useEffect(() => { detailRef.current = detail; }, [detail]);
+
+    const rejectRoom = useCallback((code: 'NOT_ROOM_MEMBER' | 'ROOM_NOT_FOUND' = 'NOT_ROOM_MEMBER') => {
+        requestId.current++; proposalsRequestId.current++;
+        if (!isMockMode()) { try { removeCachedRoom(roomId, getRoomCacheScope()); } catch {} }
+        setDetail(null); setInviteCode(null); setSheet(null); setLoadError(code);
+        router.replace('/rooms');
+    }, [roomId]);
 
     const handleAccessError = useCallback(async (code: RoomErrorCode) => {
         if (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND') { router.replace('/rooms'); return; }
@@ -152,8 +170,10 @@ export default function RoomDetailScreen() {
     }, [roomId]);
 
     /** 7.15 후보 목록 재조회 (제안·삭제·투표·확정 후, 화면 복귀 시) */
-    const loadProposals = useCallback(async () => {
+    const loadProposals = useCallback(async (quiet = false) => {
         const id = ++proposalsRequestId.current;
+        const scope = roomEventsScope();
+        const current = () => id === proposalsRequestId.current && scope === roomEventsScope();
         try {
             if (!proposalsFillApplied.current && params.mock === 'proposals-full') {
                 proposalsFillApplied.current = true;
@@ -162,29 +182,33 @@ export default function RoomDetailScreen() {
             const fail = proposalsFailNext.current;
             proposalsFailNext.current = false; // 다시 시도하면 성공하도록
             const list = await fetchProposals(roomId, fail ? 'error' : undefined);
-            if (id === proposalsRequestId.current) setProposals({ status: 'ready', list });
+            if (current()) setProposals({ status: 'ready', list });
         } catch (error) {
-            if (id !== proposalsRequestId.current) return;
+            if (!current()) return;
             // 인증 오류는 A-1 공통 처리에 맡기고 패널에 따로 안내하지 않아요.
             if (error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
             // 서버가 방 접근 불가(403·404)라고 하면 방 상세와 같은 접근 불가 화면을 보여줘요(방 캐시는 서비스가 비워요).
             if (error instanceof RoomError && (error.code === 'ROOM_NOT_FOUND' || error.code === 'NOT_ROOM_MEMBER')) {
-                requestId.current++;
-                setDetail(null);
-                setLoadError(error.code);
+                if (isMockMode()) { requestId.current++; setDetail(null); setLoadError(error.code); }
+                else rejectRoom(error.code);
                 return;
             }
-            setProposals({ status: 'error', message: error instanceof RoomError ? error.message : '네트워크 상태를 확인하고 다시 시도해 주세요.' });
+            setProposals(previous => quiet && previous.status === 'ready' ? previous
+                : { status: 'error', message: error instanceof RoomError ? error.message : '네트워크 상태를 확인하고 다시 시도해 주세요.' });
         }
-    }, [roomId, params.mock]);
+    }, [roomId, params.mock, rejectRoom]);
 
     const retryProposals = useCallback(async () => {
         setProposals({ status: 'loading' });
         await loadProposals();
     }, [loadProposals]);
 
-    const load = useCallback(async () => {
+    const load = useCallback(async (quiet = false) => {
         const id = ++requestId.current;
+        const scope = accountScope;
+        const revision = stationEvent.current.revision;
+        const summaryRevision = summaryEvent.current.revision;
+        const current = () => id === requestId.current && scope === roomEventsScope();
         setLoadError(null);
         try {
             prepareLeaveMock(roomId, leaveScenario);
@@ -196,33 +220,74 @@ export default function RoomDetailScreen() {
                 ownerMockApplied.current = true;
                 mockTransferOwner(roomId, params.mock === 'owner-give' ? 'give' : 'take');
             }
-            const room = await fetchRoomDetail(roomId, fail ? 'error' : undefined);
-            if (id !== requestId.current) return;
+            let room = await fetchRoomDetail(roomId, fail ? 'error' : undefined);
+            if (!current()) return;
+            if (summaryRevision !== summaryEvent.current.revision) room = mergeRoomUpdated(room, summaryEvent.current.payload, false) ?? room;
+            if (revision !== stationEvent.current.revision && detailRef.current) {
+                room = { ...room, selectedStation: detailRef.current.selectedStation, confirmedAt: detailRef.current.confirmedAt, status: detailRef.current.status };
+            }
+            if (!isMockMode()) cacheRoomDetail(room, getRoomCacheScope());
+            detailRef.current = room;
             setDetail(room);
-            loadProposals();
+            if (!quiet) void loadProposals();
             // 초대 코드는 현재 OWNER 일 때만 7.9 로 따로 조회 (상세 응답엔 없음). 실패해도 상세는 그대로 보여줍니다
             if (room.myRole === 'OWNER') {
                 try {
                     const code = (await fetchInviteCode(roomId)).roomCode;
-                    if (id === requestId.current) setInviteCode(code);
+                    if (current()) setInviteCode(code);
                 } catch (error) {
                     if (error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) throw error;
-                    if (id === requestId.current) {
+                    if (current()) {
                         setInviteCode(null);
                         if (error instanceof RoomError) await handleAccessError(error.code);
                     }
                 }
             } else {
                 setInviteCode(null);
+                setSheet(previous => previous === 'invite' ? null : previous);
+                if (!isMockMode()) clearCachedRoomCode(roomId, getRoomCacheScope());
             }
         } catch (error) {
-            if (id !== requestId.current || error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
+            if (!current() || error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
+            if (!isMockMode() && error instanceof RoomError && (error.code === 'NOT_ROOM_MEMBER' || error.code === 'ROOM_NOT_FOUND')) { rejectRoom(error.code); return; }
+            if (quiet) return;
             setDetail(null);
             const code = error instanceof RoomError ? error.code : null;
             setLoadError(code === 'ROOM_NOT_FOUND' || code === 'NOT_ROOM_MEMBER' ? code : 'UNKNOWN');
             if (code === 'NOT_ROOM_MEMBER') router.replace('/rooms');
         }
-    }, [roomId, params.mock, loadProposals, leaveScenario, handleAccessError]);
+    }, [roomId, params.mock, loadProposals, leaveScenario, handleAccessError, rejectRoom, accountScope]);
+
+    useRoomEvents(roomId, {
+        rejected: rejectRoom,
+        refresh: async (target, valid) => {
+            if (target === 'detail') await load(true);
+            if (target === 'proposals') await loadProposals(true);
+            if (target === 'recommendation') {
+                try { await fetchLatestRecommendation(roomId); }
+                catch (error) {
+                    if (valid() && error && typeof error === 'object' && 'code' in error
+                        && (error.code === 'NOT_ROOM_MEMBER' || error.code === 'ROOM_NOT_FOUND')) rejectRoom(error.code);
+                }
+            }
+        },
+        receive: event => {
+            if (event.type !== 'ROOM_UPDATED' && event.type !== 'SELECTED_STATION_CHANGED') return;
+            const previous = detailRef.current;
+            if (!previous) return ['detail'];
+            const includeStation = Date.parse(event.at) >= stationEvent.current.at;
+            const selected = event.type === 'SELECTED_STATION_CHANGED' ? parseSelectedStationEvent(event.payload) : null;
+            const next = event.type === 'ROOM_UPDATED' ? mergeRoomUpdated(previous, event.payload, includeStation)
+                : selected ? { ...previous, ...(includeStation ? selected : {}),
+                    ...(includeStation ? { status: selected.selectedStation ? 'CONFIRMED' as const : 'OPEN' as const } : {}) } : null;
+            if (!next) return ['detail'];
+            if (event.type === 'ROOM_UPDATED') summaryEvent.current = { revision: summaryEvent.current.revision + 1, payload: event.payload };
+            if (includeStation) { stationEvent.current.at = Date.parse(event.at); stationEvent.current.revision++; }
+            detailRef.current = next;
+            cacheRoomDetail(next, getRoomCacheScope());
+            setDetail(next);
+        },
+    });
 
     useEffect(() => {
         return subscribeRoomMockChanges(change => {
@@ -582,7 +647,11 @@ export default function RoomDetailScreen() {
                         isOwner={isOwner}
                         myUserId={myUserId}
                         memberCount={detail.memberCount}
-                        state={proposals}
+                        state={!isMockMode() && proposals.status === 'ready' ? {
+                            ...proposals,
+                            list: { ...proposals.list, selectedStation: detail.selectedStation,
+                                items: proposals.list.items.map(item => ({ ...item, isSelected: item.station.id === detail.selectedStation?.id })) },
+                        } : proposals}
                         onReload={
                             proposals.status === 'error'
                                 ? retryProposals

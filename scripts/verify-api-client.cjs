@@ -91,6 +91,151 @@ const serverEnv = { EXPO_PUBLIC_API_BASE_URL: ' https://example.test/api/v1/// '
 const jsonResponse = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(payload) });
 const plain = value => JSON.parse(JSON.stringify(value));
 
+test('#117 이벤트별 갱신 대상과 추천 안내 판단', () => {
+    const r = createRuntime();
+    const { roomEventTargets, recommendationEventAction } = r.load('src/services/room-events.ts');
+    const expected = {
+        MEMBER_JOINED: ['detail', 'recommendation'], MEMBER_LEFT: ['detail', 'proposals', 'recommendation'],
+        OWNER_CHANGED: ['detail'], DEPARTURE_UPDATED: ['detail', 'recommendation'],
+        ROOM_UPDATED: [], SELECTED_STATION_CHANGED: [], MESSAGE_CREATED: [],
+        RECOMMENDATION_CREATED: ['recommendation'], STATION_PROPOSAL_CREATED: ['proposals'],
+        STATION_PROPOSAL_DELETED: ['proposals'], STATION_PROPOSAL_VOTE_CHANGED: ['proposals'],
+    };
+    for (const [type, targets] of Object.entries(expected)) assert.deepEqual(plain(roomEventTargets(type)), targets);
+    assert.equal(recommendationEventAction('a', 'b', false, true), 'banner');
+    assert.equal(recommendationEventAction('a', 'a', false, true), 'ignore');
+    assert.equal(recommendationEventAction('a', 'b', true, true), 'ignore');
+    assert.equal(recommendationEventAction(undefined, 'b', false, false), 'load');
+});
+
+test('#117 ROOM_UPDATED는 역할·초대 코드·멤버를 보존하고 null 해제, 잘못된 payload는 거절', () => {
+    const r = createRuntime(); const service = r.load('src/services/room-events.ts');
+    const current = { ...roomQueryDetail(), memberCount: 2, roomCode: 'ABC123', selectedStation: roomQueryStation() };
+    const payload = { ...roomQuerySummary(), name: '바뀐 이름', myRole: 'MEMBER', roomCode: 'ATTACK', members: [], selectedStation: null };
+    const merged = service.mergeRoomUpdated(current, payload);
+    assert.equal(merged.name, '바뀐 이름'); assert.equal(merged.myRole, 'OWNER'); assert.equal(merged.roomCode, 'ABC123');
+    assert.equal(merged.members, current.members); assert.equal(merged.selectedStation, null);
+    const older = service.mergeRoomUpdated(current, payload, false);
+    assert.equal(older.selectedStation, current.selectedStation); assert.equal(older.name, '바뀐 이름');
+    for (const change of [{ id: 'different' }, { selectedStation: undefined }, { selectedStation: { id: 1 } }, { appointmentAt: 'bad' }, { memberCount: 1.5 }]) {
+        assert.equal(service.mergeRoomUpdated(current, { ...payload, ...change }), null);
+    }
+    assert.deepEqual(plain(service.parseSelectedStationEvent({ station: null, confirmedAt: null })), { selectedStation: null, confirmedAt: null });
+    assert.equal(service.parseSelectedStationEvent({ station: roomQueryStation(), confirmedAt: null }), null);
+    assert.equal(service.parseSelectedStationEvent({ station: {}, confirmedAt: '2026-11-12T10:00:00Z' }), null);
+    assert.equal(service.parseSelectedStationEvent({ station: roomQueryStation(), confirmedAt: '2026-11-12T10:00:00Z' }).selectedStation.id, 88001);
+});
+
+test('#117 300ms 모으기·실행 중 한 번 더·대상별 병렬 분리·해제', async () => {
+    const r = createRuntime(); const calls = []; let finish;
+    const queue = r.load('src/services/room-events.ts').createRoomEventCoalescer(target => {
+        calls.push(target);
+        if (target === 'detail') return new Promise(resolve => { finish = resolve; });
+    });
+    queue.request(['detail', 'recommendation']); queue.request(['detail']);
+    r.advance(299); await settle(); assert.deepEqual(calls, []);
+    r.advance(1); await settle(); assert.deepEqual(calls, ['detail', 'recommendation']);
+    queue.request(['detail']); queue.request(['detail']); r.advance(1000); await settle();
+    assert.equal(calls.filter(x => x === 'detail').length, 1);
+    finish(); await settle(); r.advance(300); await settle();
+    assert.equal(calls.filter(x => x === 'detail').length, 2);
+    queue.request(['detail']); queue.dispose(); finish(); await settle(); r.advance(1000); await settle();
+    assert.equal(calls.length, 3);
+});
+
+test('#117 가짜 구독: 방장 퇴장 모으기·재연결·거절·이전 계정 응답 가드·해제', async () => {
+    const r = roomQueryScreen('src/hooks/use-room-events.ts');
+    const rt = r.load('src/services/realtime.ts'); const registrations = []; const calls = []; let stopped = 0; let denied;
+    rt.subscribeRoomEvents = (roomId, listener, options) => {
+        registrations.push({ roomId, listener, options }); return () => stopped++;
+    };
+    let responseValid;
+    const callbacks = { refresh: async (target, valid) => { calls.push(target); responseValid = valid; }, rejected: code => { denied = code; } };
+    let currentRoomId;
+    const Component = () => r.screen.useRoomEvents(currentRoomId, callbacks);
+    const render = roomId => { currentRoomId = roomId; return r.renderComponent({ type: Component, props: {} }); };
+    render(ROOM_QUERY_ID);
+    const first = registrations[0];
+    const event = type => ({ type, roomId: ROOM_QUERY_ID, payload: {}, at: '2026-11-12T10:00:00Z' });
+    first.listener(event('MEMBER_LEFT')); first.listener(event('OWNER_CHANGED'));
+    r.advance(300); await settle(); assert.deepEqual(calls, ['detail', 'proposals', 'recommendation']);
+    first.options.onReconnected(); r.advance(300); await settle(); assert.equal(calls.length, 6);
+    first.options.onRejected('INTERNAL_ERROR'); assert.equal(denied, undefined);
+    r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_OTHER, nickname: '새 계정' });
+    assert.equal(responseValid(), false);
+    first.listener(event('MEMBER_LEFT')); first.options.onReconnected(); r.advance(300); await settle(); assert.equal(calls.length, 6);
+    render(ROOM_QUERY_ID); assert.equal(stopped, 1); assert.equal(registrations.length, 2);
+    render(ROOM_QUERY_ID2); assert.equal(stopped, 2); assert.equal(registrations.length, 3);
+    registrations[2].listener(event('MEMBER_JOINED')); r.advance(300); await settle(); assert.equal(calls.length, 6);
+    registrations[2].options.onRejected('NOT_ROOM_MEMBER'); assert.equal(denied, 'NOT_ROOM_MEMBER');
+    r.unmount(); assert.equal(stopped, 3);
+});
+
+test('#117 mock 훅은 구독·타이머·재조회를 만들지 않아요', () => {
+    const r = createScreenRuntime({}, 'src/hooks/use-room-events.ts');
+    r.load('src/services/realtime.ts').subscribeRoomEvents = () => { throw Error('mock subscription'); };
+    const callbacks = { refresh: () => { throw Error('mock refresh'); }, rejected: () => {} };
+    r.renderComponent({ type: () => r.screen.useRoomEvents('room-1', callbacks), props: {} });
+    assert.equal(r.timers.size, 0); r.unmount();
+});
+
+test('#117 상세 이벤트: 오래된 약속역 무시·다른 필드 병합·같은 역 재확정·해제·방장 상실', async () => {
+    const r = roomQueryScreen('src/app/rooms/[roomId].tsx', { roomId: ROOM_QUERY_ID });
+    let listener; let role = 'OWNER'; let options;
+    r.load('src/services/realtime.ts').subscribeRoomEvents = (_id, receive, opts) => { listener ??= receive; options ??= opts; return () => {}; };
+    const cache = r.load('src/services/room-cache.ts');
+    r.context.fetch = async url => ok(url.endsWith('/invite-code') ? { roomCode: 'ABC123' }
+        : url.includes('station-proposals') ? { items: [], maxProposals: 9, selectedStation: null }
+        : url.includes('/recommendations') ? null : roomQueryDetail(role));
+    r.render(); await settle(); await settle(); r.render();
+    const emit = (type, payload, second) => listener({ type, roomId: ROOM_QUERY_ID, payload, at: `2026-11-12T10:00:${second}Z` });
+    emit('SELECTED_STATION_CHANGED', { station: roomQueryStation(90001), confirmedAt: '2026-11-12T10:00:20Z' }, '20');
+    emit('ROOM_UPDATED', { ...roomQuerySummary(), name: '이름 갱신', selectedStation: null }, '10');
+    let detail = cache.readCachedRoomDetail(ROOM_QUERY_ID);
+    assert.equal(detail.name, '이름 갱신'); assert.equal(detail.selectedStation.id, 90001);
+    assert.equal(cache.readCachedRoomCode(ROOM_QUERY_ID), 'ABC123');
+    emit('SELECTED_STATION_CHANGED', { station: roomQueryStation(90001), confirmedAt: '2026-11-12T10:00:30Z' }, '30');
+    assert.equal(cache.readCachedRoomDetail(ROOM_QUERY_ID).confirmedAt, '2026-11-12T10:00:30Z');
+    emit('SELECTED_STATION_CHANGED', { station: null, confirmedAt: null }, '40');
+    assert.equal(cache.readCachedRoomDetail(ROOM_QUERY_ID).selectedStation, null);
+    role = 'MEMBER'; emit('OWNER_CHANGED', { newOwnerId: ROOM_QUERY_OTHER }, '41');
+    r.advance(300); await settle(); r.render();
+    assert.equal(cache.readCachedRoomDetail(ROOM_QUERY_ID).myRole, 'MEMBER');
+    assert.equal(cache.readCachedRoomCode(ROOM_QUERY_ID), undefined);
+    const routes = []; r.external['expo-router'].router.replace = route => routes.push(route);
+    options.onRejected('INTERNAL_ERROR'); assert.equal(routes.length, 0);
+    options.onRejected('ROOM_NOT_FOUND'); assert.deepEqual(routes, ['/rooms']);
+    assert.equal(cache.readCachedRoomDetail(ROOM_QUERY_ID), undefined);
+    r.unmount();
+});
+
+test('#117 추천: 기존 결과 유지·새 추천 배너·보기·자기 이벤트 무시·멤버 변경 stale 갱신', async () => {
+    const r = roomQueryScreen('src/app/rooms/[roomId]/recommendations.tsx', { roomId: ROOM_QUERY_ID });
+    let listener; let latest = recoRun({ results: [] }); let latestCalls = 0;
+    r.load('src/services/realtime.ts').subscribeRoomEvents = (_id, receive) => { listener = receive; return () => {}; };
+    r.context.fetch = async url => {
+        if (url.includes('/recommendations')) { latestCalls++; return ok(latest); }
+        return ok(url.includes('station-proposals') ? { items: [], maxProposals: 9, selectedStation: null } : roomQueryDetail());
+    };
+    r.render(); await settle(); await settle(); r.render();
+    const emit = (type, payload) => listener({ type, roomId: ROOM_QUERY_ID, payload, at: '2026-11-12T10:00:00Z' });
+    emit('RECOMMENDATION_CREATED', { runId: latest.runId }); r.advance(300); await settle();
+    assert.equal(latestCalls, 1);
+    latest = recoRun({ runId: 'new-run', results: [] });
+    emit('RECOMMENDATION_CREATED', { runId: 'new-run' }); r.advance(300); await settle();
+    let view = r.render();
+    assert.ok(findElement(view, node => node.props?.children === '새 추천이 있어요'));
+    const button = findElement(view, node => node.type === 'Pressable' && findElement(node.props?.children, child => child.props?.children === '보기'));
+    button.props.onPress(); await settle(); view = r.render();
+    assert.equal(findElement(view, node => node.props?.children === '새 추천이 있어요'), null);
+    const before = latestCalls;
+    emit('RECOMMENDATION_CREATED', { runId: 'new-run' }); r.advance(300); await settle(); assert.equal(latestCalls, before);
+    latest = { ...latest, isStale: true, staleReasons: ['MEMBERS_CHANGED'] };
+    emit('DEPARTURE_UPDATED', { userId: ROOM_QUERY_OTHER }); r.advance(300); await settle(); view = r.render();
+    assert.ok(findElement(view, node => node.props?.children === '참여자나 출발역이 바뀌었어요'));
+    r.unmount();
+});
+
 /* ---------- WebSocket/STOMP base (#116): real library, virtual socket and clock ---------- */
 const RT_ROOM = '00000000-0000-0000-0000-000000000116';
 const RT_OTHER = '00000000-0000-0000-0000-000000000117';

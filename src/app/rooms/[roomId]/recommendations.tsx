@@ -1,7 +1,7 @@
 import { formatStationName } from '@/utils/station-name';
 import { ApiError, isAuthError } from '@/services/api/errors';
 import { useMock as isMockMode } from '@/services/api/config';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import {
     ActivityIndicator,
@@ -37,6 +37,9 @@ import {
     type RecommendationRun,
 } from '@/types/recommendation';
 import { RoomError, type RoomDetail, type RoomMember, type StationProposalList } from '@/types/room';
+import { roomEventsScope, useRoomEvents } from '@/hooks/use-room-events';
+import { mergeRoomUpdated, parseSelectedStationEvent, recommendationEventAction } from '@/services/room-events';
+import { getRoomCacheScope, removeCachedRoom } from '@/services/room-cache';
 
 const NAVY = '#0f1c3f';
 const MINT = '#2bcf9a';
@@ -94,7 +97,7 @@ type LoadError = 'ROOM_NOT_FOUND' | 'NOT_ROOM_MEMBER' | 'RUN_NOT_FOUND' | 'UNKNO
  * - 인증 오류(TOKEN_*·401)는 A-1 공통 처리에 맡기고 이 화면에서 따로 안내하지 않아요.
  * - 8.1 시간 초과·연결 실패는 "결과가 저장됐을 수 있어요" 안내를 보여주고, 화면 재진입 시 8.2 로 확인돼요.
  * - "후보로 올리기"는 서버 모드에서 7.15 로 보내요(#101).
- * TODO(범위 밖): WS 수신 시 8.2 재조회
+ * WS로 최신 여부를 갱신하고, 다른 실행은 새 추천 배너로 안내합니다(#117).
  */
 export default function RoomRecommendationsScreen() {
     const insets = useSafeAreaInsets();
@@ -126,6 +129,89 @@ export default function RoomRecommendationsScreen() {
     const [openedParticipant, setOpenedParticipant] = useState<string | null>(null);
     const [departureSaving, setDepartureSaving] = useState(false);
     const [notice, setNotice] = useState('');
+    const screenContext = useRef({ active: true });
+    useEffect(() => {
+        const context = { active: true }; screenContext.current = context;
+        return () => { context.active = false; };
+    }, [roomId]);
+    const [newRecommendation, setNewRecommendation] = useState(false);
+    const realtimeRequest = useRef({ detail: 0, proposals: 0, recommendation: 0 });
+    const runRef = useRef(run);
+    useEffect(() => { runRef.current = run; }, [run]);
+    const detailRef = useRef(detail);
+    useEffect(() => { detailRef.current = detail; }, [detail]);
+    const stationAt = useRef(-Infinity);
+    const accountScope = roomEventsScope();
+    useEffect(() => { stationAt.current = -Infinity; }, [roomId, accountScope]);
+    const rejectRoom = () => {
+        requestId.current++;
+        realtimeRequest.current.detail++; realtimeRequest.current.proposals++; realtimeRequest.current.recommendation++;
+        try { removeCachedRoom(roomId, getRoomCacheScope()); } catch {}
+        router.replace('/rooms');
+    };
+    const refreshLatest = async (valid: () => boolean = () => true, replace = false) => {
+        if (runningRef.current) return;
+        const id = ++realtimeRequest.current.recommendation;
+        const scope = roomEventsScope();
+        const baseline = requestId.current;
+        try {
+            const latest = await fetchLatestRecommendation(roomId);
+            if (!valid() || scope !== roomEventsScope() || id !== realtimeRequest.current.recommendation
+                || baseline !== requestId.current || runningRef.current) return;
+            const previous = runRef.current;
+            if (replace || !previous) {
+                runRef.current = latest; setRun(latest); setView(latest ? 'result' : 'input'); setNewRecommendation(false);
+                if (replace && runIdParam) router.setParams({ runId: '' });
+            } else if (latest?.runId === previous.runId) {
+                setRun(current => current?.runId === latest.runId ? { ...current, isStale: latest.isStale, staleReasons: latest.staleReasons } : current);
+            } else if (latest) {
+                setNewRecommendation(true);
+                setRun(current => current ? { ...current, isStale: null, staleReasons: null } : current);
+            }
+        } catch (error) {
+            if (valid() && scope === roomEventsScope() && id === realtimeRequest.current.recommendation
+                && baseline === requestId.current && error instanceof RecommendationError
+                && (error.code === 'NOT_ROOM_MEMBER' || error.code === 'ROOM_NOT_FOUND')) rejectRoom();
+        }
+    };
+    useRoomEvents(roomId, {
+        rejected: rejectRoom,
+        receive: event => {
+            if (event.type === 'ROOM_UPDATED' || event.type === 'SELECTED_STATION_CHANGED') {
+                const previous = detailRef.current;
+                if (!previous) return ['detail'];
+                const includeStation = Date.parse(event.at) >= stationAt.current;
+                const selected = event.type === 'SELECTED_STATION_CHANGED' ? parseSelectedStationEvent(event.payload) : null;
+                const next = event.type === 'ROOM_UPDATED' ? mergeRoomUpdated(previous, event.payload, includeStation)
+                    : selected ? { ...previous, ...(includeStation ? selected : {}) } : null;
+                if (!next) return ['detail'];
+                if (includeStation) stationAt.current = Date.parse(event.at);
+                realtimeRequest.current.detail++;
+                detailRef.current = next; setDetail(next);
+                return;
+            }
+            if (event.type !== 'RECOMMENDATION_CREATED') return;
+            const action = recommendationEventAction(runRef.current?.runId, event.payload.runId, runningRef.current, view === 'result');
+            if (action === 'ignore') return false;
+            if (action === 'banner') setNewRecommendation(true);
+        },
+        refresh: async (target, valid) => {
+            if (target === 'recommendation') { await refreshLatest(valid); return; }
+            const id = ++realtimeRequest.current[target];
+            try {
+                if (target === 'detail') {
+                    const room = await fetchRoomDetail(roomId);
+                    if (valid() && id === realtimeRequest.current.detail) setDetail(room);
+                } else {
+                    const list = await fetchProposals(roomId);
+                    if (valid() && id === realtimeRequest.current.proposals) setProposals(list);
+                }
+            } catch (error) {
+                if (valid() && id === realtimeRequest.current[target] && error instanceof RoomError
+                    && (error.code === 'NOT_ROOM_MEMBER' || error.code === 'ROOM_NOT_FOUND')) rejectRoom();
+            }
+        },
+    });
 
     const createFailNext = useRef(params.mock === 'error');
     const latestFailNext = useRef(params.mock === 'latest-error');
@@ -134,11 +220,16 @@ export default function RoomRecommendationsScreen() {
 
     const load = useCallback(async () => {
         const id = ++requestId.current;
+        const scope = accountScope;
+        const detailId = ++realtimeRequest.current.detail;
+        const proposalsId = ++realtimeRequest.current.proposals;
+        const recommendationId = ++realtimeRequest.current.recommendation;
+        const current = () => id === requestId.current && scope === roomEventsScope();
         setLoadError(null);
         try {
             const room = await fetchRoomDetail(roomId);
-            if (id !== requestId.current) return;
-            setDetail(room);
+            if (!current()) return;
+            if (detailId === realtimeRequest.current.detail) setDetail(room);
             const [list, latest] = await Promise.all([
                 fetchProposals(roomId),
                 runIdParam
@@ -149,19 +240,23 @@ export default function RoomRecommendationsScreen() {
                         return fetchLatestRecommendation(roomId, fail ? 'error' : undefined);
                     })(),
             ]);
-            if (id !== requestId.current) return;
-            setProposals(list);
-            setRun(latest);
-            setView(latest ? 'result' : 'input');
+            if (!current()) return;
+            if (proposalsId === realtimeRequest.current.proposals) setProposals(list);
+            if (recommendationId === realtimeRequest.current.recommendation) {
+                setRun(latest);
+                runRef.current = latest;
+                setNewRecommendation(false);
+                setView(latest ? 'result' : 'input');
+            }
         } catch (error) {
-            if (id !== requestId.current) return;
+            if (!current()) return;
             if (error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
             const code = error instanceof RoomError || error instanceof RecommendationError ? error.code : null;
             setLoadError(code === 'ROOM_NOT_FOUND' || code === 'NOT_ROOM_MEMBER' || code === 'RUN_NOT_FOUND' ? code : 'UNKNOWN');
         } finally {
             if (id === requestId.current) setLoading(false);
         }
-    }, [roomId, runIdParam]);
+    }, [roomId, runIdParam, accountScope]);
 
     // 방 화면 진입·복귀 시 8.2 를 다시 조회해 isStale 을 갱신합니다 (명세 8.2). 계산 중에는 건너뜀
     useFocusEffect(
@@ -225,6 +320,10 @@ export default function RoomRecommendationsScreen() {
     const runRecommendation = async () => {
         if (!detail || running || runningRef.current || blockReason) return;
         runningRef.current = true;
+        requestId.current++;
+        realtimeRequest.current.recommendation++;
+        const scope = roomEventsScope();
+        const context = screenContext.current;
         setRunning(true);
         setRunError(null);
         setNotice('');
@@ -232,11 +331,15 @@ export default function RoomRecommendationsScreen() {
             const fail = createFailNext.current;
             createFailNext.current = false; // 다시 시도하면 성공하도록
             const created = await createRecommendation(detail.id, buildRequest(), fail ? 'error' : undefined);
+            if (!context.active || scope !== roomEventsScope()) return;
+            runRef.current = created;
+            setNewRecommendation(false);
             setRun(created);
             setOpenedParticipant(null);
             setView('result');
             if (runIdParam) router.setParams({ runId: '' }); // 이전 실행 화면에서 새로 실행했으면 최근 실행으로
         } catch (error) {
+            if (!context.active || scope !== roomEventsScope()) return;
             // 인증 오류는 A-1 공통 처리(갱신·로그인 이동)에 맡기고 중복 안내하지 않아요.
             if (error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
             if (error instanceof RecommendationError) {
@@ -246,7 +349,7 @@ export default function RoomRecommendationsScreen() {
             }
         } finally {
             runningRef.current = false;
-            setRunning(false);
+            if (context.active && scope === roomEventsScope()) setRunning(false);
         }
     };
 
@@ -278,12 +381,17 @@ export default function RoomRecommendationsScreen() {
     /** 그림 33 ❺ 이 역으로 약속방에 공유 → 약속역 후보 제안 (7.14, resultId = 이 결과 카드의 resultId) */
     const shareAsCandidate = async (item: RecommendationResult) => {
         if (!detail || sharing) return;
+        const scope = roomEventsScope();
+        const context = screenContext.current;
+        const current = () => context.active && scope === roomEventsScope();
         setSharing(true);
         setNotice('');
         try {
             await createProposal(detail.id, item.recommendedStation.id, item.resultId);
+            if (!current()) return;
             setNotice(`${formatStationName(item.recommendedStation.name)}을 약속역 후보로 올렸어요. 약속방의 '약속역 후보' 탭에서 투표할 수 있어요.`);
         } catch (error) {
+            if (!current()) return;
             // 인증 오류는 A-1 공통 처리에 맡기고, 방 접근 불가(403·404)는 기존 접근 불가 화면으로 보여줘요.
             if (error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
             if (error instanceof RoomError && (error.code === 'ROOM_NOT_FOUND' || error.code === 'NOT_ROOM_MEMBER')) {
@@ -293,12 +401,16 @@ export default function RoomRecommendationsScreen() {
             }
             setNotice(error instanceof RoomError ? error.message : '후보를 올리지 못했어요. 다시 시도해 주세요.');
         } finally {
-            try {
-                setProposals(await fetchProposals(detail.id)); // 중복·상한 상태를 서버 기준으로 다시 맞춤
-            } catch {
-                // 목록 재조회 실패는 버튼 상태만 이전 값으로 둡니다
+            if (current()) {
+                const id = ++realtimeRequest.current.proposals;
+                try {
+                    const list = await fetchProposals(detail.id);
+                    if (current() && id === realtimeRequest.current.proposals) setProposals(list);
+                } catch {
+                    // 목록 재조회 실패는 버튼 상태만 이전 값으로 둡니다
+                }
+                if (current()) setSharing(false);
             }
-            setSharing(false);
         }
     };
 
@@ -548,6 +660,14 @@ export default function RoomRecommendationsScreen() {
                 </Pressable>
             ))}
             <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]} showsVerticalScrollIndicator={false}>
+                {newRecommendation && (
+                    <View style={styles.staleBox}>
+                        <Text style={styles.staleTitle}>새 추천이 있어요</Text>
+                        <Pressable accessibilityRole="button" onPress={() => void refreshLatest(undefined, true)} style={styles.staleButton}>
+                            <Text style={styles.staleButtonText}>보기</Text>
+                        </Pressable>
+                    </View>
+                )}
                 <Text style={styles.summary}>{summary}</Text>
 
                 {/* 이전 실행(8.3) 표시: isStale === null 이면 판정 안 함, 다시 추천받기 없음 */}
@@ -592,7 +712,7 @@ export default function RoomRecommendationsScreen() {
                 {(run.conditionText || Object.keys(run.appliedConstraints).length > 0 || understoodMessage) && (
                     <View style={styles.understoodBox}>
                         <View style={styles.understoodHead}><Ionicons name="sparkles" size={14} color={PURPLE} /><Text style={styles.understoodTitle}>이렇게 이해했어요</Text></View>
-                        {!!run.conditionText && <Text style={styles.understoodQuote}>"{run.conditionText}"</Text>}
+                        {!!run.conditionText && <Text style={styles.understoodQuote}>&quot;{run.conditionText}&quot;</Text>}
                         <View style={styles.constraintRow}>
                             {constraintChips(run.appliedConstraints, members).map(label => <View key={label} style={styles.constraintChip}><Text style={styles.constraintText}>{label}</Text></View>)}
                             {Object.keys(run.appliedConstraints).length === 0 && <Text style={styles.constraintNone}>적용된 제약 없음</Text>}
@@ -638,7 +758,7 @@ export default function RoomRecommendationsScreen() {
                                 <Metric label="최대 편차" value={`${result.metrics.maxDifferenceMinutes}분`} accent />
                                 <Metric label="평균 예상 요금" value={`${result.metrics.averageFare.toLocaleString()}원`} />
                             </View>
-                            <Text style={styles.estimateNote}>시간·요금은 중간역을 고르기 위한 예상 값이에요. 실제 경로는 '경로 자세히 보기'에서 확인해요.</Text>
+                            <Text style={styles.estimateNote}>시간·요금은 중간역을 고르기 위한 예상 값이에요. 실제 경로는 &apos;경로 자세히 보기&apos;에서 확인해요.</Text>
 
                             {/* 참여자별 이동 (탭하면 그림 37 상세) */}
                             <View style={styles.participants}>
