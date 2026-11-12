@@ -2415,6 +2415,50 @@ function chat118Hook(realtimeState = 'closed') {
     return r;
 }
 
+test('118 realtime 구독 예외에도 초기 로드·전송·3초 REST AI 수신 유지', async () => {
+    for (const dev of [false, true]) {
+        const r = chat118Hook('closed');
+        const logs = [];
+        r.context.__DEV__ = dev;
+        r.context.console = { ...console, debug: (...args) => logs.push(args) };
+        let subscriptions = 0, gets = 0, posts = 0;
+        r.load('src/services/realtime.ts').subscribeRoomEvents = () => {
+            subscriptions++;
+            throw Error('invalid https://private.test/api token=secret message=private');
+        };
+        const question = chat118Message();
+        let items = [];
+        r.context.fetch = async (_url, options) => {
+            if (options.method === 'POST') {
+                posts++; items = [question];
+                return ok({ message: question, aiPending: true });
+            }
+            gets++;
+            return ok({ items, hasMore: false, nextCursor: null });
+        };
+        assert.doesNotThrow(() => r.render());
+        await settle();
+        assert.equal(subscriptions, 1);
+        assert.equal(r.render().status, 'ready');
+        assert.equal(gets, 1);
+        r.render().setDraft(question.content); r.render().send(); await settle();
+        assert.equal(posts, 1);
+        assert.equal(r.render().pending.length, 0);
+        assert.equal(r.render().messages[0].id, question.id);
+        assert.equal(r.render().aiPending, 1);
+        const reply = chat118Message({ id: ROOM_QUERY_ID, senderType: 'AI', senderId: null, nickname: null, createdAt: '2026-11-12T10:00:03Z' });
+        items = [reply, question];
+        r.advance(2999); await settle(); assert.equal(gets, 1);
+        r.advance(1); await settle();
+        assert.equal(gets, 2);
+        assert.deepEqual(plain(r.render().messages), [question, reply]);
+        assert.equal(r.render().aiPending, 0);
+        assert.deepEqual(logs, dev ? [['[chat] realtime subscription unavailable; using REST fallback']] : []);
+        assert.doesNotThrow(() => r.unmount());
+        assert.equal(r.timers.size, 0);
+    }
+});
+
 test('118 realtime 초기 조회 중 USER SYSTEM AI 병합·정렬·중복·형식 검증', async () => {
     const r = chat118Hook('open'); let resolve;
     r.context.fetch = async () => await new Promise(done => { resolve = done; });

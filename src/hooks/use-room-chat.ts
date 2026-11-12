@@ -362,36 +362,43 @@ export function useRoomChat(roomId: string, mock?: string) {
             if (ctx.focused) ctx.resumePolling();
         };
         const offState = isMockMode() ? () => {} : subscribeRealtimeState(schedule);
-        const offEvents = isMockMode() || !ctx.valid() ? () => {} : subscribeRoomEvents(roomId, event => {
-            if (!ctx.valid() || ctx.blocked || event.type !== 'MESSAGE_CREATED') return;
-            let message: ChatMessage;
-            try { message = parseChatMessage(event.payload); }
-            catch {
-                if (typeof __DEV__ !== 'undefined' && __DEV__) console.debug('[chat] drop: invalid MESSAGE_CREATED payload');
-                return;
+        let offEvents: () => void = () => {};
+        if (!isMockMode() && ctx.valid()) {
+            try {
+                offEvents = subscribeRoomEvents(roomId, event => {
+                    if (!ctx.valid() || ctx.blocked || event.type !== 'MESSAGE_CREATED') return;
+                    let message: ChatMessage;
+                    try { message = parseChatMessage(event.payload); }
+                    catch {
+                        if (typeof __DEV__ !== 'undefined' && __DEV__) console.debug('[chat] drop: invalid MESSAGE_CREATED payload');
+                        return;
+                    }
+                    const duplicate = received.has(message.id);
+                    received.add(message.id);
+                    ctx.knownIds.add(message.id);
+                    if (!duplicate && message.senderType === 'USER' && message.senderId === getSession()?.userId) {
+                        const entry = [...ctx.queued.values()]
+                            .filter(item => item.content === message.content && ctx.sendBaseline.has(item.clientId)
+                                && !ctx.sendBaseline.get(item.clientId)!.has(message.id))
+                            .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0];
+                        if (entry) {
+                            ctx.queued.delete(entry.clientId);
+                            ctx.sendBaseline.delete(entry.clientId);
+                            update(ctx, previous => ({ ...previous, pending: previous.pending.filter(item => item.clientId !== entry.clientId) }));
+                        }
+                    }
+                    resolveWaiting([message]);
+                    update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, [message]) }));
+                }, {
+                    onReconnected: () => { if (ctx.valid() && !ctx.blocked) void refresh(); },
+                    onRejected: code => {
+                        if (ctx.valid() && (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND')) block(code);
+                    },
+                });
+            } catch {
+                if (typeof __DEV__ !== 'undefined' && __DEV__) console.debug('[chat] realtime subscription unavailable; using REST fallback');
             }
-            const duplicate = received.has(message.id);
-            received.add(message.id);
-            ctx.knownIds.add(message.id);
-            if (!duplicate && message.senderType === 'USER' && message.senderId === getSession()?.userId) {
-                const entry = [...ctx.queued.values()]
-                    .filter(item => item.content === message.content && ctx.sendBaseline.has(item.clientId)
-                        && !ctx.sendBaseline.get(item.clientId)!.has(message.id))
-                    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0];
-                if (entry) {
-                    ctx.queued.delete(entry.clientId);
-                    ctx.sendBaseline.delete(entry.clientId);
-                    update(ctx, previous => ({ ...previous, pending: previous.pending.filter(item => item.clientId !== entry.clientId) }));
-                }
-            }
-            resolveWaiting([message]);
-            update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, [message]) }));
-        }, {
-            onReconnected: () => { if (ctx.valid() && !ctx.blocked) void refresh(); },
-            onRejected: code => {
-                if (ctx.valid() && (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND')) block(code);
-            },
-        });
+        }
 
         const unsubscribe = subscribeChat(roomId, () => {
             update(ctx, previous => ({
