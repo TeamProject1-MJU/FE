@@ -2457,7 +2457,8 @@ test('방 생성 서버 요청·인증·이름 정리·시각 null과 생성 응
         assert.deepEqual(plain(r.room.getMockMembers(ROOM_QUERY_ID)), []); // joinedAt은 발명하지 않아요.
         assert.deepEqual(plain(await r.room.fetchInviteCode(ROOM_QUERY_ID)), { roomCode: raw.roomCode });
     }
-    assert.equal(r.calls.length, 3); // 코드 확인을 위한 별도 7.9 요청은 없어요.
+    assert.equal(r.calls.filter(call => call.options.method === 'POST').length, 3);
+    assert.equal(r.calls.filter(call => call.url.endsWith('/invite-code')).length, 3); // #106부터 실제 7.9로 현재 코드를 확인해요.
     assert.deepEqual(new Set(r.roomCache.readCachedRooms().map(room => room.id)), new Set([ROOM_QUERY_ID2, ROOM_QUERY_ID]));
     assert.equal(Object.hasOwn(r.roomCache.readCachedRooms()[1], 'roomCode'), false);
 });
@@ -2604,19 +2605,21 @@ test('생성 코드 캐시는 상세·목록 갱신에 유지되고 권한·목�
     const r = roomQueryRuntime();
     r.respond(async () => jsonResponse({ success: true, data: createdRoomData() }, 201));
     await r.room.createRoom({ name: '모임', appointmentAt: null });
-    r.respond(async url => jsonResponse({ success: true, data: url.endsWith('/rooms') ? [roomQuerySummary()] : roomQueryDetail() }));
+    r.respond(async url => jsonResponse({ success: true, data: url.endsWith('/rooms') ? [roomQuerySummary()] : url.endsWith('/invite-code') ? { roomCode: 'A3K9PZ' } : roomQueryDetail() }));
     await r.room.fetchRoomDetail(ROOM_QUERY_ID); await r.room.fetchMyRooms();
     assert.deepEqual(plain(await r.room.fetchInviteCode(ROOM_QUERY_ID)), { roomCode: 'A3K9PZ' });
     r.respond(async () => jsonResponse({ success: true, data: roomQueryDetail('MEMBER') }));
     await r.room.fetchRoomDetail(ROOM_QUERY_ID);
     assert.equal(r.roomCache.readCachedRoomCode(ROOM_QUERY_ID), undefined);
+    r.respond(async () => jsonResponse({ success: false, error: { code: 'NOT_ROOM_OWNER' } }, 403));
     await assert.rejects(r.room.fetchInviteCode(ROOM_QUERY_ID), { code: 'NOT_ROOM_OWNER' });
     r.respond(async () => jsonResponse({ success: true, data: [] })); await r.room.fetchMyRooms();
     assert.equal(r.roomCache.findCachedRoomIdByCode('A3K9PZ'), undefined);
     r.respond(async () => jsonResponse({ success: true, data: roomQueryDetail() })); await r.room.fetchRoomDetail(ROOM_QUERY_ID);
     const calls = r.calls.length;
-    await assert.rejects(r.room.fetchInviteCode(ROOM_QUERY_ID), { code: 'UNKNOWN_ERROR' });
-    assert.equal(r.calls.length, calls); // 알 수 없는 서버 코드 대신 가짜 코드나 7.9 호출을 만들지 않아요.
+    r.respond(async () => jsonResponse({ success: true, data: { roomCode: 'NEW123' } }));
+    assert.deepEqual(plain(await r.room.fetchInviteCode(ROOM_QUERY_ID)), { roomCode: 'NEW123' });
+    assert.equal(r.calls.length, calls + 1); // 캐시가 없어도 실제 7.9 응답으로 복구해요.
 });
 
 test('mock 생성·참여·이미 참여·정원 초과·처리 중 재시도는 서버 없이 유지해요', async () => {
@@ -3178,4 +3181,338 @@ test('추천 화면(서버): isStale true 만 다시 추천받기 안내, null �
     assert.ok(findText(view, '이전 추천 기록'));
     assert.equal(r.calls.filter(call => call.options.method === 'POST').length, 1);
     r.unmount();
+});
+
+const settings106Url = `https://example.test/api/v1/rooms/${ROOM_QUERY_ID}`;
+function settings106Seed(r, role = 'OWNER') {
+    r.roomCache.cacheRoomDetail({ ...roomQueryDetail(role), memberCount: 2 }, r.roomCache.getRoomCacheScope());
+}
+
+test('106 초대 코드는 캐시 없이 서버 GET·인증으로 조회하고 새 방장도 현재 서버 권한으로 확인해요', async () => {
+    const r = roomQueryRuntime();
+    r.load('src/services/api/client.ts').setAccessTokenProvider(() => 'test-access');
+    r.respond(async () => jsonResponse({ success: true, data: { roomCode: 'NEW123' } }));
+    assert.deepEqual(plain(await r.room.fetchInviteCode(ROOM_QUERY_ID, 'error')), { roomCode: 'NEW123' });
+    assert.equal(r.calls[0].url, `${settings106Url}/invite-code`);
+    assert.equal(r.calls[0].options.method, 'GET');
+    assert.equal(r.calls[0].options.headers.Authorization, 'Bearer test-access');
+    settings106Seed(r, 'MEMBER'); // 캐시 역할이 과거 값이어도 서버가 최종 판단해요.
+    assert.deepEqual(plain(await r.room.fetchInviteCode(ROOM_QUERY_ID)), { roomCode: 'NEW123' });
+    assert.equal(r.calls.length, 2);
+    assert.deepEqual(plain(await r.room.fetchInviteCode('room/1 a')), { roomCode: 'NEW123' });
+    assert.ok(r.calls.at(-1).url.endsWith('/rooms/room%2F1%20a/invite-code'));
+});
+
+test('106 초대 코드 형식 오류는 UNKNOWN_ERROR이며 권한 상실은 이전 코드를 제거해요', async () => {
+    const r = roomQueryRuntime(); settings106Seed(r);
+    for (const data of [{}, null, [], { roomCode: 123456 }, { roomCode: 'abc123' }, { roomCode: 'ABC1234' }]) {
+        r.respond(async () => jsonResponse({ success: true, data }));
+        await assert.rejects(r.room.fetchInviteCode(ROOM_QUERY_ID), { code: 'UNKNOWN_ERROR' });
+    }
+    r.roomCache.cacheRoomInviteCode(ROOM_QUERY_ID, 'OLD123', r.roomCache.getRoomCacheScope());
+    r.respond(async () => jsonResponse({ success: false, error: { code: 'NOT_ROOM_OWNER' } }, 403));
+    await assert.rejects(r.room.fetchInviteCode(ROOM_QUERY_ID), { code: 'NOT_ROOM_OWNER' });
+    assert.equal(r.roomCache.readCachedRoomCode(ROOM_QUERY_ID), undefined);
+});
+
+test('106 출발역 PATCH는 서버 ID 하나만 보내고 null 응답 뒤 실제 멤버를 재조회하며 객체를 반환하지 않아요', async () => {
+    const r = roomQueryRuntime(); settings106Seed(r);
+    const members = roomQueryMembers(); members[0].departureStation = roomQueryStation(99001);
+    r.respond(async (_url, options) => jsonResponse({ success: true, data: options.method === 'PATCH' ? null : members }));
+    assert.equal(await r.room.updateMyDeparture(ROOM_QUERY_ID, { departureStationId: 99001, userId: 'ignored' }, 'error'), undefined);
+    assert.deepEqual(r.calls.map(call => [call.url, call.options.method]), [[`${settings106Url}/members/me`, 'PATCH'], [`${settings106Url}/members`, 'GET']]);
+    assert.deepEqual(JSON.parse(r.calls[0].options.body), { departureStationId: 99001 });
+    assert.equal(r.roomCache.readCachedRoomDetail(ROOM_QUERY_ID).members[0].departureStation.id, 99001);
+    assert.equal(r.room.getMockMembers(ROOM_QUERY_ID)[0].departureStation.id, 99001);
+});
+
+test('106 출발역의 null·생략·문자열·소수·안전하지 않은 정수는 PATCH 전에 거절해요', async () => {
+    const r = roomQueryRuntime();
+    for (const departureStationId of [null, undefined, '99001', 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+        await assert.rejects(r.room.updateMyDeparture(ROOM_QUERY_ID, { departureStationId }), { code: 'VALIDATION_ERROR' });
+    }
+    assert.equal(r.calls.length, 0);
+});
+
+test('106 방 수정은 선택 필드·빈 body·시각 null·UTC를 보내고 재조회한 상세·목록을 반영해요', async () => {
+    const r = roomQueryRuntime(); let detail = roomQueryDetail();
+    detail.status = 'CONFIRMED'; detail.selectedStation = roomQueryStation(); detail.confirmedAt = '2026-11-01T00:00:00Z';
+    const initialStation = plain(detail.selectedStation);
+    const cases = [[{}, {}], [{ name: '  바뀐 이름  ', maxMembers: 9 }, { name: '바뀐 이름' }],
+        [{ appointmentAt: null }, { appointmentAt: null }],
+        [{ appointmentAt: '2035-02-10T19:30:00+09:00' }, { appointmentAt: '2035-02-10T10:30:00.000Z' }]];
+    for (const [input, expected] of cases) {
+        r.calls.length = 0;
+        r.respond(async (_url, options) => {
+            if (options.method === 'PATCH') { detail = { ...detail, ...JSON.parse(options.body) }; return jsonResponse({ success: true, data: null }); }
+            return jsonResponse({ success: true, data: detail });
+        });
+        assert.equal(await r.room.updateRoom(ROOM_QUERY_ID, input, 'busy'), undefined);
+        assert.deepEqual(JSON.parse(r.calls[0].options.body), expected);
+        assert.deepEqual(r.calls.map(call => [call.url, call.options.method]), [[settings106Url, 'PATCH'], [settings106Url, 'GET']]);
+        const cached = r.roomCache.readCachedRoomDetail(ROOM_QUERY_ID);
+        assert.equal(cached.name, detail.name); assert.equal(cached.appointmentAt, detail.appointmentAt);
+        assert.deepEqual(plain(cached.selectedStation), initialStation);
+        assert.equal(cached.confirmedAt, '2026-11-01T00:00:00Z');
+        assert.equal(r.roomCache.readCachedRooms()[0].name, detail.name);
+        assert.equal(r.calls.some(call => /recommendations|proposals|vote|selected-station/.test(call.url)), false);
+    }
+});
+
+test('106 잘못된 이름·시각·과거 시각은 요청 전에 거절하고 이름만 수정할 때 과거 약속은 보내지 않아요', async () => {
+    const r = roomQueryRuntime();
+    for (const input of [{ name: null }, { name: 12 }, { name: '' }, { name: ' ' }, { name: '😀'.repeat(31) },
+        { appointmentAt: '2035-02-10T19:30:00' }, { appointmentAt: '2035-02-30T19:30:00Z' }, { appointmentAt: 123 }, { appointmentAt: '2000-01-01T00:00:00Z' }]) {
+        await assert.rejects(r.room.updateRoom(ROOM_QUERY_ID, input), { code: 'VALIDATION_ERROR' });
+    }
+    assert.equal(r.calls.length, 0);
+    r.respond(async (_url, options) => jsonResponse({ success: true, data: options.method === 'PATCH' ? null : { ...roomQueryDetail(), appointmentAt: '2000-01-01T00:00:00Z' } }));
+    await r.room.updateRoom(ROOM_QUERY_ID, { name: '😀'.repeat(30) });
+    assert.deepEqual(JSON.parse(r.calls[0].options.body), { name: '😀'.repeat(30) });
+});
+
+test('106 두 PATCH의 null 아닌 성공 응답은 UNKNOWN_ERROR이고 가짜 결과를 만들지 않아요', async () => {
+    for (const update of ['room', 'departure']) {
+        for (const data of [{}, [], { id: ROOM_QUERY_ID }, 'ok']) {
+            const r = roomQueryRuntime(); r.respond(async () => jsonResponse({ success: true, data }));
+            await assert.rejects(update === 'room' ? r.room.updateRoom(ROOM_QUERY_ID, {}) : r.room.updateMyDeparture(ROOM_QUERY_ID, { departureStationId: 99001 }), { code: 'UNKNOWN_ERROR' });
+            assert.equal(r.calls.length, 1); assert.equal(r.room.getMockRoom(ROOM_QUERY_ID), undefined);
+        }
+    }
+});
+
+test('106 세 API의 403·404·409·422·400과 TOKEN 오류를 구분하고 비멤버·없는 방 캐시를 비워요', async () => {
+    for (const operation of ['invite', 'room', 'departure']) {
+        for (const [code, status] of [['NOT_ROOM_OWNER', 403], ['NOT_ROOM_MEMBER', 403], ['ROOM_NOT_FOUND', 404], ['STATION_NOT_FOUND', 404],
+            ['ROOM_BUSY', 409], ['STATION_UNSUPPORTED', 422], ['VALIDATION_ERROR', 400], ['TOKEN_INVALID', 401], ['TOKEN_FUTURE', 401]]) {
+            const r = roomQueryRuntime(); settings106Seed(r);
+            r.load('src/services/api/client.ts').setTokenRefresher(null);
+            r.respond(async () => jsonResponse({ success: false, error: { code } }, status));
+            const pending = operation === 'invite' ? r.room.fetchInviteCode(ROOM_QUERY_ID)
+                : operation === 'room' ? r.room.updateRoom(ROOM_QUERY_ID, {}) : r.room.updateMyDeparture(ROOM_QUERY_ID, { departureStationId: 99001 });
+            await assert.rejects(pending, error => error.code === code && (status !== 401 || error instanceof r.load('src/services/api/errors.ts').ApiError));
+            assert.equal(r.calls.length, 1);
+            if (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND') assert.equal(r.room.getMockRoom(ROOM_QUERY_ID), undefined);
+        }
+    }
+});
+
+test('106 네트워크·10초 초과는 NETWORK_ERROR이고 저장·조회 자동 재시도는 추가하지 않아요', async () => {
+    for (const operation of ['invite', 'room', 'departure']) {
+        for (const timeout of [false, true]) {
+            const r = roomQueryRuntime();
+            r.respond((_url, options) => timeout ? new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(Error()))) : Promise.reject(Error()));
+            const pending = operation === 'invite' ? r.room.fetchInviteCode(ROOM_QUERY_ID)
+                : operation === 'room' ? r.room.updateRoom(ROOM_QUERY_ID, {}) : r.room.updateMyDeparture(ROOM_QUERY_ID, { departureStationId: 99001 });
+            const rejected = assert.rejects(pending, { code: 'NETWORK_ERROR' }); await settle();
+            if (timeout) { assert.equal([...r.timers.values()][0].ms, 10000); r.advance(10000); }
+            await rejected; assert.equal(r.calls.length, 1);
+        }
+    }
+});
+
+test('106 PATCH 성공 뒤 재조회 실패는 저장 완료를 알리고 요청값으로 캐시를 덮지 않아요', async () => {
+    for (const operation of ['room', 'departure']) {
+        const r = roomQueryRuntime(); settings106Seed(r);
+        r.respond(async (_url, options) => { if (options.method === 'PATCH') return jsonResponse({ success: true, data: null }); throw Error(); });
+        const pending = operation === 'room' ? r.room.updateRoom(ROOM_QUERY_ID, { name: '새 이름' }) : r.room.updateMyDeparture(ROOM_QUERY_ID, { departureStationId: 99001 });
+        await assert.rejects(pending, error => error.code === 'NETWORK_ERROR' && error.message.includes('변경은 저장했지만'));
+        assert.equal(r.calls.filter(call => call.options.method === 'PATCH').length, 1);
+        assert.equal(r.room.getMockRoom(ROOM_QUERY_ID).name, '서버 모임');
+    }
+});
+
+test('106 계정 변경 후 늦은 초대 조회·PATCH 성공·오류가 새 계정 캐시를 바꾸지 않아요', async () => {
+    for (const operation of ['invite', 'room', 'departure']) {
+        for (const fail of [false, true]) {
+            const r = roomQueryRuntime(); let resolve;
+            r.respond(() => new Promise(done => { resolve = done; }));
+            const pending = operation === 'invite' ? r.room.fetchInviteCode(ROOM_QUERY_ID)
+                : operation === 'room' ? r.room.updateRoom(ROOM_QUERY_ID, {}) : r.room.updateMyDeparture(ROOM_QUERY_ID, { departureStationId: 99001 });
+            const rejected = assert.rejects(pending, { code: 'AUTH_REQUIRED' }); await settle();
+            await r.load('src/services/auth.ts').clearLocalSession();
+            r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_OTHER, nickname: '새 계정' });
+            resolve(fail ? jsonResponse({ success: false, error: { code: 'ROOM_BUSY' } }, 409)
+                : jsonResponse({ success: true, data: operation === 'invite' ? { roomCode: 'OLD123' } : null }));
+            await rejected; assert.deepEqual(plain(r.roomCache.readCachedRooms()), []);
+            assert.equal(r.roomCache.findCachedRoomIdByCode('OLD123'), undefined);
+        }
+    }
+});
+
+test('106 PATCH 이전의 늦은 멤버 조회가 갱신된 출발역을 덮지 않아요', async () => {
+    const r = roomQueryRuntime(); let resolveOld; let reads = 0;
+    r.respond(async (_url, options) => {
+        if (options.method === 'PATCH') return jsonResponse({ success: true, data: null });
+        reads++;
+        if (reads === 1) return await new Promise(done => { resolveOld = done; });
+        const members = roomQueryMembers(); members[0].departureStation = roomQueryStation(99001);
+        return jsonResponse({ success: true, data: members });
+    });
+    const old = r.room.fetchRoomMembers(ROOM_QUERY_ID); await settle();
+    await r.room.updateMyDeparture(ROOM_QUERY_ID, { departureStationId: 99001 });
+    resolveOld(jsonResponse({ success: true, data: roomQueryMembers() })); await old;
+    assert.equal(reads, 2); assert.equal(r.room.getMockMembers(ROOM_QUERY_ID)[0].departureStation.id, 99001);
+});
+
+test('106 세 함수의 mock 반환·권한·실패 후 재시도는 서버 호출 없이 유지해요', async () => {
+    const r = createRuntime(); const room = r.load('src/services/room.ts'); let calls = 0;
+    r.context.fetch = async () => { calls++; throw Error(); };
+    assert.equal((await finishRoomMock(r, room.fetchInviteCode('room-4'))).roomCode, 'B8N3TD');
+    const updated = await finishRoomMock(r, room.updateMyDeparture('room-4', { departureStationId: 105 }));
+    assert.equal(updated.departureStation.id, 105);
+    assert.equal((await finishRoomMock(r, room.updateRoom('room-4', { name: '  mock 변경  ', appointmentAt: null }))).name, 'mock 변경');
+    const rejected = assert.rejects(room.updateRoom('room-4', { name: '재시도' }, 'busy'), { code: 'ROOM_BUSY' }); await finishRoomMock(r, rejected);
+    assert.equal((await finishRoomMock(r, room.updateRoom('room-4', { name: '재시도' }))).name, '재시도');
+    const forbidden = assert.rejects(room.fetchInviteCode('room-2'), { code: 'NOT_ROOM_OWNER' }); await finishRoomMock(r, forbidden);
+    assert.equal(calls, 0);
+});
+
+test('106 수정 화면은 이름만 바꾸면 시각의 초를 보존하고 연타를 한 번만 보내요', async () => {
+    const r = roomQueryScreen('src/app/rooms/[roomId]/edit.tsx', { roomId: ROOM_QUERY_ID });
+    let detail = { ...roomQueryDetail(), appointmentAt: '2035-02-10T10:30:45.123Z' }; let resolve; const calls = [];
+    r.context.fetch = async (url, options) => {
+        calls.push({ url, options });
+        if (options.method === 'PATCH') return await new Promise(done => { resolve = done; });
+        return jsonResponse({ success: true, data: detail });
+    };
+    r.render(); await settle(); let view = r.render();
+    assert.equal(roomWriteButton(view, '저장').props.disabled, true);
+    findElement(view, element => element.props?.accessibilityLabel === '약속 이름').props.onChangeText(' 새 이름 ');
+    view = r.render(); const save = roomWriteButton(view, '저장');
+    const first = save.props.onPress(); const second = save.props.onPress(); await settle();
+    const patches = calls.filter(call => call.options.method === 'PATCH');
+    assert.equal(patches.length, 1); assert.deepEqual(JSON.parse(patches[0].options.body), { name: '새 이름' });
+    detail = { ...detail, name: '새 이름' }; resolve(jsonResponse({ success: true, data: null })); await Promise.all([first, second]);
+    assert.equal(r.load('src/services/room-cache.ts').readCachedRoomDetail(ROOM_QUERY_ID).appointmentAt, detail.appointmentAt);
+    r.unmount();
+});
+
+test('106 수정 화면의 시각 해제는 null만 보내고 이름은 유지해요', async () => {
+    const r = roomQueryScreen('src/app/rooms/[roomId]/edit.tsx', { roomId: ROOM_QUERY_ID }); const calls = []; let detail = roomQueryDetail();
+    r.context.fetch = async (_url, options) => {
+        if (options.method === 'PATCH') { calls.push(JSON.parse(options.body)); detail = { ...detail, appointmentAt: null }; return jsonResponse({ success: true, data: null }); }
+        return jsonResponse({ success: true, data: detail });
+    };
+    r.render(); await settle(); let view = r.render();
+    findElement(view, element => element.props?.accessibilityLabel === '약속 시각 해제').props.onPress(); view = r.render();
+    await roomWriteButton(view, '저장').props.onPress();
+    assert.deepEqual(calls, [{ appointmentAt: null }]); r.unmount();
+});
+
+test('106 수정 중 권한 상실·비멤버·처리 중·인증 오류는 구분하고 입력을 유지해요', async () => {
+    for (const code of ['NOT_ROOM_OWNER', 'NOT_ROOM_MEMBER', 'ROOM_BUSY', 'TOKEN_INVALID']) {
+        const r = roomQueryScreen('src/app/rooms/[roomId]/edit.tsx', { roomId: ROOM_QUERY_ID }); const routes = [];
+        r.external['expo-router'].router.replace = route => routes.push(route);
+        r.context.fetch = async (_url, options) => options.method === 'PATCH'
+            ? jsonResponse({ success: false, error: { code } }, code === 'TOKEN_INVALID' ? 401 : code === 'ROOM_BUSY' ? 409 : 403)
+            : jsonResponse({ success: true, data: roomQueryDetail() });
+        r.render(); await settle(); let view = r.render();
+        findElement(view, element => element.props?.accessibilityLabel === '약속 이름').props.onChangeText('입력 유지'); view = r.render();
+        await roomWriteButton(view, '저장').props.onPress(); view = r.render();
+        if (code === 'NOT_ROOM_OWNER') assert.ok(findElement(view, element => element.props?.children === '방장만 수정할 수 있어요'));
+        if (code === 'NOT_ROOM_MEMBER') { assert.ok(routes.includes('/rooms')); assert.equal(r.load('src/services/room-cache.ts').readCachedRoom(ROOM_QUERY_ID), undefined); }
+        if (code === 'ROOM_BUSY') { assert.equal(findElement(view, element => element.props?.accessibilityLabel === '약속 이름').props.value, '입력 유지'); assert.ok(roomWriteButton(view, '다시 시도')); }
+        if (code === 'TOKEN_INVALID') assert.equal(findElement(view, element => element.props?.children === '변경 내용을 저장하지 못했어요. 다시 시도해 주세요.'), null);
+        r.unmount();
+    }
+});
+
+test('106 수정 화면 이탈 뒤 저장 응답과 예약 이동은 이전 화면을 바꾸지 않아요', async () => {
+    const r = roomQueryScreen('src/app/rooms/[roomId]/edit.tsx', { roomId: ROOM_QUERY_ID }); let resolve; const routes = [];
+    r.external['expo-router'].router.replace = route => routes.push(route);
+    r.context.fetch = async (_url, options) => options.method === 'PATCH' ? await new Promise(done => { resolve = done; }) : jsonResponse({ success: true, data: roomQueryDetail() });
+    r.render(); await settle(); let view = r.render(); findElement(view, element => element.props?.accessibilityLabel === '약속 이름').props.onChangeText('새 이름');
+    view = r.render(); const pending = roomWriteButton(view, '저장').props.onPress(); await settle(); r.unmount();
+    resolve(jsonResponse({ success: true, data: null })); await pending; r.advance(1000);
+    assert.equal(routes.length, 0);
+});
+
+test('106 초대 시트의 로딩·서버 코드·권한 변경 안내·닫힌 뒤 응답 무시', async () => {
+    const r = roomQueryScreen('src/components/rooms/invite-code-sheet.tsx'); const component = r.screen.default; let resolve; const denied = [];
+    const props = { visible: true, roomId: ROOM_QUERY_ID, roomName: '서버 모임', bottomInset: 0, onClose() {}, onAccessError: code => denied.push(code) };
+    r.screen.default = () => component(props);
+    r.context.fetch = () => new Promise(done => { resolve = done; });
+    let view = r.render(); assert.ok(findElement(view, element => element.type === 'ActivityIndicator')); await settle();
+    props.visible = false; r.render(); resolve(jsonResponse({ success: true, data: { roomCode: 'OLD123' } })); await settle();
+    assert.equal(findElement(r.render(), element => element.props?.accessibilityLabel?.startsWith('초대 코드 O')), null);
+    props.visible = true; r.context.fetch = async () => jsonResponse({ success: false, error: { code: 'NOT_ROOM_OWNER' } }, 403);
+    r.render(); await settle(); view = r.render();
+    assert.ok(findElement(view, element => element.props?.children === '지금은 방장이 아니에요')); assert.deepEqual(denied, ['NOT_ROOM_OWNER']);
+    r.unmount();
+});
+
+test('106 상세에서 출발역 저장 연타는 PATCH 한 번이고 재조회한 역이 표시돼요', async () => {
+    const r = roomQueryScreen('src/app/rooms/[roomId].tsx', { roomId: ROOM_QUERY_ID }); let selected; let resolve; let detail = roomQueryDetail(); const calls = [];
+    r.load('src/app/station-search.tsx').openStationPicker = (_options, callback) => { selected = callback; };
+    r.context.fetch = async (url, options) => {
+        calls.push({ url, options });
+        if (options.method === 'PATCH') return await new Promise(done => { resolve = done; });
+        return jsonResponse({ success: true, data: url.endsWith('/members') ? detail.members : url.endsWith('/invite-code') ? { roomCode: 'NEW123' } : detail });
+    };
+    r.render(); await settle(); let view = r.render();
+    findElement(view, element => element.props?.accessibilityLabel === '내 출발역 변경').props.onPress();
+    const station = { ...plain(r.load('src/mocks/stations.ts').MOCK_STATIONS[0]), id: 99001, name: '서버 변경역' };
+    const first = selected(station); const second = selected(station); await settle();
+    assert.equal(calls.filter(call => call.options.method === 'PATCH').length, 1);
+    detail = roomQueryDetail(); detail.members[0].departureStation = { ...roomQueryStation(99001), name: station.name };
+    resolve(jsonResponse({ success: true, data: null })); await Promise.all([first, second]); view = r.render();
+    assert.equal(r.load('src/services/room-cache.ts').readCachedMembers(ROOM_QUERY_ID)[0].departureStation.id, 99001);
+    assert.ok(findElement(view, element => element.type === 'Text' && [element.props?.children].flat().some(child => typeof child === 'string' && child.includes('서버 변경역'))));
+    r.unmount();
+});
+
+
+test('106 수정 화면의 과거 날짜는 전송 전에 막고 선택한 미래 시각은 UTC로 보내요', async () => {
+    const r = roomQueryScreen('src/app/rooms/[roomId]/edit.tsx', { roomId: ROOM_QUERY_ID }); const patches = [];
+    r.context.fetch = async (_url, options) => {
+        if (options.method === 'PATCH') { patches.push(JSON.parse(options.body)); return jsonResponse({ success: true, data: null }); }
+        return jsonResponse({ success: true, data: roomQueryDetail() });
+    };
+    r.render(); await settle(); let view = r.render();
+    const pick = (date, time) => {
+        findElement(view, element => element.type?.name === 'CalendarModal').props.onConfirm(date);
+        findElement(view, element => element.type?.name === 'TimeWheelModal').props.onConfirm(time);
+        view = r.render();
+    };
+    pick('2000-01-01', '19:30'); await roomWriteButton(view, '저장').props.onPress(); view = r.render();
+    assert.equal(patches.length, 0); assert.ok(findElement(view, element => element.props?.children === '지금 이후의 약속 시각을 선택해 주세요.'));
+    pick('2035-02-10', '19:30'); await roomWriteButton(view, '저장').props.onPress();
+    assert.deepEqual(patches, [{ appointmentAt: new Date(2035, 1, 10, 19, 30).toISOString() }]); r.unmount();
+});
+
+test('106 추천 입력 화면도 출발역 저장 연타를 막고 서버 멤버를 재조회해요', async () => {
+    const r = roomQueryScreen('src/app/rooms/[roomId]/recommendations.tsx', { roomId: ROOM_QUERY_ID }); let selected; let resolve; let detail = roomQueryDetail(); const calls = [];
+    r.load('src/app/station-search.tsx').openStationPicker = (_options, callback) => { selected = callback; };
+    r.context.fetch = async (url, options) => {
+        calls.push({ url, options });
+        if (options.method === 'PATCH') return await new Promise(done => { resolve = done; });
+        return jsonResponse({ success: true, data: url.endsWith('/recommendations/latest') ? null : url.endsWith('/members') ? detail.members : detail });
+    };
+    let view = await pumpScreen(r);
+    findElement(view, element => element.props?.accessibilityLabel === '내 출발역 설정').props.onPress();
+    const station = { ...plain(r.load('src/mocks/stations.ts').MOCK_STATIONS[0]), id: 99001, name: '서버 변경역' };
+    const first = selected(station); const second = selected(station); await settle();
+    assert.equal(calls.filter(call => call.options.method === 'PATCH').length, 1);
+    detail = roomQueryDetail(); detail.members[0].departureStation = { ...roomQueryStation(99001), name: station.name };
+    resolve(jsonResponse({ success: true, data: null })); await finishRoomMock(r, Promise.all([first, second]));
+    assert.equal(r.load('src/services/room-cache.ts').readCachedMembers(ROOM_QUERY_ID)[0].departureStation.id, 99001); r.unmount();
+});
+
+
+test('106 약속 시각 미정·해제 후 View에 빈 문자열 텍스트를 직접 렌더링하지 않아요', async () => {
+    for (const appointmentAt of [null, '2035-02-10T10:30:00Z']) {
+        const r = roomQueryScreen('src/app/rooms/[roomId]/edit.tsx', { roomId: ROOM_QUERY_ID });
+        r.context.fetch = async () => jsonResponse({ success: true, data: { ...roomQueryDetail(), appointmentAt } });
+        r.render(); await settle(); let view = r.render();
+        if (appointmentAt) {
+            findElement(view, element => element.props?.accessibilityLabel === '약속 시각 해제').props.onPress();
+            view = r.render();
+        }
+        const textInView = findElement(view, element => element.type === 'View'
+            && [element.props?.children].flat(Infinity).some(child => typeof child === 'string'));
+        assert.ok(!textInView, '시각이 없을 때 View의 직접 자식에 빈 문자열을 남기면 웹 Unexpected text node 경고가 나요.');
+        assert.equal(findElement(view, element => element.props?.accessibilityLabel === '약속 시각 해제'), null);
+        r.unmount();
+    }
 });
