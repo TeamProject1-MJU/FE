@@ -1,9 +1,9 @@
-import { get, post } from '@/services/api/client';
+import { get, post, patch } from '@/services/api/client';
 import { ApiError, isAuthError } from '@/services/api/errors';
 import { getSessionGeneration } from '@/services/auth';
 import { fetchMe } from '@/services/user';
 import { getAuthStatus, getSession } from '@/stores/auth-store';
-import { assertRoomCacheScope, cacheCreatedRoom, cacheJoinedRoom, findCachedRoomIdByCode, cacheRoomDetail, cacheRoomList, cacheRoomMembers, getRoomCacheScope, removeCachedRoom } from '@/services/room-cache';
+import { assertRoomCacheScope, cacheRoomInviteCode, clearCachedRoomCode, cacheCreatedRoom, cacheJoinedRoom, findCachedRoomIdByCode, cacheRoomDetail, cacheRoomList, cacheRoomMembers, getRoomCacheScope, removeCachedRoom } from '@/services/room-cache';
 import { RoomError, type CreateRoomRequest, type CreatedRoom, type RoomDetail, type RoomErrorCode, type RoomMember, type RoomStation, type RoomSummary } from '@/types/room';
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -84,6 +84,9 @@ function mapRoomError(error: unknown): never {
     if (error instanceof RoomError) throw error;
     if (error instanceof ApiError && (error.code.startsWith('TOKEN_') || isAuthError(error))) throw error;
     const messages = {
+        NOT_ROOM_OWNER: '방장만 변경하거나 초대 코드를 볼 수 있어요. 방장이 바뀌었는지 확인해 주세요.',
+        STATION_NOT_FOUND: '선택한 역을 찾을 수 없어요. 다른 역을 선택해 주세요.',
+        STATION_UNSUPPORTED: '아직 지원하지 않는 역이에요. 다른 출발역을 선택해 주세요.',
         ROOM_CODE_INVALID: '없는 초대 코드예요. 코드를 다시 확인해 주세요.',
         ROOM_FULL: '정원(4명)이 다 찬 약속방이에요.',
         ALREADY_JOINED: '이미 참여 중인 약속방이에요.',
@@ -121,7 +124,10 @@ async function query<T>(path: string, parse: (raw: unknown) => T, save: (value: 
                 // A-1이 이미 로그아웃했어도 원래 TOKEN_* 코드를 보존해요.
                 if (error instanceof ApiError && (error.code.startsWith('TOKEN_') || isAuthError(error))) throw error;
                 assertRoomCacheScope(scope);
-                if (version === writeVersion && roomId && error instanceof ApiError && ['ROOM_NOT_FOUND', 'NOT_ROOM_MEMBER'].includes(error.code)) removeCachedRoom(roomId, scope);
+                if (version === writeVersion && roomId && error instanceof ApiError) {
+                    if (['ROOM_NOT_FOUND', 'NOT_ROOM_MEMBER'].includes(error.code)) removeCachedRoom(roomId, scope);
+                    else if (error.code === 'NOT_ROOM_OWNER') clearCachedRoomCode(roomId, scope);
+                }
                 throw error;
             }
         })();
@@ -208,4 +214,72 @@ export async function joinServerRoom(roomCode: string): Promise<{ roomId: string
         assertRoomCacheScope(scope);
         return { roomId };
     } catch (error) { return mapRoomError(error); }
+}
+
+
+/** 7.9는 캐시 역할로 미리 거절하지 않고 현재 서버 권한으로 확인해요. */
+export const fetchServerInviteCode = (roomId: string): Promise<{ roomCode: string }> => query(
+    `/rooms/${encodeURIComponent(roomId)}/invite-code`,
+    raw => {
+        if (!isRecord(raw) || typeof raw.roomCode !== 'string' || !/^[A-Z0-9]{6}$/.test(raw.roomCode)) return invalid();
+        return { roomCode: raw.roomCode };
+    },
+    (value, scope) => cacheRoomInviteCode(roomId, value.roomCode, scope), roomId,
+);
+
+async function patchRoom(roomId: string, suffix: string, body: unknown, reload: () => Promise<unknown>): Promise<void> {
+    try {
+        const scope = await ensureUser();
+        try {
+            const raw = await patch<unknown>(`/rooms/${encodeURIComponent(roomId)}${suffix}`, body);
+            assertRoomCacheScope(scope);
+            if (raw !== null) return invalid();
+        } catch (error) {
+            if (error instanceof ApiError && (error.code.startsWith('TOKEN_') || isAuthError(error))) throw error;
+            assertRoomCacheScope(scope);
+            if (error instanceof ApiError) {
+                if (error.code === 'NOT_ROOM_MEMBER' || error.code === 'ROOM_NOT_FOUND') removeCachedRoom(roomId, scope);
+                else if (error.code === 'NOT_ROOM_OWNER') clearCachedRoomCode(roomId, scope);
+            }
+            throw error;
+        }
+        writeVersion++;
+        try { await reload(); }
+        catch (error) {
+            if (error instanceof ApiError && (error.code.startsWith('TOKEN_') || isAuthError(error))) throw error;
+            assertRoomCacheScope(scope);
+            if (error instanceof RoomError && (error.code === 'NETWORK_ERROR' || error.code === 'UNKNOWN_ERROR')) {
+                throw new RoomError(error.code, '변경은 저장했지만 최신 정보를 불러오지 못했어요. 잠시 후 다시 조회해 주세요.');
+            }
+            throw error;
+        }
+        assertRoomCacheScope(scope);
+    } catch (error) { return mapRoomError(error); }
+}
+
+export async function updateServerDeparture(roomId: string, request: { departureStationId: number }): Promise<void> {
+    if (!Number.isSafeInteger(request?.departureStationId)) {
+        throw new RoomError('VALIDATION_ERROR', '출발역을 다시 선택해 주세요.');
+    }
+    await patchRoom(roomId, '/members/me', { departureStationId: request.departureStationId }, () => fetchServerRoomMembers(roomId));
+}
+
+export async function updateServerRoom(roomId: string, request: { name?: string; appointmentAt?: string | null }): Promise<void> {
+    const body: { name?: string; appointmentAt?: string | null } = {};
+    if (request.name !== undefined) body.name = request.name;
+    if (request.appointmentAt !== undefined) {
+        if (request.appointmentAt === null) body.appointmentAt = null;
+        else {
+            if (!isZonedDate(request.appointmentAt) || Date.parse(request.appointmentAt) <= Date.now()) {
+                throw new RoomError('VALIDATION_ERROR', '지금 이후의 약속 시각을 시간대와 함께 입력해 주세요.');
+            }
+            const [year, month, day] = request.appointmentAt.slice(0, 10).split('-').map(Number);
+            const calendar = new Date(Date.UTC(year, month - 1, day));
+            if (calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month - 1 || calendar.getUTCDate() !== day) {
+                throw new RoomError('VALIDATION_ERROR', '약속 날짜를 다시 선택해 주세요.');
+            }
+            body.appointmentAt = new Date(request.appointmentAt).toISOString();
+        }
+    }
+    await patchRoom(roomId, '', body, () => fetchServerRoomDetail(roomId));
 }

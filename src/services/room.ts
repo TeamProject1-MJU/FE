@@ -25,9 +25,9 @@ import { MOCK_STATIONS } from '@/mocks/stations';
 import { useMock as isMockMode } from '@/services/api/config';
 import { fetchStation } from '@/services/station';
 import { getSession } from '@/stores/auth-store';
-import { createServerRoom, joinServerRoom, fetchServerRoomDetail, fetchServerRoomMembers, fetchServerRooms } from '@/services/room-query';
+import { createServerRoom, joinServerRoom, fetchServerInviteCode, updateServerDeparture, updateServerRoom, fetchServerRoomDetail, fetchServerRoomMembers, fetchServerRooms } from '@/services/room-query';
 import { createServerProposal, deleteServerProposal, fetchServerProposals, voteServerProposal } from '@/services/room-proposals';
-import { assertRoomCacheScope, getRoomCacheScope, readCachedMembers, readCachedRoom, readCachedRoomCode, subscribeRoomCacheReset } from '@/services/room-cache';
+import { assertRoomCacheScope, getRoomCacheScope, readCachedMembers, readCachedRoom, subscribeRoomCacheReset } from '@/services/room-cache';
 import { emitRoomMockChange } from '@/stores/room-mock-events';
 import {
     RoomError,
@@ -345,15 +345,7 @@ const inviteFailOnce = new Set<string>();
  * TODO: 실제 연동 시 GET /rooms/{roomId}/invite-code 호출로 교체
  */
 export async function fetchInviteCode(roomId: string, mock?: 'error'): Promise<{ roomCode: string }> {
-    if (!isMockMode()) {
-        const room = getMockRoom(roomId);
-        if (!room) throw new RoomError('ROOM_NOT_FOUND', '약속방을 찾을 수 없어요.');
-        if (room.myRole !== 'OWNER') throw new RoomError('NOT_ROOM_OWNER', '초대 코드는 방장만 볼 수 있어요.');
-        const roomCode = readCachedRoomCode(roomId);
-        if (roomCode) return { roomCode };
-        // TODO(#97 범위 밖, C-3): 7.9 조회 연동 전에는 가짜 코드를 발급하지 않아요.
-        throw new RoomError('UNKNOWN_ERROR', '초대 코드 조회는 아직 준비 중이에요.');
-    }
+    if (!isMockMode()) return fetchServerInviteCode(roomId);
     await wait(MOCK_DELAY_MS);
     if (mock) inviteFailOnce.add(roomId);
 
@@ -524,7 +516,9 @@ export async function updateMyDeparture(
     roomId: string,
     request: UpdateMyDepartureRequest,
     mock?: 'error' | 'unsupported',
-): Promise<RoomMember> {
+): Promise<RoomMember | void> {
+    // 7.5 서버 응답은 null이에요. 객체를 만들지 않고 7.6을 재조회해 캐시에 반영해요.
+    if (!isMockMode()) return updateServerDeparture(roomId, request);
     await wait(MOCK_DELAY_MS);
     if (mock) departureFailOnce.set(roomId, mock);
 
@@ -648,7 +642,19 @@ export async function updateRoom(
     roomId: string,
     patch: UpdateRoomPatch,
     mock?: 'error' | 'busy',
-): Promise<RoomSummary> {
+): Promise<RoomSummary | void> {
+    if (!isMockMode()) {
+        if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new RoomError('VALIDATION_ERROR', '변경할 방 정보를 확인해 주세요.');
+        const next: UpdateRoomPatch = {};
+        if (patch?.name !== undefined) {
+            if (typeof patch.name !== 'string') throw new RoomError('VALIDATION_ERROR', '약속방 이름을 입력해 주세요.');
+            const length = roomNameLength(patch.name);
+            if (length === 0 || length > ROOM_NAME_MAX) throw new RoomError('VALIDATION_ERROR', `약속방 이름은 1~${ROOM_NAME_MAX}자로 입력해 주세요.`);
+            next.name = patch.name.trim();
+        }
+        if (patch?.appointmentAt !== undefined) next.appointmentAt = patch.appointmentAt;
+        return updateServerRoom(roomId, next);
+    }
     await wait(MOCK_DELAY_MS);
     if (mock) updateFailOnce.set(roomId, mock);
 
