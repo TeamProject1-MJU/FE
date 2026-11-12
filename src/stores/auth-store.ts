@@ -8,6 +8,10 @@ let status: AuthStatus = useMock() ? 'unknown' : 'restoring';
 let session: Session | null = null;
 const listeners = new Set<() => void>();
 function emit() { listeners.forEach(fn => fn()); }
+export function subscribeAuthState(listener: () => void) {
+    listeners.add(listener);
+    return () => { listeners.delete(listener); };
+}
 export function signIn(value: Session) { session = value; status = 'signedIn'; emit(); }
 /** 인증 상태는 유지하고 서버에서 확인한 내 정보만 갱신해요. */
 export function updateSession(value: { userId: string; nickname: string }) {
