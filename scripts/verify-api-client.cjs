@@ -3113,6 +3113,53 @@ test('추천 화면(서버): 빈 기록은 입력 보기, 계산 버튼 연타�
     r.unmount();
 });
 
+test('추천 빈 결과는 서버 안내를 한 번 표시하고, 안내가 없을 때만 조건 완화를 안내해요', async () => {
+    const fallback = '시간·환승·요금 조건을 조금 완화해서 다시 추천받아 보세요.';
+    for (const message of [
+        '첫차 시각이 가까워 약속 시각까지 도착할 수 있는 역이 없습니다. 약속 시간을 늦춰 주세요.',
+        '조건에 맞는 중간역이 없습니다. 조건을 완화해 보세요.',
+        null,
+        '',
+    ]) {
+        const r = recoScreen();
+        r.recoRespond(async () => ok(recoRun({ results: [], message })));
+        let view = await pumpScreen(r);
+        assert.ok(findText(view, '조건에 맞는 중간역이 없어요'));
+        const notices = [];
+        findElement(view, element => {
+            if (element.type === 'Text' && textOf(element) === (message || fallback)) notices.push(element);
+            return false;
+        });
+        assert.equal(notices.length, 1, '빈 결과의 안내를 중복 없이 표시해요');
+        if (message) assert.equal(findText(view, fallback), null);
+        assert.equal(findText(view, '서버 추천역 77001역'), null);
+        const change = findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '조건 바꾸기'));
+        assert.ok(change);
+        change.props.onPress();
+        view = await pumpScreen(r);
+        assert.ok(findText(view, '중간역 계산하기') || findText(view, '다시 추천받기'));
+        r.unmount();
+    }
+});
+
+test('추천 화면(서버): 조건 상자는 빈 결과에도 유지하고 결과가 있으면 안내를 상자 안에 표시해요', async () => {
+    for (const empty of [true, false]) {
+        const r = recoScreen();
+        const message = '서버 안내 문구';
+        r.recoRespond(async () => ok(recoRun({
+            ...(empty ? { results: [] } : {}), message, conditionText: '30분 이내',
+            appliedConstraints: { maxMinutes: 30 },
+        })));
+        const view = await pumpScreen(r);
+        const box = findElement(view, element => element.type === 'View' &&
+            [element.props?.children].flat().some(child => child?.type === 'Text' && textOf(child) === '"30분 이내"'));
+        assert.ok(box);
+        assert.equal(!!findText(box, message), !empty);
+        assert.ok(findText(view, message));
+        r.unmount();
+    }
+});
+
 test('추천 화면(서버): 새 오류 3종·DEPARTURE_MISSING 안내, 시간 초과 안내, 인증 오류는 화면 안내 없음', async () => {
     const cases = [
         [recoFail('APPOINTMENT_PASSED', 422), '약속 시각이 이미 지나서 추천할 수 없어요. 약속 시각을 바꿔 주세요.'],

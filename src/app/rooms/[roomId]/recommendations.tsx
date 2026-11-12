@@ -1,5 +1,6 @@
 import { formatStationName } from '@/utils/station-name';
 import { ApiError, isAuthError } from '@/services/api/errors';
+import { useMock as isMockMode } from '@/services/api/config';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import {
@@ -520,6 +521,8 @@ export default function RoomRecommendationsScreen() {
 
     /* ───────── 결과 보기 (그림 33·34·37) ───────── */
     const createdAt = new Date(run.createdAt);
+    const serverEmptyResult = !isMockMode() && run.results.length === 0;
+    const understoodMessage = serverEmptyResult ? null : run.message;
     const alreadyCandidate = result ? !!proposals?.items.some(item => item.station.id === result.recommendedStation.id) : false;
     const proposalsFull = !!proposals && proposals.items.length >= proposals.maxProposals;
     const shareDisabled = alreadyCandidate || proposalsFull || sharing;
@@ -585,7 +588,7 @@ export default function RoomRecommendationsScreen() {
                 )}
 
                 {/* 이렇게 이해했어요 (conditionText → appliedConstraints) */}
-                {(run.conditionText || Object.keys(run.appliedConstraints).length > 0 || run.message) && (
+                {(run.conditionText || Object.keys(run.appliedConstraints).length > 0 || understoodMessage) && (
                     <View style={styles.understoodBox}>
                         <View style={styles.understoodHead}><Ionicons name="sparkles" size={14} color={PURPLE} /><Text style={styles.understoodTitle}>이렇게 이해했어요</Text></View>
                         {!!run.conditionText && <Text style={styles.understoodQuote}>"{run.conditionText}"</Text>}
@@ -593,7 +596,7 @@ export default function RoomRecommendationsScreen() {
                             {constraintChips(run.appliedConstraints, members).map(label => <View key={label} style={styles.constraintChip}><Text style={styles.constraintText}>{label}</Text></View>)}
                             {Object.keys(run.appliedConstraints).length === 0 && <Text style={styles.constraintNone}>적용된 제약 없음</Text>}
                         </View>
-                        {!!run.message && <Text style={styles.understoodMessage}>{run.message}</Text>}
+                        {!!understoodMessage && <Text style={styles.understoodMessage}>{understoodMessage}</Text>}
                     </View>
                 )}
 
@@ -602,7 +605,7 @@ export default function RoomRecommendationsScreen() {
                     <View style={styles.emptyBox}>
                         <View style={styles.centerIcon}><Ionicons name="search-outline" size={28} color={SECONDARY} /></View>
                         <Text style={styles.centerTitle}>조건에 맞는 중간역이 없어요</Text>
-                        <Text style={styles.centerBody}>시간·환승·요금 조건을 조금 완화해서 다시 추천받아 보세요.</Text>
+                        <Text style={styles.centerBody}>{(serverEmptyResult && run.message) || '시간·환승·요금 조건을 조금 완화해서 다시 추천받아 보세요.'}</Text>
                         <Pressable style={[styles.primaryButton, { marginTop: 16, alignSelf: 'stretch' }]} onPress={() => setView('input')} accessibilityRole="button"><Text style={styles.primaryText}>조건 바꾸기</Text></Pressable>
                     </View>
                 ) : result && (
