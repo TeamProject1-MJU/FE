@@ -2266,16 +2266,12 @@ test('기존 방 mock 목록·상세·멤버·오류·생성·나가기 흐름�
     assert.equal(room.getMockRoom(created.id), undefined); assert.equal(calls, 0);
 });
 
-test('서버 방에서 후보·투표·채팅은 서버 UUID와 캐시를 사용하고 쓰기 API는 부르지 않아요', async () => {
+test('서버 방에서 채팅은 서버 UUID와 캐시를 사용하고 메시지 API는 부르지 않아요(후보는 #101 부터 서버)', async () => {
     const r = roomQueryRuntime();
     r.respond(async url => jsonResponse({ success: true, data: url.includes('/stations/')
             ? { ...roomQueryStation(), latitude: 37.5, longitude: 127, lines: [{ ...roomQueryStation().lines[0], stationCode: 'S1' }] }
             : roomQueryDetail() }));
     await r.room.fetchRoomDetail(ROOM_QUERY_ID);
-    assert.deepEqual(plain((await finishRoomMock(r, r.room.fetchProposals(ROOM_QUERY_ID))).items), []);
-    const proposal = await finishRoomMock(r, r.room.createProposal(ROOM_QUERY_ID, 88001));
-    assert.equal(proposal.proposedBy.userId, ROOM_QUERY_ME); assert.equal(proposal.station.id, 88001);
-    assert.equal((await finishRoomMock(r, r.room.voteProposal(ROOM_QUERY_ID, proposal.id))).votedByMe, true);
     const chat = r.load('src/services/chat.ts');
     const sent = await finishRoomMock(r, chat.sendChatMessage(ROOM_QUERY_ID, { content: '서버 방의 임시 대화', clientMessageId: 'test-client' }));
     assert.equal(sent.message.senderId, ROOM_QUERY_ME); assert.equal(sent.message.nickname, '서버 나');
@@ -2388,20 +2384,18 @@ test('멤버 조회 다음 목록 조회도 마지막 멤버 정보와 방장 �
     assert.equal(r.room.getMockRoom(ROOM_QUERY_ID).myRole, 'OWNER');
 });
 
-test('계정 변경 뒤 임시 후보와 채팅은 이전 사용자의 상태를 재사용하지 않아요', async () => {
+test('계정 변경 뒤 임시 채팅은 이전 사용자의 상태를 재사용하지 않아요(후보는 서버 검사에서 확인)', async () => {
     const r = roomQueryRuntime(); let me = ROOM_QUERY_ME;
     r.respond(async url => jsonResponse({ success: true, data: url.includes('/stations/')
             ? { ...roomQueryStation(), latitude: 37.5, longitude: 127, lines: [{ ...roomQueryStation().lines[0], stationCode: 'S1' }] }
             : roomQueryDetail('OWNER', me) }));
     await r.room.fetchRoomDetail(ROOM_QUERY_ID);
-    await finishRoomMock(r, r.room.createProposal(ROOM_QUERY_ID, 88001));
     const chat = r.load('src/services/chat.ts');
     await finishRoomMock(r, chat.sendChatMessage(ROOM_QUERY_ID, { content: '이전 계정 임시 메시지', clientMessageId: 'old-client' }));
     await r.load('src/services/auth.ts').clearLocalSession();
     me = '33333333-3333-4333-8333-333333333333';
     r.load('src/stores/auth-store.ts').signIn({ userId: me, nickname: '다음 사용자' });
     await r.room.fetchRoomDetail(ROOM_QUERY_ID);
-    assert.equal((await finishRoomMock(r, r.room.fetchProposals(ROOM_QUERY_ID))).items.length, 0);
     const messages = await finishRoomMock(r, chat.fetchChatMessages(ROOM_QUERY_ID));
     assert.ok(!messages.items.some(message => message.content === '이전 계정 임시 메시지'));
 });
@@ -3075,6 +3069,7 @@ function recoScreen(params = { roomId: ROOM_QUERY_ID }) {
         r.context.fetch = async (url, options) => {
             r.calls.push({ url, options });
             if (url.includes('/recommendations')) return handler(url, options);
+            if (url.includes('/station-proposals')) return ok({ selectedStation: null, maxProposals: 9, items: [] });
             if (url.includes('/stations/')) return ok(recoStation(Number(url.split('/').at(-1))));
             return ok(detail);
         };
@@ -3178,4 +3173,357 @@ test('추천 화면(서버): isStale true 만 다시 추천받기 안내, null �
     assert.ok(findText(view, '이전 추천 기록'));
     assert.equal(r.calls.filter(call => call.options.method === 'POST').length, 1);
     r.unmount();
+});
+
+/* ---------- 약속역 후보 제안·목록·삭제·투표 서버 연동 (#101) ---------- */
+
+function proposalItem(overrides = {}) {
+    return {
+        id: 'proposal-1', station: { id: 88001, name: '서버 역 88001' }, proposedBy: { userId: ROOM_QUERY_OTHER, nickname: '서버 동료' },
+        resultId: null, isSelected: false, voteCount: 1, votedByMe: false, createdAt: '2026-11-12T10:00:00+09:00', ...overrides,
+    };
+}
+const proposalList = (items = [proposalItem()], overrides = {}) => ({ selectedStation: null, maxProposals: 9, items, ...overrides });
+const proposalCreated = (overrides = {}) => ({ id: 'proposal-new', station: { id: 99002, name: '서버 역 99002' }, proposedBy: { userId: ROOM_QUERY_ME, nickname: '서버 나' }, resultId: null, createdAt: '2026-11-12T11:00:00+09:00', ...overrides });
+function proposalRuntime() {
+    const r = roomQueryRuntime();
+    r.load('src/services/api/client.ts').setAccessTokenProvider(() => 'test-access');
+    return r;
+}
+
+test('후보 7.14·7.15·7.16·7.17 요청 URL·method·body·인증 헤더, mock 인자 무시', async () => {
+    const r = proposalRuntime();
+    r.respond(async (url, options) => {
+        if (options.method === 'POST') return jsonResponse({ success: true, data: proposalCreated() }, 201);
+        if (options.method === 'PUT') return ok({ proposalId: 'p/1', voteCount: 2, votedByMe: true });
+        if (options.method === 'DELETE') return ok(null);
+        return ok(proposalList());
+    });
+    const roomId = 'room/1 a';
+    const base = 'https://example.test/api/v1/rooms/room%2F1%20a/station-proposals';
+    await r.room.fetchProposals(roomId, 'error');
+    await r.room.createProposal(roomId, 99002, undefined, 'busy');
+    await r.room.createProposal(roomId, 99002, 'result-TIME', 'error');
+    await r.room.voteProposal(roomId, 'p/1', 'error');
+    assert.equal(await r.room.deleteProposal(roomId, 'p/1'), undefined);
+    assert.deepEqual(r.calls.map(call => [call.options.method, call.url]), [
+        ['GET', base], ['POST', base], ['POST', base], ['PUT', `${base}/p%2F1/vote`], ['DELETE', `${base}/p%2F1`],
+    ]);
+    assert.deepEqual(JSON.parse(r.calls[1].options.body), { stationId: 99002 });
+    assert.deepEqual(JSON.parse(r.calls[2].options.body), { stationId: 99002, resultId: 'result-TIME' });
+    for (const index of [0, 3, 4]) assert.equal(r.calls[index].options.body, undefined);
+    assert.ok(r.calls.every(call => call.options.headers.Authorization === 'Bearer test-access'));
+    // 서버 모드에서는 제안 전에 역 상세(5.3)로 미리 확인하지 않아요.
+    assert.ok(!r.calls.some(call => call.url.includes('/stations/')));
+    // 본문이 없는 성공(204 처럼)도 삭제 성공이에요.
+    r.respond(async () => ({ ok: true, status: 200, text: async () => '' }));
+    assert.equal(await r.room.deleteProposal(roomId, 'p/2'), undefined);
+});
+
+test('후보 목록 파서: selectedStation null·{id,name}만 온 역·빈 닉네임·서버 순서 유지', async () => {
+    const r = proposalRuntime();
+    const data = proposalList([
+        proposalItem({ id: 'p-3', createdAt: '2026-11-12T12:00:00+09:00', proposedBy: { userId: 'withdrawn-1', nickname: '' }, resultId: 'result-FARE', isSelected: true, voteCount: 0, extra: 1 }),
+        proposalItem({ id: 'p-2', proposedBy: { userId: 'withdrawn-2', nickname: null }, votedByMe: true }),
+        proposalItem({ id: 'p-1', proposedBy: { userId: 'withdrawn-3' }, station: { id: 77001, name: '노선 있는 역', isSupported: false, lines: [{ lineId: 2, lineName: '2호선', color: '#00a84d', stationCode: 'x' }, { lineId: 'bad' }] } }),
+        proposalItem({ id: 'p-0', proposedBy: null }),
+    ]);
+    r.respond(async () => ok(data));
+    const list = plain(await r.room.fetchProposals(ROOM_QUERY_ID));
+    assert.equal(list.selectedStation, null);
+    assert.equal(list.maxProposals, 9);
+    assert.deepEqual(list.items.map(item => item.id), ['p-3', 'p-2', 'p-1', 'p-0']);
+    assert.deepEqual(list.items[0].station, { id: 88001, name: '서버 역 88001', isSupported: true, lines: [] });
+    assert.deepEqual(list.items[2].station, { id: 77001, name: '노선 있는 역', isSupported: false, lines: [{ lineId: 2, lineName: '2호선', color: '#00a84d' }] });
+    assert.deepEqual(list.items.map(item => item.proposedBy.nickname), ['알 수 없음', '알 수 없음', '알 수 없음', '알 수 없음']);
+    assert.deepEqual(list.items.map(item => item.proposedBy.userId), ['withdrawn-1', 'withdrawn-2', 'withdrawn-3', '']);
+    assert.deepEqual(list.items.map(item => [item.resultId, item.isSelected, item.voteCount, item.votedByMe]), [
+        ['result-FARE', true, 0, false], [null, false, 1, true], [null, false, 1, false], [null, false, 1, false],
+    ]);
+    assert.equal(Object.hasOwn(list.items[0], 'extra'), false);
+
+    r.respond(async () => ok({ selectedStation: { id: 88001, name: '확정 역' }, items: [proposalItem({ isSelected: true })] }));
+    const selected = plain(await r.room.fetchProposals(ROOM_QUERY_ID));
+    assert.deepEqual(selected.selectedStation, { id: 88001, name: '확정 역', isSupported: true, lines: [] });
+    assert.equal(selected.maxProposals, 9, 'maxProposals 가 없으면 서버 기본값 9');
+    r.respond(async () => ok(proposalList([])));
+    assert.deepEqual(plain((await r.room.fetchProposals(ROOM_QUERY_ID)).items), []);
+});
+
+test('후보 7.14 응답은 isSelected·voteCount·votedByMe 를 false·0·false 로 채우고, 7.17 응답은 그대로, 7.16 data:null 은 정상', async () => {
+    const r = proposalRuntime();
+    r.respond(async () => jsonResponse({ success: true, data: proposalCreated({ resultId: 'result-TIME', proposedBy: { userId: ROOM_QUERY_ME, nickname: ' ' } }) }, 201));
+    assert.deepEqual(plain(await r.room.createProposal(ROOM_QUERY_ID, 99002, 'result-TIME')), {
+        id: 'proposal-new', station: { id: 99002, name: '서버 역 99002', isSupported: true, lines: [] },
+        proposedBy: { userId: ROOM_QUERY_ME, nickname: '알 수 없음' }, resultId: 'result-TIME',
+        isSelected: false, voteCount: 0, votedByMe: false, createdAt: '2026-11-12T11:00:00+09:00',
+    });
+    r.respond(async () => ok({ proposalId: 'proposal-1', voteCount: 3, votedByMe: true }));
+    assert.deepEqual(plain(await r.room.voteProposal(ROOM_QUERY_ID, 'proposal-1')), { proposalId: 'proposal-1', voteCount: 3, votedByMe: true });
+    // 같은 후보에 다시 투표해도(멱등) 서버 값 그대로예요.
+    assert.deepEqual(plain(await r.room.voteProposal(ROOM_QUERY_ID, 'proposal-1')), { proposalId: 'proposal-1', voteCount: 3, votedByMe: true });
+    r.respond(async () => ok(null));
+    assert.equal(await r.room.deleteProposal(ROOM_QUERY_ID, 'proposal-1'), undefined);
+});
+
+test('후보 서버 오류 코드 매핑과 안내 문구, 모르는 코드 UNKNOWN_ERROR, 인증 오류는 그대로', async () => {
+    const r = proposalRuntime();
+    const { RoomError } = r.load('src/types/room.ts');
+    const { ApiError } = r.load('src/services/api/errors.ts');
+    const cases = [
+        ['create', 'ALREADY_PROPOSED', 409, '이미 후보에 있는 역이에요. 목록에서 투표해 주세요.'],
+        ['create', 'PROPOSAL_LIMIT_EXCEEDED', 422, '약속역 후보는 방당 9개까지예요. 다른 후보를 지운 뒤 제안해 주세요.'],
+        ['create', 'STATION_UNSUPPORTED', 422, '아직 지원하지 않는 역이라 후보로 올릴 수 없어요.'],
+        ['create', 'STATION_NOT_FOUND', 404, '역을 찾을 수 없어요.'],
+        ['create', 'RESULT_NOT_FOUND', 404, '추천 결과를 찾을 수 없어요. 추천을 다시 받은 뒤 제안해 주세요.'],
+        ['create', 'ROOM_BUSY', 409, '다른 요청을 처리하는 중이에요. 잠시 후 다시 시도해 주세요.'],
+        ['delete', 'NOT_PROPOSAL_OWNER', 403, '후보를 제안한 사람이나 방장만 지울 수 있어요.'],
+        ['delete', 'PROPOSAL_NOT_FOUND', 404, '이미 삭제된 후보예요.'],
+        ['vote', 'ALREADY_VOTED', 409, '이미 다른 후보에 투표했어요. 투표는 바꾸거나 취소할 수 없어요.'],
+        ['vote', 'PROPOSAL_NOT_FOUND', 404, '이미 삭제된 후보예요.'],
+        ['vote', 'ROOM_BUSY', 409, '다른 요청을 처리하는 중이에요. 잠시 후 다시 시도해 주세요.'],
+        ['list', 'SOMETHING_NEW', 500, '약속역 후보 정보를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.', 'UNKNOWN_ERROR'],
+        ['list', 'VALIDATION_ERROR', 400, '약속역 후보 정보를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.', 'UNKNOWN_ERROR'],
+    ];
+    const run = action => action === 'list' ? r.room.fetchProposals(ROOM_QUERY_ID)
+        : action === 'create' ? r.room.createProposal(ROOM_QUERY_ID, 99002)
+            : action === 'vote' ? r.room.voteProposal(ROOM_QUERY_ID, 'proposal-1') : r.room.deleteProposal(ROOM_QUERY_ID, 'proposal-1');
+    for (const [action, code, status, message, expected = code] of cases) {
+        r.respond(async () => jsonResponse({ success: false, error: { code, message: '서버 원문' } }, status));
+        await assert.rejects(run(action), error => error instanceof RoomError && error.code === expected && error.message === message, `${action} ${code}`);
+    }
+    for (const [action, message] of [
+        ['list', '네트워크 상태를 확인하고 다시 시도해 주세요.'], ['create', '후보를 제안하지 못했어요. 다시 시도해 주세요.'],
+        ['vote', '투표하지 못했어요. 다시 시도해 주세요.'], ['delete', '후보를 삭제하지 못했어요. 다시 시도해 주세요.'],
+    ]) {
+        r.respond(async () => { throw new TypeError('연결 실패'); });
+        await assert.rejects(run(action), error => error instanceof RoomError && error.code === 'NETWORK_ERROR' && error.message === message, action);
+    }
+    // 잘못된 역 ID 는 요청 없이 STATION_NOT_FOUND 예요.
+    const before = r.calls.length;
+    await assert.rejects(r.room.createProposal(ROOM_QUERY_ID, NaN), { code: 'STATION_NOT_FOUND' });
+    assert.equal(r.calls.length, before);
+    // 인증 오류는 A-1 처리에 맡겨요(공통 처리가 로그인을 지우므로 마지막에 확인해요).
+    r.respond(async () => fail('TOKEN_INVALID'));
+    await assert.rejects(r.room.voteProposal(ROOM_QUERY_ID, 'proposal-1'), error => error instanceof ApiError && error.code === 'TOKEN_INVALID');
+});
+
+test('후보 응답의 화면 사용 값 누락·형식 오류는 UNKNOWN_ERROR', async () => {
+    const r = proposalRuntime();
+    let current;
+    r.respond(async () => ok(current));
+    const listCases = [
+        null, [], proposalList({}), { selectedStation: null, maxProposals: 9 }, proposalList([], { maxProposals: '9' }),
+        proposalList([], { selectedStation: { id: '1', name: 'x' } }), proposalList([proposalItem(), proposalItem()]),
+        ...['id', 'station', 'isSelected', 'voteCount', 'votedByMe', 'createdAt'].map(key => { const item = proposalItem(); delete item[key]; return proposalList([item]); }),
+        proposalList([proposalItem({ station: { id: 88001 } })]), proposalList([proposalItem({ voteCount: '1' })]),
+        proposalList([proposalItem({ votedByMe: 'false' })]), proposalList([proposalItem({ createdAt: '시각 아님' })]),
+    ];
+    for (let i = 0; i < listCases.length; i++) {
+        current = listCases[i];
+        await assert.rejects(r.room.fetchProposals(ROOM_QUERY_ID), { code: 'UNKNOWN_ERROR' }, `목록 변형 ${i}`);
+    }
+    for (const created of [null, { station: { id: 1, name: 'x' } }, proposalCreated({ station: null }), proposalCreated({ createdAt: undefined })]) {
+        current = created;
+        await assert.rejects(r.room.createProposal(ROOM_QUERY_ID, 99002), { code: 'UNKNOWN_ERROR' });
+    }
+    for (const vote of [null, { proposalId: 'p', voteCount: '1', votedByMe: true }, { proposalId: 'p', voteCount: 1 }]) {
+        current = vote;
+        await assert.rejects(r.room.voteProposal(ROOM_QUERY_ID, 'p'), { code: 'UNKNOWN_ERROR' });
+    }
+});
+
+test('후보 NOT_ROOM_MEMBER·ROOM_NOT_FOUND 는 그 방 캐시를 비우고 같은 코드로 알려요', async () => {
+    for (const [action, code, status] of [['list', 'NOT_ROOM_MEMBER', 403], ['vote', 'ROOM_NOT_FOUND', 404], ['create', 'NOT_ROOM_MEMBER', 403], ['delete', 'ROOM_NOT_FOUND', 404]]) {
+        const r = proposalRuntime();
+        r.respond(async () => ok(roomQueryDetail()));
+        await r.room.fetchRoomDetail(ROOM_QUERY_ID);
+        assert.ok(r.room.getMockRoom(ROOM_QUERY_ID));
+        r.respond(async () => jsonResponse({ success: false, error: { code } }, status));
+        const pending = action === 'list' ? r.room.fetchProposals(ROOM_QUERY_ID) : action === 'vote' ? r.room.voteProposal(ROOM_QUERY_ID, 'p')
+            : action === 'create' ? r.room.createProposal(ROOM_QUERY_ID, 99002) : r.room.deleteProposal(ROOM_QUERY_ID, 'p');
+        await assert.rejects(pending, error => error instanceof r.load('src/types/room.ts').RoomError && error.code === code);
+        assert.equal(r.room.getMockRoom(ROOM_QUERY_ID), undefined, `${action} ${code}`);
+    }
+});
+
+test('계정이 바뀐 뒤 도착한 이전 후보 응답(성공·403)은 버리고 새 계정의 방 캐시를 지우지 않아요', async () => {
+    for (const late of ['success', 'denied']) {
+        const r = proposalRuntime();
+        let resolveOld;
+        r.respond(() => new Promise(resolve => { resolveOld = resolve; }));
+        const old = r.room.fetchProposals(ROOM_QUERY_ID);
+        const rejected = assert.rejects(old, { code: 'AUTH_REQUIRED' });
+        await settle();
+        await r.load('src/services/auth.ts').clearLocalSession();
+        const nextUser = '33333333-3333-4333-8333-333333333333';
+        r.load('src/stores/auth-store.ts').signIn({ userId: nextUser, nickname: '다음 사용자' });
+        r.respond(async () => ok(roomQueryDetail('OWNER', nextUser)));
+        await r.room.fetchRoomDetail(ROOM_QUERY_ID);
+        resolveOld(late === 'success' ? ok(proposalList()) : jsonResponse({ success: false, error: { code: 'NOT_ROOM_MEMBER' } }, 403));
+        await rejected;
+        assert.ok(r.room.getMockRoom(ROOM_QUERY_ID), late);
+    }
+});
+
+test('mock 후보 제안·목록·투표·삭제는 기존 동작(중복·상한·바쁨·남의 후보 삭제 불가)을 유지하고 서버를 부르지 않아요', async () => {
+    const r = createRuntime(); const room = r.load('src/services/room.ts'); let calls = 0;
+    r.context.fetch = async () => { calls++; throw Error(); };
+    const list = await finishRoomMock(r, room.fetchProposals('room-2'));
+    assert.deepEqual(plain(list.items.map(item => item.station.id)), [116, 115, 114]);
+    assert.ok(list.items.every(item => item.station.lines.length > 0));
+    await finishRoomMock(r, assert.rejects(room.fetchProposals('room-2', 'error'), { code: 'NETWORK_ERROR' }));
+    await finishRoomMock(r, assert.rejects(room.createProposal('room-2', 115), { code: 'ALREADY_PROPOSED', message: '성수역은 이미 후보에 있어요.' }));
+    await finishRoomMock(r, assert.rejects(room.createProposal('room-2', 101, undefined, 'busy'), { code: 'ROOM_BUSY' }));
+    const created = await finishRoomMock(r, room.createProposal('room-2', 101, 'mock-result'));
+    assert.equal(created.resultId, 'mock-result'); assert.equal(created.voteCount, 0);
+    const proposals = (await finishRoomMock(r, room.fetchProposals('room-2'))).items;
+    const others = proposals.filter(item => item.proposedBy.userId !== room.getMyUserId());
+    assert.equal((await finishRoomMock(r, room.voteProposal('room-2', others[0].id))).votedByMe, true);
+    await finishRoomMock(r, assert.rejects(room.voteProposal('room-2', others[1].id), { code: 'ALREADY_VOTED' }));
+    await finishRoomMock(r, assert.rejects(room.deleteProposal('room-2', others[0].id), { code: 'NOT_PROPOSAL_OWNER' }));
+    room.mockFillProposals('room-2');
+    await finishRoomMock(r, assert.rejects(room.createProposal('room-2', 125), { code: 'PROPOSAL_LIMIT_EXCEEDED' }));
+    assert.equal(calls, 0);
+});
+
+/** 후보 패널만 구동해요(서버 모드). 실제 React·브라우저 렌더링을 대신하지 않아요. */
+function proposalPanelRuntime({ isOwner, list, respond }) {
+    const r = createScreenRuntime(serverEnv, 'src/components/rooms/proposal-panel.tsx');
+    r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_ME, nickname: '서버 나' });
+    r.calls = [];
+    r.context.fetch = async (url, options) => { r.calls.push({ url, options }); return respond(url, options); };
+    let reloads = 0;
+    const props = () => ({
+        roomId: ROOM_QUERY_ID, roomName: '서버 모임', isOwner, myUserId: ROOM_QUERY_ME, memberCount: 2,
+        state: { status: 'ready', list }, onReload: async () => { reloads++; }, onConfirm() {}, confirmBusy: false, onOpenRecommendations() {},
+    });
+    r.view = () => r.renderComponent({ type: r.screen.default, props: props() });
+    r.reloads = () => reloads;
+    return r;
+}
+
+test('후보 패널(서버): 방장은 남의 후보도 삭제 버튼, 멤버는 내 후보만, 삭제는 7.16 뒤 목록 재조회, 닉네임 없음 표시', async () => {
+    const list = { selectedStation: null, maxProposals: 9, items: [
+        { ...proposalItem({ id: 'mine', proposedBy: { userId: ROOM_QUERY_ME, nickname: '서버 나' }, station: { id: 1, name: '내 역' } }), station: { id: 1, name: '내 역', isSupported: true, lines: [] } },
+        { ...proposalItem({ id: 'other', station: { id: 2, name: '남의 역' } }), station: { id: 2, name: '남의 역', isSupported: true, lines: [] } },
+        { ...proposalItem({ id: 'gone', proposedBy: { userId: 'withdrawn', nickname: '알 수 없음' }, station: { id: 3, name: '탈퇴자 역' } }), station: { id: 3, name: '탈퇴자 역', isSupported: true, lines: [] } },
+    ] };
+    for (const isOwner of [true, false]) {
+        const r = proposalPanelRuntime({ isOwner, list, respond: async () => ok(null) });
+        let view = r.view();
+        const deleteOf = name => findElement(view, element => element.props?.accessibilityLabel === `${name} 후보 삭제`);
+        assert.ok(deleteOf('내 역'), '내 후보는 항상 삭제 가능');
+        assert.equal(!!deleteOf('남의 역'), isOwner);
+        assert.equal(!!deleteOf('탈퇴자 역'), isOwner);
+        assert.ok(findText(view, '알 수 없음 제안'));
+        assert.ok(findText(view, '서버 동료님 제안'));
+        if (isOwner) assert.ok(findTextIncluding(view, '참고용'), '방장 안내의 참고용 문구 유지');
+        else {
+            // 멤버는 투표 확인 시트에서 참고용 안내를 봐요.
+            findElement(view, element => element.type === 'Pressable' && element.props?.accessibilityLabel?.startsWith('남의 역 1표')).props.onPress();
+            assert.ok(findTextIncluding(r.view(), '투표 결과는 참고용이고'), '투표 시트의 참고용 문구 유지');
+        }
+        assert.equal(findElement(view, element => element.props?.style?.backgroundColor && element.type === 'View' && element.props?.children?.type === 'Text' && /호선|^\d$/.test(textOf(element))), null, '노선 배지 없음');
+        if (isOwner) {
+            deleteOf('남의 역').props.onPress(); view = r.view();
+            findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '삭제')).props.onPress();
+            await settle(); await settle(); view = r.view();
+            assert.deepEqual(r.calls.map(call => [call.options.method, call.url.split('/station-proposals')[1]]), [['DELETE', '/other']]);
+            assert.equal(r.reloads(), 1);
+            assert.ok(findText(view, '남의 역 후보를 삭제했어요.'));
+        }
+        r.unmount();
+    }
+});
+
+test('후보 패널(서버): 9개 초과·중복 제안·남의 후보 삭제·이미 투표 오류 문구를 보여주고 목록을 다시 맞춰요', async () => {
+    const list = { selectedStation: null, maxProposals: 9, items: [
+        { ...proposalItem({ id: 'other' }), station: { id: 2, name: '남의 역', isSupported: true, lines: [] } },
+    ] };
+    const cases = [
+        ['propose', 'PROPOSAL_LIMIT_EXCEEDED', 422, '약속역 후보는 방당 9개까지예요. 다른 후보를 지운 뒤 제안해 주세요.'],
+        ['propose', 'ALREADY_PROPOSED', 409, '이미 후보에 있는 역이에요. 목록에서 투표해 주세요.'],
+        ['delete', 'NOT_PROPOSAL_OWNER', 403, '후보를 제안한 사람이나 방장만 지울 수 있어요.'],
+        ['vote', 'ALREADY_VOTED', 409, '이미 다른 후보에 투표했어요. 투표는 바꾸거나 취소할 수 없어요.'],
+        ['vote', 'TOKEN_INVALID', 401, null],
+    ];
+    for (const [action, code, status, message] of cases) {
+        // 방장이 아닌데 목록이 오래되어 서버가 거절하는 경우를 보려고 삭제는 방장 화면으로 눌러요.
+        const r = proposalPanelRuntime({ isOwner: action === 'delete', list, respond: async () => jsonResponse({ success: false, error: { code } }, status) });
+        r.load('src/app/station-search.tsx').openStationPicker = (_options, onPick) => { void onPick({ id: 99002, name: '서버 역 99002', isSupported: true, lines: [] }); };
+        let view = r.view();
+        if (action === 'propose') {
+            findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '역 검색해서 제안')).props.onPress();
+        } else {
+            const target = action === 'delete'
+                ? findElement(view, element => element.props?.accessibilityLabel === '남의 역 후보 삭제')
+                : findElement(view, element => element.type === 'Pressable' && element.props?.accessibilityLabel?.startsWith('남의 역 1표'));
+            target.props.onPress(); view = r.view();
+            findElement(view, element => element.type === 'Pressable' && findText(element.props.children, action === 'vote' ? '투표하기' : '삭제')).props.onPress();
+        }
+        await settle(); await settle(); view = r.view();
+        if (message) {
+            assert.ok(findText(view, message), code);
+            assert.equal(r.reloads(), 1, `${code} 뒤 서버 목록 재조회`);
+        } else {
+            assert.equal(findTextIncluding(view, '투표하지 못했어요'), null, '인증 오류는 중복 안내하지 않아요');
+            assert.equal(r.reloads(), 0);
+        }
+        r.unmount();
+    }
+});
+
+test('추천 화면에서 올린 후보가 방 상세 후보 패널의 서버 목록에도 같은 내용으로 보여요', async () => {
+    // 작은 가짜 서버: 7.14 로 받은 제안을 7.15 목록에 최신순으로 돌려줘요.
+    const server = [proposalItem({ id: 'seed', createdAt: '2026-11-12T09:00:00+09:00' })];
+    const detail = roomQueryDetail(); detail.members[1].departureStation = roomQueryStation(99002);
+    const respond = async (url, options) => {
+        if (url.includes('/station-proposals')) {
+            if (options.method === 'POST') {
+                const body = JSON.parse(options.body);
+                const created = proposalCreated({ id: `p-${body.stationId}`, station: { id: body.stationId, name: `서버 추천역 ${body.stationId}` }, resultId: body.resultId ?? null });
+                server.unshift({ ...created, isSelected: false, voteCount: 0, votedByMe: false });
+                return jsonResponse({ success: true, data: created }, 201);
+            }
+            return ok(proposalList([...server]));
+        }
+        if (url.includes('/recommendations')) return ok(recoRun());
+        if (url.includes('/stations/')) return ok(recoStation(Number(url.split('/').at(-1))));
+        return ok(detail);
+    };
+    const reco = recoScreen();
+    reco.context.fetch = async (url, options) => { reco.calls.push({ url, options }); return respond(url, options); };
+    let view = await pumpScreen(reco);
+    findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '이 역으로 약속방에 공유')).props.onPress();
+    view = await pumpScreen(reco);
+    const post = reco.calls.find(call => call.options.method === 'POST' && call.url.includes('/station-proposals'));
+    assert.deepEqual(JSON.parse(post.options.body), { stationId: 77001, resultId: 'result-TIME' });
+    assert.ok(findText(view, '이미 약속역 후보에 있어요'), '공유 뒤 7.15 로 다시 맞춘 목록 기준');
+    reco.unmount();
+
+    const room = roomQueryScreen('src/app/rooms/[roomId].tsx', { roomId: ROOM_QUERY_ID, tab: 'vote' });
+    room.context.fetch = async (url, options) => respond(url, options);
+    room.render(); await settle(); room.advance(1000); await settle(); view = room.render();
+    const panel = findElement(view, element => element.props?.state?.status === 'ready' && element.props?.roomId === ROOM_QUERY_ID);
+    assert.ok(panel, '방 상세 후보 패널');
+    assert.deepEqual(plain(panel.props.state.list.items.map(item => [item.id, item.station.id, item.resultId])), [['p-77001', 77001, 'result-TIME'], ['seed', 88001, null]]);
+    room.unmount();
+});
+
+test('방 상세: 후보 목록이 NOT_ROOM_MEMBER 면 방 캐시를 비우고 기존 접근 불가 화면, 인증 오류는 패널 안내 없음', async () => {
+    for (const [code, status] of [['NOT_ROOM_MEMBER', 403], ['ROOM_NOT_FOUND', 404], ['TOKEN_INVALID', 401]]) {
+        const r = roomQueryScreen('src/app/rooms/[roomId].tsx', { roomId: ROOM_QUERY_ID, tab: 'vote' });
+        r.context.fetch = async url => url.includes('/station-proposals')
+            ? jsonResponse({ success: false, error: { code } }, status) : ok(roomQueryDetail());
+        r.render(); await settle(); r.advance(1000); await settle(); const view = r.render();
+        if (status === 401) {
+            assert.equal(findElement(view, element => element.props?.error), null);
+            assert.equal(findElement(view, element => element.props?.state?.status === 'error'), null, '패널 오류 안내 없음');
+        } else {
+            assert.ok(findElement(view, element => element.props?.error === code), code);
+            assert.equal(r.load('src/services/room.ts').getMockRoom(ROOM_QUERY_ID), undefined, '방 캐시 비움');
+        }
+        r.unmount();
+    }
 });

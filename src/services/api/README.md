@@ -2,7 +2,7 @@
 
 `.env.example`을 `.env`로 복사합니다. `EXPO_PUBLIC_USE_MOCK`은 생략하면 `true`이고, 정확히 `true`일 때만 mock입니다. 서버를 쓰려면 `false`와 `/api/v1`까지 포함한 `EXPO_PUBLIC_API_BASE_URL`을 설정하고 앱을 완전히 새로고침합니다. 환경변수는 빌드에 포함되므로 토큰은 넣지 않습니다.
 
-현재 인증, 내 정보·닉네임 수정·탈퇴(`services/user.ts`), 역 검색·역 상세·노선 목록(`services/station.ts`), 혼잡도 조회(`services/congestion.ts`), 경로 검색(`services/route.ts`), 실시간 도착정보(`services/arrivals.ts`), 방 목록·상세·멤버 조회(`services/room.ts`), 중간역 추천(`services/recommendation.ts`)이 서버 모드를 지원해요.
+현재 인증, 내 정보·닉네임 수정·탈퇴(`services/user.ts`), 역 검색·역 상세·노선 목록(`services/station.ts`), 혼잡도 조회(`services/congestion.ts`), 경로 검색(`services/route.ts`), 실시간 도착정보(`services/arrivals.ts`), 방 목록·상세·멤버 조회(`services/room.ts`), 중간역 추천(`services/recommendation.ts`), 약속역 후보 제안·목록·삭제·투표(`services/room.ts` → `services/room-proposals.ts`)가 서버 모드를 지원해요.
 
 ```ts
 import { get, post, delete as apiDelete } from '@/services/api/client';
@@ -190,10 +190,10 @@ await fetchRoomMembers(roomId); // GET /rooms/{roomId}/members
 - 목록(7.3)의 `memberCount`는 필수예요. 실서버 상세(7.4)는 이 필드 없이 전체 `members`를 보내므로, 검사한 `members.length`를 화면·공용 캐시의 인원수로 사용해요. 상세에 `memberCount`가 함께 오면 정수이고 멤버 수와 같은지도 검사해요.
 - `getMyUserId()`는 서버 모드에서 auth-store의 사용자 ID를 사용해요. Refresh Token 복원 직후 ID가 비어 있으면 기존 `fetchMe()`(4.4)로 한 번 확인하며 동시 조회는 공유해요. 로그인·사용자 서비스는 변경하지 않아요.
 - `room-cache.ts`는 마지막으로 받은 서버 목록·상세·멤버 정보를 메모리에 보관해요. 계정·로그인 세대를 구분하고 복사본을 반환해요. 로그아웃·계정 변경 후 조회나 늦은 응답으로 이전 계정의 캐시를 재사용하지 않아요. 목록에서 빠진 방이나 403·404로 거절된 방도 제거해요.
-- `getMockRoom`·`getMockMembers`는 서버 모드에서 캐시만 읽고 mock 방으로 대체하지 않아요. 후보·채팅 API는 mock을 유지하며 이 방 정보를 읽어요. 채팅은 캐시 상세를 우선 사용하고 없으면 실제 상세 조회를 해요. 추천은 #99부터 서버 8.1~8.3을 불러요(아래 "중간역 추천" 항목).
+- `getMockRoom`·`getMockMembers`는 서버 모드에서 캐시만 읽고 mock 방으로 대체하지 않아요. 채팅 API는 mock을 유지하며 이 방 정보를 읽어요. 후보는 #101부터 서버 7.14~7.17을 불러요(아래 "약속역 후보" 항목). 채팅은 캐시 상세를 우선 사용하고 없으면 실제 상세 조회를 해요. 추천은 #99부터 서버 8.1~8.3을 불러요(아래 "중간역 추천" 항목).
 - ROOM_NOT_FOUND·NOT_ROOM_MEMBER·NETWORK_ERROR·VALIDATION_ERROR·ROOM_BUSY는 같은 RoomError 코드로 전달해요. 형식 오류와 그 밖의 서버 오류는 UNKNOWN_ERROR예요. TOKEN_*과 공통 인증 오류는 ApiError 그대로 A-1에 맡겨요.
 - 서버 모드의 `fetchMyRooms`·`fetchRoomDetail`은 mock 실패·빈 목록 플래그를 무시해요. 화면의 로딩·빈 목록·재시도·접근 불가 표시는 실제 응답에 따라 동작해요.
-- 생성·참여는 아래 #97에서 연동해요. 초대 코드 조회·수정·출발역 변경·나가기·승계·후보·투표·채팅·WebSocket의 실제 API 연동은 범위 밖이에요. mock 데이터·이벤트를 서버 응답으로 표시하거나 저장하지 않아요.
+- 생성·참여는 아래 #97에서 연동해요. 초대 코드 조회·수정·출발역 변경·나가기·승계·채팅·WebSocket의 실제 API 연동은 범위 밖이에요(후보·투표는 #101). mock 데이터·이벤트를 서버 응답으로 표시하거나 저장하지 않아요.
 - 실서버 확인은 Swagger에서 같은 계정으로 방을 만든 뒤 웹에서 GET /rooms·상세·멤버 응답과 화면을 비교해요. 빈 계정, 일반 멤버/방장, 403·404도 확인해요. 테스트용 토큰 주입 코드와 `.env`는 커밋하지 않아요.
 
 
@@ -242,4 +242,28 @@ listRecommendationRuns(roomId); // 이 앱 세션에서 본 실행만, 최근 �
 - 서버에 이전 실행 목록 API가 없어서 `listRecommendationRuns`는 이 앱 세션의 8.1 성공·8.2 결과만 중복 없이 최근 순으로 돌려줘요. 화면은 2건 이상일 때만 "이전 추천 기록"을 보여요.
 - 요청 전 `getRoomCacheScope()`로 계정 범위를 잡고 응답 뒤 `assertRoomCacheScope()`로 확인해요. 계정이 바뀐 뒤의 늦은 응답은 `AUTH_REQUIRED`로 버려요. 계정이 바뀌면(`subscribeRoomCacheReset`) 이전 실행 목록도 비워요.
 - 화면은 8.1 요청 중 계산 버튼과 "다시 추천받기"를 막고, 상태가 반영되기 전 연타도 한 번만 보내요.
-- 후보 제안·투표(추천 → 후보 올리기 포함)는 mock 유지, WS 수신 재조회와 새 필드 화면 표시는 범위 밖이에요.
+- 추천 → 후보 올리기는 #101부터 서버 7.14를 불러요(아래 "약속역 후보" 항목). WS 수신 재조회와 새 필드 화면 표시는 범위 밖이에요.
+
+## 약속역 후보 제안·목록·삭제·투표 (#101, 명세 7.14~7.17)
+
+```ts
+import { createProposal, deleteProposal, fetchProposals, voteProposal } from '@/services/room';
+
+await fetchProposals(roomId); // GET /rooms/{roomId}/station-proposals → { selectedStation, maxProposals, items } (최신순)
+await createProposal(roomId, stationId); // POST … { stationId }
+await createProposal(roomId, stationId, resultId); // POST … { stationId, resultId } (추천 결과·주변 대안역)
+await voteProposal(roomId, proposalId); // PUT …/{proposalId}/vote (body 없음, 같은 후보 재요청은 멱등)
+await deleteProposal(roomId, proposalId); // DELETE …/{proposalId} → data: null
+```
+
+- room.ts의 후보 함수 4개는 서버 모드에서 `services/room-proposals.ts`만 불러요(요청·파서·오류 변환은 그 파일). mock 저장소(`proposalsByRoom`, `MOCK_STATIONS`)와 mock 인자(`'error'`·`'busy'`)는 mock 모드에서만 써요. 제안 전 역 상세(5.3)로 미리 확인하지 않고 서버 판단에 맡겨요.
+- `roomId`·`proposalId`는 `encodeURIComponent`로 감싸요. 7.14 body는 `{ stationId }`이고 `resultId`는 값이 있을 때만 넣어요. 잘못된 역 ID는 요청 없이 `STATION_NOT_FOUND`예요.
+- 응답은 `unknown`으로 받아 화면이 읽는 값만 필수로 검사하고, 형식이 다르면 `UNKNOWN_ERROR`예요. 목록 항목은 `id`·`station{id,name}`·`isSelected`·`voteCount`·`votedByMe`·`createdAt`이 필수예요. 같은 `id`가 두 번 오면 형식 오류예요.
+- 서버 `station`·`selectedStation`은 `{ id, name }`만 와요. `lines`는 빈 배열(노선 배지 숨김), `isSupported`는 `true`로 채우고 역 상세를 추가로 조회하지 않아요. `maxProposals`가 없으면 9예요. `resultId`가 비면 `null`이에요.
+- 제안자 닉네임이 없음·null·빈 문자열이면 `"알 수 없음"`이에요(`UNKNOWN_PROPOSER_NAME`). 후보 패널은 "알 수 없음 제안"으로 보여요. `userId`가 없으면 빈 문자열이라 "내가 제안"·삭제 권한에 걸리지 않아요.
+- 7.14 응답에는 `isSelected`·`voteCount`·`votedByMe`가 없어서 `false`·`0`·`false`로 채워요. 화면은 제안·투표·삭제 뒤 7.15로 목록을 다시 맞춰요. 7.16의 `data: null`과 빈 본문은 정상이에요.
+- 오류는 `RoomError`로 바꿔요: `ALREADY_PROPOSED`·`ALREADY_VOTED`·`ROOM_BUSY`(409), `PROPOSAL_LIMIT_EXCEEDED`·`STATION_UNSUPPORTED`(422), `NOT_PROPOSAL_OWNER`·`NOT_ROOM_MEMBER`(403), `PROPOSAL_NOT_FOUND`·`STATION_NOT_FOUND`·`RESULT_NOT_FOUND`·`ROOM_NOT_FOUND`(404), `NETWORK_ERROR`(동작별 문구). 모르는 코드와 형식 오류는 `UNKNOWN_ERROR`예요. 문구는 기존 mock 문구를 쓰고, 역 이름이 들어가던 문구(중복·미지원)와 `RESULT_NOT_FOUND`·`UNKNOWN_ERROR`·삭제 실패만 새로 정했어요.
+- `NOT_ROOM_MEMBER`·`ROOM_NOT_FOUND`는 그 계정의 방 캐시를 비워요(`removeCachedRoom`). 방 상세는 기존 접근 불가 화면(약속방 목록으로 이동 버튼)을, 추천 화면은 기존 접근 불가 화면을 보여줘요.
+- 요청 전 `getRoomCacheScope()`로 계정 범위를 잡고 성공·실패 응답 뒤 `assertRoomCacheScope()`로 확인해요. 다른 계정으로 바뀐 뒤의 늦은 응답은 `AUTH_REQUIRED`로 버리고 새 계정의 방 캐시를 지우지 않아요. 화면 간 늦은 응답은 기존 요청 번호로 막아요.
+- `TOKEN_*`·401은 `ApiError` 그대로 A-1에 맡기고 후보 패널·방 상세·추천 화면에서 따로 안내하지 않아요.
+- 투표는 참고용이에요(자동 확정 없음). 삭제 버튼은 방장이거나 내가 제안한 후보일 때만 보여요. 최종 약속역 지정·해제(7.10·7.11)와 WS 실시간 갱신은 범위 밖이에요.

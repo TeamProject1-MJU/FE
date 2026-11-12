@@ -26,6 +26,7 @@ import { useMock as isMockMode } from '@/services/api/config';
 import { fetchStation } from '@/services/station';
 import { getSession } from '@/stores/auth-store';
 import { createServerRoom, joinServerRoom, fetchServerRoomDetail, fetchServerRoomMembers, fetchServerRooms } from '@/services/room-query';
+import { createServerProposal, deleteServerProposal, fetchServerProposals, voteServerProposal } from '@/services/room-proposals';
 import { assertRoomCacheScope, getRoomCacheScope, readCachedMembers, readCachedRoom, readCachedRoomCode, subscribeRoomCacheReset } from '@/services/room-cache';
 import { emitRoomMockChange } from '@/stores/room-mock-events';
 import {
@@ -848,8 +849,9 @@ function toProposal(roomId: string, stored: StoredProposal): StationProposal {
     };
 }
 
-/** 7.15 후보 목록 (최신 제안 순). 득표순 정렬은 화면에서 해요 */
+/** 7.15 후보 목록 (최신 제안 순). 득표순 정렬은 화면에서 해요. 서버 모드는 services/room-proposals.ts (#101), mock 인자는 무시해요 */
 export async function fetchProposals(roomId: string, mock?: 'error'): Promise<StationProposalList> {
+    if (!isMockMode()) return fetchServerProposals(roomId);
     await wait(MOCK_DELAY_MS / 2);
     const room = requireMember(roomId);
     if (mock === 'error') throw new RoomError('NETWORK_ERROR', '네트워크 상태를 확인하고 다시 시도해 주세요.');
@@ -861,8 +863,9 @@ export async function fetchProposals(roomId: string, mock?: 'error'): Promise<St
 
 /**
  * 7.14 후보 제안 (모든 멤버)
- * - resultId: 추천 결과 카드에서 제안한 경우 그 결과의 resultId, 직접 제안이면 생략 (TODO: 서버가 RESULT_NOT_FOUND 검증)
+ * - resultId: 추천 결과 카드(주변 대안역 포함)에서 제안한 경우 그 결과의 resultId, 직접 제안이면 생략 (서버가 RESULT_NOT_FOUND 검증)
  * - 같은 역 중복 ALREADY_PROPOSED(409), 미제공 역 STATION_UNSUPPORTED(422), 9개 초과 PROPOSAL_LIMIT_EXCEEDED(422)
+ * - 서버 모드는 services/room-proposals.ts (#101): 역 확인은 서버가 하고 mock 인자는 무시해요
  */
 export async function createProposal(
     roomId: string,
@@ -870,13 +873,12 @@ export async function createProposal(
     resultId?: string,
     mock?: 'error' | 'busy',
 ): Promise<StationProposal> {
+    if (!isMockMode()) return createServerProposal(roomId, stationId, resultId);
     await wait(MOCK_DELAY_MS / 2);
     requireMember(roomId);
     if (mock === 'busy') throw new RoomError('ROOM_BUSY', '다른 요청을 처리하는 중이에요. 잠시 후 다시 시도해 주세요.');
     if (mock === 'error') throw new RoomError('NETWORK_ERROR', '후보를 제안하지 못했어요. 다시 시도해 주세요.');
-    const scope = isMockMode() ? null : getRoomCacheScope();
-    const station = isMockMode() ? MOCK_STATIONS.find(item => item.id === stationId) : await fetchStation(stationId);
-    if (scope) assertRoomCacheScope(scope);
+    const station = MOCK_STATIONS.find(item => item.id === stationId);
     if (!station) throw new RoomError('STATION_NOT_FOUND', '역을 찾을 수 없어요.');
     if (!station.isSupported) throw new RoomError('STATION_UNSUPPORTED', `${station.name}역은 아직 지원하지 않는 역이라 후보로 올릴 수 없어요.`);
     const list = proposalsByRoom.get(roomId) ?? [];
@@ -885,7 +887,7 @@ export async function createProposal(
     const stored: StoredProposal = {
         id: `proposal-${proposalSeq++}`,
         station: { id: station.id, name: station.name, isSupported: station.isSupported, lines: station.lines.map(({ lineId, lineName, color }) => ({ lineId, lineName, color })) },
-        proposedBy: { userId: getMyUserId(), nickname: isMockMode() ? ME.nickname : getSession()?.nickname ?? '' },
+        proposedBy: { userId: getMyUserId(), nickname: ME.nickname },
         resultId: resultId ?? null,
         createdAt: new Date().toISOString(),
         voterIds: [],
@@ -897,8 +899,10 @@ export async function createProposal(
 /**
  * 7.17 참고용 투표 (모든 멤버, 본인 제안 후보도 가능)
  * 같은 후보에 다시 투표하면 상태 그대로 200(멱등), 다른 후보에 투표하면 ALREADY_VOTED(409)
+ * 서버 모드는 services/room-proposals.ts (#101, body 없음), mock 인자는 무시해요
  */
 export async function voteProposal(roomId: string, proposalId: string, mock?: 'error'): Promise<ProposalVoteResult> {
+    if (!isMockMode()) return voteServerProposal(roomId, proposalId);
     await wait(MOCK_DELAY_MS / 2);
     requireMember(roomId);
     if (mock === 'error') throw new RoomError('NETWORK_ERROR', '투표하지 못했어요. 다시 시도해 주세요.');
@@ -914,8 +918,9 @@ export async function voteProposal(roomId: string, proposalId: string, mock?: 'e
     return { proposalId, voteCount: target.voterIds.length, votedByMe: true };
 }
 
-/** 7.16 후보 삭제 (제안자 본인 또는 OWNER). 그 후보의 표도 함께 사라지고, 확정된 약속역은 바뀌지 않아요 */
+/** 7.16 후보 삭제 (제안자 본인 또는 OWNER). 그 후보의 표도 함께 사라지고, 확정된 약속역은 바뀌지 않아요. 서버 모드는 services/room-proposals.ts (#101) */
 export async function deleteProposal(roomId: string, proposalId: string): Promise<void> {
+    if (!isMockMode()) return deleteServerProposal(roomId, proposalId);
     await wait(MOCK_DELAY_MS / 2);
     const room = requireMember(roomId);
     const list = proposalsByRoom.get(roomId) ?? [];
