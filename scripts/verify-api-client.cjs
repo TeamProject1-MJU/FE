@@ -2393,13 +2393,207 @@ test('118 mock 멘션 변환·trim·로컬 재시도·커서 동작 유지', asy
     assert.equal(chat.toChatDisplayContent('@linkro'), '@링크로'); assert.equal(calls, 0);
 });
 
-function chat118Hook() {
+function chat118Hook(realtimeState = 'closed') {
     const r = roomQueryScreen('src/hooks/use-room-chat.ts');
     r.external.react.useSyncExternalStore = (_subscribe, read) => read();
+    let listener, options;
+    const stateListeners = new Set();
+    const realtime = r.load('src/services/realtime.ts');
+    realtime.getRealtimeState = () => realtimeState;
+    realtime.subscribeRealtimeState = callback => { stateListeners.add(callback); return () => stateListeners.delete(callback); };
+    realtime.subscribeRoomEvents = (_room, callback, callbacks) => {
+        listener = callback; options = callbacks; r.subscribed = true;
+        return () => { r.subscribed = false; };
+    };
+    r.event = (payload, type = 'MESSAGE_CREATED') => listener?.({ type, roomId: ROOM_QUERY_ID, payload, at: payload.createdAt });
+    r.captureEvent = () => { const current = listener; return payload => current({ type: 'MESSAGE_CREATED', roomId: ROOM_QUERY_ID, payload, at: payload.createdAt }); };
+    r.reconnect = () => options.onReconnected();
+    r.reject = code => options.onRejected(code);
+    r.realtimeState = value => { realtimeState = value; stateListeners.forEach(callback => callback()); };
     r.screen.default = () => r.screen.useRoomChat(ROOM_QUERY_ID);
     room107TrackFocus(r);
     return r;
 }
+
+test('118 realtime 초기 조회 중 USER SYSTEM AI 병합·정렬·중복·형식 검증', async () => {
+    const r = chat118Hook('open'); let resolve;
+    r.context.fetch = async () => await new Promise(done => { resolve = done; });
+    r.render(); await settle();
+    const user = chat118Message();
+    const ai = chat118Message({ id: ROOM_QUERY_ID, senderType: 'AI', senderId: null, nickname: null, createdAt: '2026-11-12T10:00:02Z' });
+    const system = chat118Message({ id: ROOM_QUERY_ID2, senderType: 'SYSTEM', senderId: null, nickname: null, createdAt: '2026-11-12T10:00:01Z' });
+    r.event(ai); r.event(user); r.event(system); r.event(user);
+    r.event(chat118Message({ id: 'bad' })); r.event(chat118Message({ meta: {} })); r.event(user, 'MEMBER_JOINED');
+    resolve(ok({ items: [user], hasMore: true, nextCursor: user.id })); await settle();
+    const view = r.render();
+    assert.deepEqual(plain(view.messages), [user, system, ai]); assert.equal(view.hasMore, true);
+    r.unmount(); assert.equal(r.subscribed, false); assert.equal(r.timers.size, 0);
+});
+
+test('118 realtime 내 이벤트는 응답 이전·timeout 이후 oldest pending 하나만 확인', async () => {
+    for (const late of [false, true]) {
+        const r = chat118Hook('open'); let resolve;
+        const old = chat118Message({ content: '같은 본문' });
+        const saved = chat118Message({ id: ROOM_QUERY_ID, content: old.content });
+        r.context.fetch = async (_url, options) => options.method === 'POST'
+            ? await new Promise((done, reject) => { resolve = done; options.signal.addEventListener('abort', () => reject(Error('timeout'))); })
+            : ok({ items: [old], hasMore: false, nextCursor: null });
+        r.render(); await settle(); r.render().setDraft(old.content); r.render().send(); await settle();
+        r.event(old); assert.equal(r.render().pending.length, 1);
+        if (late) { r.advance(10000); await settle(); assert.equal(r.render().pending[0].status, 'failed'); }
+        r.event(saved); assert.equal(r.render().pending.length, 0);
+        resolve(ok({ message: saved, aiPending: false })); await settle();
+        assert.equal(r.render().messages.length, 2); r.unmount();
+    }
+    const r = chat118Hook('open');
+    r.context.fetch = async (_url, options) => { if (options.method === 'POST') throw TypeError('lost'); return ok({ items: [], hasMore: false, nextCursor: null }); };
+    r.render(); await settle();
+    for (let i = 0; i < 2; i++) { r.render().setDraft('같은 본문'); r.render().send(); await settle(); }
+    const first = r.render().pending[0].clientId;
+    const saved = chat118Message({ content: '같은 본문' });
+    r.event(saved); r.event(saved);
+    assert.equal(r.render().pending.length, 1); assert.notEqual(r.render().pending[0].clientId, first);
+    r.unmount();
+});
+
+test('118 realtime AI·정확한 SYSTEM 실패만 대기 해제·응답 전 AI도 처리', async () => {
+    for (const content of [null, 'AI 사용 한도를 초과해 답변하지 못했어요.', 'AI가 답변을 만들지 못했어요.']) {
+        const r = chat118Hook('open');
+        r.context.fetch = async (_url, options) => ok(options.method === 'POST'
+            ? { message: chat118Message(), aiPending: true } : { items: [], hasMore: false, nextCursor: null });
+        r.render(); await settle(); r.render().setDraft('@링크로 질문'); r.render().send(); await settle();
+        const system = chat118Message({ id: ROOM_QUERY_ID, senderType: 'SYSTEM', senderId: null, nickname: null,
+            content: 'AI링크로님이 참여했어요.', createdAt: '2026-11-12T10:00:03Z' });
+        r.event(system); assert.equal(r.render().aiPending, 1);
+        r.event({ ...system, id: ROOM_QUERY_ID2, senderType: content ? 'SYSTEM' : 'AI', content: content ?? '답변' });
+        assert.equal(r.render().aiPending, 0); assert.equal(r.timers.size, 0); r.unmount();
+    }
+    const r = chat118Hook('open'); let resolve;
+    r.context.fetch = async (_url, options) => options.method === 'POST' ? await new Promise(done => { resolve = done; }) : ok({ items: [], hasMore: false, nextCursor: null });
+    r.render(); await settle(); r.render().setDraft('@링크로 질문'); r.render().send(); await settle();
+    r.event(chat118Message({ id: ROOM_QUERY_ID, senderType: 'AI', senderId: null, nickname: null, createdAt: '2026-11-12T10:00:03Z' }));
+    resolve(ok({ message: chat118Message(), aiPending: true })); await settle();
+    assert.equal(r.render().aiPending, 0); assert.equal(r.timers.size, 0); r.unmount();
+});
+
+test('118 realtime open은 60초 1회 REST·연결 종료는 3초 폴백·복구 시 폴백 중지', async () => {
+    for (const fallback of [false, true]) {
+        const r = chat118Hook('open'); let gets = 0;
+        r.context.fetch = async (_url, options) => {
+            if (options.method === 'POST') return ok({ message: chat118Message(), aiPending: true });
+            gets++; return ok({ items: [], hasMore: false, nextCursor: null });
+        };
+        r.render(); await settle(); r.render().setDraft('@링크로 질문'); r.render().send(); await settle();
+        r.advance(3000); await settle(); assert.equal(gets, 1);
+        if (fallback) { r.realtimeState('closed'); r.advance(3000); await settle(); assert.equal(gets, 2); r.realtimeState('open'); }
+        r.advance(57000); await settle();
+        assert.equal(gets, fallback ? 3 : 2); assert.equal(r.render().aiPending, 0);
+        r.advance(60000); await settle(); assert.equal(gets, fallback ? 3 : 2); r.unmount();
+    }
+});
+
+test('118 realtime 재연결 병합·refreshAgain·draft pending 유지·blur 수신', async () => {
+    const r = chat118Hook('open'); let gets = 0, resolve;
+    r.context.fetch = async (_url, options) => {
+        if (options.method === 'POST') throw TypeError('전송 실패');
+        gets++;
+        if (gets === 2) return await new Promise(done => { resolve = done; });
+        return ok({ items: [], hasMore: false, nextCursor: null });
+    };
+    r.render(); await settle(); r.render().setDraft('보류'); r.render().send(); await settle();
+    r.render().setDraft('작성 중'); const pending = plain(r.render().pending);
+    r.reconnect(); await settle(); r.reconnect();
+    const missed = chat118Message({ content: '놓친 메시지', senderId: ROOM_QUERY_OTHER });
+    resolve(ok({ items: [missed], hasMore: false, nextCursor: null })); await settle();
+    assert.equal(gets, 3); assert.deepEqual(plain(r.render().pending), pending); assert.equal(r.render().draft, '작성 중');
+    r.blur(); r.event(chat118Message({ id: ROOM_QUERY_ID, content: 'blur 중', senderId: ROOM_QUERY_OTHER }));
+    assert.equal(r.render().messages.length, 2); assert.equal(r.subscribed, true); r.unmount();
+});
+
+test('118 realtime 접근 거부만 blocked·늦은 초기 응답 및 이벤트 무시', async () => {
+    for (const code of ['NOT_ROOM_MEMBER', 'ROOM_NOT_FOUND', 'VALIDATION_ERROR', 'INTERNAL_ERROR']) {
+        const r = chat118Hook('open'); let resolve;
+        r.context.fetch = async () => await new Promise(done => { resolve = done; });
+        r.render(); await settle(); r.reject(code);
+        resolve(ok({ items: [chat118Message()], hasMore: false, nextCursor: null })); await settle(); r.event(chat118Message());
+        const denied = ['NOT_ROOM_MEMBER', 'ROOM_NOT_FOUND'].includes(code);
+        assert.equal(r.render().blocked, denied); assert.equal(r.render().messages.length, denied ? 0 : 1);
+        assert.equal(r.timers.size, 0); r.unmount();
+    }
+});
+
+test('118 realtime 이전 방·계정·unmount 이벤트 무시·blur AI 타이머 정리', async () => {
+    for (const stop of ['room', 'account', 'unmount', 'blur']) {
+        const r = chat118Hook('open');
+        r.context.fetch = async (_url, options) => ok(options.method === 'POST' ? { message: chat118Message(), aiPending: true } : { items: [], hasMore: false, nextCursor: null });
+        r.render(); await settle(); r.render().setDraft('@링크로 질문'); r.render().send(); await settle();
+        const event = r.captureEvent();
+        if (stop === 'room') { r.screen.default = () => r.screen.useRoomChat(ROOM_QUERY_ID2); r.render(); await settle(); }
+        if (stop === 'account') { r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_OTHER, nickname: '다른 계정' }); r.render(); await settle(); }
+        if (stop === 'unmount') r.unmount();
+        if (stop === 'blur') r.blur();
+        event(chat118Message({ id: ROOM_QUERY_ID2, senderType: 'AI', senderId: null, nickname: null, createdAt: '2026-11-12T10:00:03Z' }));
+        const view = r.render();
+        if (stop === 'blur') { assert.equal(view.messages.length, 2); assert.equal(view.aiPending, 0); }
+        else assert.ok(!view.messages.some(message => message.id === ROOM_QUERY_ID2));
+        r.unmount(); assert.equal(r.timers.size, 0);
+    }
+});
+
+test('118 realtime fallback 진행 중 60초 안전 조회는 같은 REST를 공유하고 늦은 결과도 중복 없음', async () => {
+    const r = chat118Hook('closed'); let gets = 0, resolve;
+    r.context.fetch = async (_url, options) => {
+        if (options.method === 'POST') return ok({ message: chat118Message(), aiPending: true });
+        gets++;
+        if (gets > 1) return await new Promise(done => { resolve = done; });
+        return ok({ items: [], hasMore: false, nextCursor: null });
+    };
+    r.render(); await settle(); r.render().setDraft('@링크로 질문'); r.render().send(); await settle();
+    r.advance(3000); await settle(); assert.equal(gets, 2);
+    r.advance(57000); await settle(); assert.equal(gets, 2);
+    const reply = chat118Message({ id: ROOM_QUERY_ID, senderType: 'AI', senderId: null, nickname: null, createdAt: '2026-11-12T10:00:03Z' });
+    r.event(reply); resolve(ok({ items: [reply], hasMore: false, nextCursor: null })); await settle();
+    assert.equal(r.render().messages.length, 2); assert.equal(r.render().aiPending, 0); assert.equal(r.timers.size, 0); r.unmount();
+});
+
+test('118 mock 훅은 realtime 구독 없이 기존 알림으로 AI 답변 수신', async () => {
+    const r = createScreenRuntime({}, 'src/hooks/use-room-chat.ts');
+    r.external['expo-router'].useFocusEffect = callback => r.external.react.useEffect(callback, []);
+    r.external.react.useCallback = (callback, dependencies) => {
+        const ref = r.external.react.useRef(null);
+        if (!ref.current || dependencies.some((value, index) => value !== ref.current.dependencies[index])) ref.current = { callback, dependencies };
+        return ref.current.callback;
+    };
+    const realtime = r.load('src/services/realtime.ts');
+    realtime.subscribeRoomEvents = () => { throw Error('mock은 realtime 구독 불가'); };
+    realtime.subscribeRealtimeState = () => { throw Error('mock은 realtime 상태 구독 불가'); };
+    r.screen.default = () => r.screen.useRoomChat('room-4');
+    r.render();
+    for (let i = 0; i < 15; i++) { r.advance(400); await settle(); }
+    assert.equal(r.render().status, 'ready');
+    const before = r.render().messages.length;
+    r.render().setDraft('  @링크로 질문  '); r.render().send();
+    for (let i = 0; i < 30; i++) { r.advance(400); await settle(); }
+    assert.equal(r.render().messages.length, before + 2); assert.equal(r.render().aiPending, 0);
+    assert.ok(r.render().messages.some(message => message.content === '@linkro 질문'));
+    r.unmount(); assert.equal(r.timers.size, 0);
+});
+
+test('118 먼저 응답된 내 메시지 이벤트가 동일 본문의 다른 pending을 제거하지 않음', async () => {
+    const r = chat118Hook('open'); const responses = [];
+    r.context.fetch = async (_url, options) => options.method === 'POST'
+        ? await new Promise(resolve => responses.push(resolve)) : ok({ items: [], hasMore: false, nextCursor: null });
+    r.render(); await settle();
+    for (let i = 0; i < 2; i++) { r.render().setDraft('동일 본문'); r.render().send(); await settle(); }
+    const saved = chat118Message({ content: '동일 본문' });
+    responses[0](ok({ message: saved, aiPending: false })); await settle();
+    const remaining = r.render().pending[0].clientId;
+    r.event(saved); assert.equal(r.render().pending.length, 1); assert.equal(r.render().pending[0].clientId, remaining);
+    const second = { ...saved, id: ROOM_QUERY_ID };
+    r.event(second); assert.equal(r.render().pending.length, 0);
+    responses[1](ok({ message: second, aiPending: false })); await settle();
+    assert.equal(r.render().messages.length, 2); r.unmount();
+});
 
 test('118 훅 AI 3초 수신·id 중복 제거·화면 이탈 타이머 해제', async () => {
     const r = chat118Hook(); let items = []; let posts = 0;
@@ -2577,7 +2771,7 @@ test('118 훅 AI 최대 60초·blur·계정 변경 뒤 재조회 중단', async 
         if (stop === 'account') r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_OTHER, nickname: '다른 계정' });
         const before = calls;
         for (let i = 0; i < 21; i++) { r.advance(3000); await settle(); }
-        if (stop === 'deadline') { assert.equal(r.render().aiPending, 0); assert.equal(calls, before + 19); }
+        if (stop === 'deadline') { assert.equal(r.render().aiPending, 0); assert.equal(calls, before + 20); }
         else assert.equal(calls, before);
         r.unmount(); assert.equal(r.timers.size, 0);
     }
@@ -2911,6 +3105,11 @@ function roomQueryScreen(screenPath = 'src/app/rooms/index.tsx', params = {}) {
         runtime.external['expo-clipboard'] = { setStringAsync: async () => {} };
     });
     r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_ME, nickname: '서버 나' });
+    // Screen fixtures have no socket/token transport; hook tests replace these callbacks explicitly.
+    const realtime = r.load('src/services/realtime.ts');
+    realtime.subscribeRoomEvents = () => () => {};
+    realtime.subscribeRealtimeState = () => () => {};
+    realtime.getRealtimeState = () => 'closed';
     r.external['expo-router'].useLocalSearchParams = () => params;
     r.external.react.useCallback = (callback, dependencies) => {
         const ref = r.external.react.useRef(null);
