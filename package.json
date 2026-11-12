@@ -6,6 +6,7 @@
     "@expo/ui": "~57.0.19",
     "@expo/vector-icons": "^15.0.2",
     "@react-native-seoul/kakao-login": "^6.0.4",
+    "@stomp/stompjs": "^7.5.0",
     "expo": "~57.0.24",
     "expo-build-properties": "~57.0.22",
     "expo-clipboard": "~57.0.2",

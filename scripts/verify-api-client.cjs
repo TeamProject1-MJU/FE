@@ -17,6 +17,7 @@ function createRuntime(env = {}, react = require('react')) {
     const context = vm.createContext({
         process: { env },
         AbortController,
+        URL, TextEncoder, TextDecoder, atob, __DEV__: false,
         console,
         fetch: async () => { throw new Error('검사에서 지정하지 않은 요청입니다.'); },
         setTimeout: (callback, ms) => { const id = ++timerId; timers.set(id, { callback, ms, due: now + ms }); return id; },
@@ -26,6 +27,11 @@ function createRuntime(env = {}, react = require('react')) {
         clearInterval: id => timers.delete(id),
     });
     const native = {
+        AppState: {
+            currentState: 'active', listeners: new Set(),
+            addEventListener(_event, listener) { this.listeners.add(listener); return { remove: () => this.listeners.delete(listener) }; },
+            change(state) { this.currentState = state; for (const listener of [...this.listeners]) listener(state); },
+        },
         StyleSheet: { create: value => value },
         Platform: { OS: 'web', select: value => value.web },
         Keyboard: { dismiss() {} },
@@ -40,6 +46,12 @@ function createRuntime(env = {}, react = require('react')) {
         'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
         '@expo/vector-icons/Ionicons': 'Ionicons',
     };
+    Object.defineProperty(external, '@stomp/stompjs', { get() {
+        const module = { exports: {} };
+        const source = fs.readFileSync(require.resolve('@stomp/stompjs'), 'utf8');
+        new vm.Script(`(function(exports, module) { ${source}\n})`).runInContext(context)(module.exports, module);
+        return module.exports;
+    } });
 
     function load(relative) {
         const base = path.resolve(root, relative);
@@ -77,6 +89,307 @@ function createRuntime(env = {}, react = require('react')) {
 const serverEnv = { EXPO_PUBLIC_API_BASE_URL: ' https://example.test/api/v1/// ', EXPO_PUBLIC_USE_MOCK: 'false' };
 const jsonResponse = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(payload) });
 const plain = value => JSON.parse(JSON.stringify(value));
+
+/* ---------- WebSocket/STOMP base (#116): real library, virtual socket and clock ---------- */
+const RT_ROOM = '00000000-0000-0000-0000-000000000116';
+const RT_OTHER = '00000000-0000-0000-0000-000000000117';
+async function realtimeRuntime({ mock = false, token = 'opaque-access', random = () => 0.5, native = false, base } = {}) {
+    const r = createRuntime(mock ? {} : { ...serverEnv, ...(base ? { EXPO_PUBLIC_API_BASE_URL: base } : {}) });
+    r.context.Date = class extends Date {
+        constructor(...args) { super(...(args.length ? args : [2000000000000 + r.now()])); }
+        static now() { return 2000000000000 + r.now(); }
+    };
+    if (native) r.native.Platform.OS = 'ios';
+    r.auth = r.load('src/services/auth.ts');
+    r.store = r.load('src/stores/auth-store.ts');
+    r.tokens = r.load('src/services/token-storage.ts');
+    // Seed on web storage before exercising RN transport options.
+    const platform = r.native.Platform.OS; r.native.Platform.OS = 'web';
+    await r.tokens.saveTokens(token, 'rotating-refresh', () => true); r.native.Platform.OS = platform;
+    r.store.signIn({ userId: RT_ROOM, nickname: 'realtime' });
+    r.sockets = [];
+    class FakeSocket {
+        readyState = 0; frames = []; binary = [];
+        constructor(url, protocols) { this.url = url; this.protocols = protocols; r.sockets.push(this); }
+        open() { this.readyState = 1; this.onopen?.({}); }
+        send(data) { this.binary.push(typeof data !== 'string'); this.frames.push(typeof data === 'string' ? data : new TextDecoder().decode(data)); }
+        receive(command, headers = {}, body = '') { this.onmessage?.({ data: `${command}\n${Object.entries(headers).map(([key, value]) => `${key}:${value}`).join('\n')}\n\n${body}\0` }); }
+        close(code = 1000, reason = '') { this.readyState = 3; this.onclose?.({ code, reason }); }
+        commands(command) { return this.frames.filter(frame => frame.startsWith(`${command}\n`)); }
+    }
+    r.context.WebSocket = FakeSocket;
+    r.rt = r.load('src/services/realtime.ts');
+    r.service = r.rt.createRealtimeService({ socketFactory: (url, protocols) => new FakeSocket(url, protocols), random });
+    r.connect = async () => {
+        await settle(); const socket = r.sockets.at(-1); assert.ok(socket); socket.open();
+        socket.receive('CONNECTED', { version: '1.2', 'heart-beat': '10000,10000' }); await settle(); return socket;
+    };
+    r.reconnect = async (delay = 1000) => { r.advance(delay); await settle(); return r.connect(); };
+    r.event = (socket, room = RT_ROOM, overrides = {}) => {
+        const subscription = socket.commands('SUBSCRIBE').find(frame => frame.includes(`/topic/rooms/${room.toLowerCase()}`));
+        const id = subscription.match(/\nid:([^\n]+)/)[1];
+        socket.receive('MESSAGE', { subscription: id, 'message-id': 'msg-1' }, JSON.stringify({ type: 'ROOM_UPDATED', roomId: room, payload: {}, at: '2033-05-18T03:33:20Z', ...overrides }));
+    };
+    r.receipt = (socket, room) => socket.commands('SUBSCRIBE').find(frame => frame.includes(room)).match(/\nreceipt:([^\n]+)/)[1];
+    return r;
+}
+
+test('116 URL conversion and invalid configuration; mock has no socket or timer', async () => {
+    const r = await realtimeRuntime();
+    for (const [base, expected] of [['http://3.36.48.140:8080/api/v1', 'ws://3.36.48.140:8080/ws'], ['https://example.test/api/v1', 'wss://example.test/ws']]) assert.equal(r.rt.buildRealtimeUrl(base), expected);
+    for (const base of ['', 'ws://example.test/api/v1', 'https://example.test/x/api/v1', 'https://example.test/x/../api/v1', 'https://example.test/api/v1?token=secret', 'https://u:p@example.test/api/v1', 'https://example.test/api/v1#x']) assert.throws(() => r.rt.buildRealtimeUrl(base), /서버 주소/);
+    const invalid = await realtimeRuntime({ base: 'https://example.test/wrong' });
+    assert.throws(() => invalid.service.subscribeRoomEvents(RT_ROOM, () => {}), /서버 주소/); assert.equal(invalid.sockets.length, 0);
+    const mock = await realtimeRuntime({ mock: true });
+    mock.service.subscribeRoomEvents('mock-room', () => {})();
+    mock.service.forgetRoom('mock-room'); assert.equal(mock.sockets.length, 0); assert.equal(mock.timers.size, 0); assert.equal(mock.service.getRealtimeState(), 'idle');
+});
+
+test('116 real STOMP CONNECT headers, RN binary option, shared subscription, receipt and unique IDs', async () => {
+    const r = await realtimeRuntime({ native: true }); let reconnected = 0;
+    const one = r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onReconnected: () => reconnected++ });
+    const two = r.service.subscribeRoomEvents(RT_ROOM.toUpperCase(), () => {});
+    const socket = await r.connect();
+    assert.equal(socket.url, 'wss://example.test/ws'); assert.deepEqual(plain(socket.protocols), ['v12.stomp']);
+    const connect = socket.commands('CONNECT')[0]; assert.match(connect, /Authorization:Bearer opaque-access/); assert.match(connect, /heart-beat:10000,10000/); assert.equal(socket.binary[0], true);
+    assert.equal(socket.commands('SUBSCRIBE').length, 1); assert.equal(reconnected, 0);
+    one(); assert.equal(socket.commands('UNSUBSCRIBE').length, 0); two(); assert.equal(socket.commands('UNSUBSCRIBE').length, 1);
+    const three = r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onReconnected: () => reconnected++ });
+    assert.equal(reconnected, 0); assert.equal(socket.commands('SUBSCRIBE').length, 2);
+    const ids = socket.commands('SUBSCRIBE').map(frame => frame.match(/\nid:([^\n]+)/)[1]); assert.equal(new Set(ids).size, 2);
+    socket.close(); const restored = await r.reconnect(); assert.equal(reconnected, 1);
+    r.service.subscribeRoomEvents(RT_OTHER, () => {}, { onReconnected: () => reconnected++ }); assert.equal(reconnected, 1);
+    assert.equal(new Set(restored.commands('SUBSCRIBE').map(frame => frame.match(/\nid:([^\n]+)/)[1])).size, 2);
+    assert.equal([...socket.frames, ...restored.frames].some(frame => frame.startsWith('SEND')), false);
+    three(); r.service.dispose(); await settle(); assert.equal(r.timers.size, 0);
+});
+
+test('116 parser discards malformed/unknown/wrong-room events and isolates listeners', async () => {
+    const r = await realtimeRuntime(); let received = 0;
+    r.service.subscribeRoomEvents(RT_ROOM, () => { throw Error('consumer'); });
+    r.service.subscribeRoomEvents(RT_ROOM, () => received++);
+    const socket = await r.connect(); const subscription = socket.commands('SUBSCRIBE')[0].match(/\nid:([^\n]+)/)[1];
+    socket.receive('MESSAGE', { subscription }, '{');
+    for (const overrides of [{ roomId: RT_OTHER }, { type: 'FUTURE_EVENT' }, { payload: [] }, { payload: null }, { at: 'yesterday' }, { at: '2033-02-30T03:33:20Z' }, { at: '2033-05-18T03:33:20+09:00' }, { type: 1 }, { roomId: 'invalid' }]) r.event(socket, RT_ROOM, overrides);
+    assert.equal(received, 0); r.event(socket, RT_ROOM.toUpperCase()); assert.equal(received, 1); assert.equal(r.service.getRealtimeState(), 'open');
+    r.service.dispose();
+});
+
+test('116 idle grace cancels on a new subscriber and closes after 10 seconds without registrations', async () => {
+    const r = await realtimeRuntime(); let off = r.service.subscribeRoomEvents(RT_ROOM, () => {}); const socket = await r.connect();
+    off(); r.advance(9999); assert.equal(socket.readyState, 1);
+    off = r.service.subscribeRoomEvents(RT_OTHER, () => {}); r.advance(1); assert.equal(socket.readyState, 1);
+    off(); r.advance(10000); await settle(); assert.equal(socket.readyState, 3); assert.equal(r.service.getRealtimeState(), 'closed'); assert.equal(r.timers.size, 0);
+});
+
+test('116 denied subscription uses receipt-id or newest unconfirmed fallback; other rooms recover', async () => {
+    for (const code of ['NOT_ROOM_MEMBER', 'ROOM_NOT_FOUND']) for (const receipt of [true, false]) {
+        const r = await realtimeRuntime(); const rejected = []; let restored = 0;
+        r.service.subscribeRoomEvents(RT_OTHER, () => {}, { onReconnected: () => restored++ });
+        r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onRejected: value => rejected.push(value) });
+        const socket = await r.connect();
+        const cache = r.load('src/services/room-cache.ts');
+        cache.cacheJoinedRoom(RT_ROOM, 'ABC123', cache.getRoomCacheScope());
+        socket.receive('RECEIPT', { 'receipt-id': r.receipt(socket, RT_OTHER) });
+        socket.receive('ERROR', { message: code, ...(receipt ? { 'receipt-id': r.receipt(socket, RT_ROOM) } : {}) });
+        assert.deepEqual(rejected, [code]); assert.equal(cache.findCachedRoomIdByCode('ABC123'), undefined);
+        const next = await r.reconnect(); assert.equal(next.commands('SUBSCRIBE').length, 1); assert.match(next.commands('SUBSCRIBE')[0], new RegExp(RT_OTHER)); assert.equal(restored, 1); r.service.dispose();
+    }
+});
+
+test('116 repeated validation/access/internal errors abandon only the offending room after three attempts', async () => {
+    for (const code of ['VALIDATION_ERROR', 'ACCESS_DENIED', 'INTERNAL_ERROR']) {
+        const r = await realtimeRuntime(); const rejected = [];
+        r.service.subscribeRoomEvents(RT_OTHER, () => {});
+        r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onRejected: value => rejected.push(value) });
+        let socket = await r.connect();
+        for (let index = 0; index < 3; index++) {
+            socket.receive('ERROR', { message: code, 'receipt-id': r.receipt(socket, RT_ROOM) });
+            socket = await r.reconnect();
+        }
+        assert.deepEqual(rejected, [code]); assert.equal(socket.commands('SUBSCRIBE').length, 1); assert.match(socket.commands('SUBSCRIBE')[0], new RegExp(RT_OTHER)); r.service.dispose();
+    }
+});
+
+test('116 confirmed subscription resets room failures before a new consecutive failure streak', async () => {
+    for (const code of ['VALIDATION_ERROR', 'ACCESS_DENIED', 'INTERNAL_ERROR']) {
+        const r = await realtimeRuntime(); const rejected = [];
+        r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onRejected: value => rejected.push(value) });
+        let socket = await r.connect();
+        const fail = async () => {
+            socket.receive('ERROR', { message: code, 'receipt-id': r.receipt(socket, RT_ROOM) });
+            socket = await r.reconnect();
+        };
+        await fail(); await fail();
+        socket.receive('RECEIPT', { 'receipt-id': r.receipt(socket, RT_ROOM) });
+        // Force a fresh SUBSCRIBE while retaining the same room registration and failure counter.
+        socket.close(); socket = await r.reconnect();
+        await fail(); await fail();
+        assert.deepEqual(rejected, []); assert.equal(socket.commands('SUBSCRIBE').length, 1);
+        socket.receive('ERROR', { message: code, 'receipt-id': r.receipt(socket, RT_ROOM) });
+        assert.deepEqual(rejected, [code]);
+        r.service.dispose();
+    }
+});
+
+test('116 CONNECTED resets unidentified failures while three consecutive failures still reject', async () => {
+    const r = await realtimeRuntime(); const rejected = [];
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onRejected: code => rejected.push(code) });
+    let socket = await r.connect();
+    const fail = () => socket.receive('ERROR', { message: 'INTERNAL_ERROR', 'receipt-id': 'unidentified' });
+    for (let index = 0; index < 4; index++) { fail(); socket = await r.reconnect(); }
+    assert.deepEqual(rejected, []); assert.equal(socket.commands('SUBSCRIBE').length, 1);
+    // Do not send CONNECTED between these errors.
+    for (let index = 0; index < 3; index++) {
+        fail();
+        if (index < 2) { r.advance(1000 * 2 ** index); await settle(); socket = r.sockets.at(-1); socket.open(); }
+    }
+    assert.deepEqual(rejected, ['INTERNAL_ERROR']); r.service.dispose();
+});
+
+test('116 drop diagnostics contain only check names in development and stay silent in production', async () => {
+    for (const development of [false, true]) {
+        const r = await realtimeRuntime(); const logs = [];
+        r.context.__DEV__ = development;
+        r.context.console = { ...console, debug: (...args) => logs.push(args.join(' ')) };
+        r.service.subscribeRoomEvents(RT_ROOM, () => {}); const socket = await r.connect();
+        const subscription = socket.commands('SUBSCRIBE')[0].match(/\nid:([^\n]+)/)[1];
+        socket.receive('MESSAGE', { subscription }, 'secret-invalid-json');
+        r.event(socket, RT_ROOM, { at: 'secret-invalid-at', payload: { secret: 'private-body' } });
+        r.event(socket, RT_ROOM, { type: 'secret-unknown-type' });
+        r.event(socket, RT_ROOM, { roomId: RT_OTHER });
+        const drops = logs.filter(line => line.startsWith('[realtime] drop:'));
+        assert.deepEqual(drops, development ? ['[realtime] drop: invalid JSON', '[realtime] drop: invalid at', '[realtime] drop: unknown type', '[realtime] drop: roomId mismatch'] : []);
+        assert.equal(logs.some(line => /secret|private-body|opaque-access/.test(line)), false);
+        if (!development) assert.deepEqual(logs, []);
+        r.service.dispose();
+    }
+});
+
+test('116 exponential retry delays, cap, jitter and CONNECTED reset; first connection has no recovery callback', async () => {
+    for (const [random, factor] of [[() => 0, 0.8], [() => 0.5, 1], [() => 1, 1.2]]) {
+        const r = await realtimeRuntime({ random }); let recovered = 0;
+        r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onReconnected: () => recovered++ }); await settle();
+        for (const delay of [1000, 2000, 4000, 8000, 16000, 30000, 30000]) {
+            r.sockets.at(-1).close(); const count = r.sockets.length;
+            r.advance(delay * factor - 1); await settle(); assert.equal(r.sockets.length, count);
+            r.advance(1); await settle(); assert.equal(r.sockets.length, count + 1);
+        }
+        const socket = await r.connect(); assert.equal(recovered, 0);
+        socket.close(); await r.reconnect(1000 * factor); assert.equal(recovered, 1); r.service.dispose();
+    }
+});
+
+test('116 imminent expiry refreshes once before CONNECT and shares rotating refresh with REST', async () => {
+    const jwt = `e30.${Buffer.from(JSON.stringify({ exp: 2000000030 })).toString('base64url')}.sig`;
+    const r = await realtimeRuntime({ token: jwt }); let refreshes = 0; let resolve;
+    r.context.fetch = async (url, options) => {
+        if (!url.endsWith('/auth/refresh')) return options.headers.Authorization === `Bearer ${jwt}`
+            ? jsonResponse({ success: false, error: { code: 'TOKEN_EXPIRED' } }, 401) : jsonResponse({ success: true, data: null });
+        refreshes++; return new Promise(done => { resolve = done; });
+    };
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}); const rest = r.load('src/services/api/client.ts').get('/rooms/test'); await settle();
+    assert.equal(refreshes, 1); assert.equal(r.sockets.length, 0);
+    resolve(jsonResponse({ success: true, data: { accessToken: 'fresh', refreshToken: 'rotated', accessTokenExpiresIn: 3600 } }));
+    await rest; await settle(); const socket = await r.connect(); assert.match(socket.commands('CONNECT')[0], /Authorization:Bearer fresh/); r.service.dispose();
+});
+
+test('116 auth ERROR refreshes once immediately; repeated rejection or refresh authentication failure clears session', async () => {
+    for (const code of ['TOKEN_EXPIRED', 'TOKEN_INVALID', 'AUTH_REQUIRED']) {
+        const r = await realtimeRuntime(); let refreshes = 0;
+        r.context.fetch = async () => { refreshes++; return jsonResponse({ success: true, data: { accessToken: 'fresh', refreshToken: 'rotated', accessTokenExpiresIn: 3600 } }); };
+        r.service.subscribeRoomEvents(RT_ROOM, () => {}); const socket = await r.connect(); socket.receive('ERROR', { message: code });
+        await settle(); r.advance(0); await settle(); const next = r.sockets.at(-1); next.open(); assert.equal(refreshes, 1);
+        next.receive('ERROR', { message: code }); await settle(); assert.equal(r.store.getAuthStatus(), 'signedOut'); assert.equal(r.tokens.getAccessToken(), null);
+        const count = r.sockets.length; r.advance(60000); await settle(); assert.equal(r.sockets.length, count); r.service.dispose();
+    }
+    for (const token of [null, `e30.${Buffer.from(JSON.stringify({ exp: 1 })).toString('base64url')}.sig`]) {
+        const r = await realtimeRuntime({ token });
+        r.context.fetch = async () => jsonResponse({ success: false, error: { code: 'TOKEN_INVALID' } }, 401);
+        r.service.subscribeRoomEvents(RT_ROOM, () => {}); await settle(); await settle(); assert.equal(r.store.getAuthStatus(), 'signedOut'); assert.equal(r.sockets.length, 0); r.service.dispose();
+    }
+});
+
+test('116 logout/account switch rejects old messages and old unsubscribe cannot remove new account registration', async () => {
+    for (const change of ['switch', 'logout', 'generation']) {
+        const r = await realtimeRuntime(); let received = 0;
+        const off = r.service.subscribeRoomEvents(RT_ROOM, () => received++); const socket = await r.connect();
+        const oldMessage = socket.onmessage;
+        if (change === 'switch') r.store.signIn({ userId: RT_OTHER, nickname: 'next' });
+        else if (change === 'logout') await r.auth.logoutSession(); else await r.auth.clearLocalSession();
+        oldMessage({ data: `MESSAGE\nsubscription:sub-1\n\n${JSON.stringify({ type: 'ROOM_UPDATED', roomId: RT_ROOM, payload: {}, at: '2033-05-18T03:33:20Z' })}\0` });
+        assert.equal(received, 0); r.advance(1000); assert.equal(socket.readyState, 3);
+        if (change === 'switch') {
+            r.service.subscribeRoomEvents(RT_ROOM, () => received++); const next = await r.connect(); off(); r.event(next); assert.equal(received, 1);
+        }
+        r.service.dispose();
+    }
+});
+
+test('116 background grace, suspension and foreground recovery; ACCOUNT_WITHDRAWN never retries', async () => {
+    const r = await realtimeRuntime(); let recovered = 0;
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onReconnected: () => recovered++ }); const socket = await r.connect();
+    r.native.AppState.change('background'); r.advance(29999); r.native.AppState.change('active'); assert.equal(socket.readyState, 1); assert.equal(recovered, 0);
+    r.native.AppState.change('background'); r.advance(30000); await settle(); assert.equal(socket.readyState, 3);
+    const count = r.sockets.length; r.advance(60000); await settle(); assert.equal(r.sockets.length, count);
+    r.native.AppState.change('active'); const next = await r.connect(); assert.equal(recovered, 1);
+    next.close(1008, 'ACCOUNT_WITHDRAWN'); await settle(); assert.equal(r.store.getAuthStatus(), 'signedOut');
+    r.advance(60000); await settle(); assert.equal(r.sockets.length, count + 1); assert.equal(r.timers.size, 0);
+});
+
+test('116 successful REST leave forgets only that room; failed leave retains the subscription', async () => {
+    for (const success of [true, false]) {
+        const r = await realtimeRuntime();
+        r.service = r.rt;
+        const off = r.rt.subscribeRoomEvents(RT_ROOM, () => {});
+        const socket = await r.connect();
+        r.context.fetch = async () => success ? jsonResponse({ success: true, data: { roomDeleted: true, newOwnerId: null } }) : jsonResponse({ success: false, error: { code: 'ROOM_BUSY' } }, 409);
+        const leave = r.load('src/services/room.ts').leaveRoom(RT_ROOM);
+        if (success) await leave; else await assert.rejects(leave, { code: 'ROOM_BUSY' });
+        assert.equal(socket.commands('UNSUBSCRIBE').length, success ? 1 : 0);
+        off(); r.advance(10000); await settle(); assert.equal(r.timers.size, 0);
+    }
+});
+
+test('116 auth recovery cannot connect or clear a different account after an awaited refresh', async () => {
+    for (const fail of [true, false]) {
+        const r = await realtimeRuntime(); let resolve;
+        r.context.fetch = async () => new Promise(done => { resolve = done; });
+        r.service.subscribeRoomEvents(RT_ROOM, () => {}); const socket = await r.connect();
+        socket.receive('ERROR', { message: 'TOKEN_EXPIRED' }); await settle();
+        await r.auth.clearLocalSession();
+        await r.tokens.saveTokens('new-account-access', 'new-account-refresh', () => true);
+        r.store.signIn({ userId: RT_OTHER, nickname: 'new account' });
+        resolve(fail ? jsonResponse({ success: false, error: { code: 'TOKEN_INVALID' } }, 401) : jsonResponse({ success: true, data: { accessToken: 'fresh', refreshToken: 'rotated', accessTokenExpiresIn: 3600 } }));
+        await settle(); r.advance(60000); await settle();
+        assert.equal(r.sockets.length, 1);
+        assert.equal(r.store.getSession()?.userId, RT_OTHER);
+        assert.equal(r.tokens.getAccessToken(), 'new-account-access');
+        r.service.dispose();
+    }
+});
+
+test('116 listener/state observer exceptions and delayed callbacks after cleanup remain isolated', async () => {
+    const r = await realtimeRuntime(); const states = []; let rejected = 0;
+    const offState = r.service.subscribeRealtimeState(() => { throw Error('observer'); });
+    r.service.subscribeRealtimeState(() => states.push(r.service.getRealtimeState()));
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onRejected: () => { throw Error('rejection'); } });
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onRejected: () => rejected++ });
+    r.service.subscribeRoomEvents(RT_OTHER, () => {});
+    const socket = await r.connect(); socket.receive('ERROR', { message: 'NOT_ROOM_MEMBER', 'receipt-id': r.receipt(socket, RT_ROOM) });
+    assert.equal(rejected, 1); await r.reconnect(); assert.deepEqual(states.slice(0, 3), ['connecting', 'open', 'closed']);
+    offState(); r.service.dispose(); r.advance(60000); await settle(); assert.equal(r.timers.size, 0);
+});
+
+test('116 foreground checks elapsed background time even when the OS did not run JS timers', async () => {
+    const r = await realtimeRuntime(); let recovered = 0;
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onReconnected: () => recovered++ }); const socket = await r.connect();
+    r.native.AppState.change('background');
+    const originalDate = r.context.Date;
+    r.context.Date = class extends originalDate { static now() { return originalDate.now() + 31000; } };
+    r.native.AppState.change('active'); assert.equal(socket.readyState, 3); await r.connect(); assert.equal(recovered, 1);
+    r.service.dispose(); assert.equal(r.timers.size, 0);
+});
 
 test('역 표시 이름은 공백과 빈 값을 정리하고 접미사를 한 번만 붙여요', () => {
     const { formatStationName } = createRuntime().load('src/utils/station-name.ts');
