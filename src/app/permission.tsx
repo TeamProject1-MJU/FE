@@ -3,6 +3,9 @@ import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useRef, useState } from 'react';
+import * as ImagePicker from 'expo-image-picker';
+import * as Location from 'expo-location';
 
 const NAVY = '#0f1c3f';
 const NAVY_SOFT = '#f3f5f8';
@@ -22,9 +25,19 @@ const MINT_SOFT = '#e6f8f1';
 export default function PermissionScreen() {
     const insets = useSafeAreaInsets();
 
-    const handleContinue = () => {
-        // 이번 이슈에서는 실제 권한 요청 없이
-        // 다음 로그인 화면으로만 이동
+    const busy = useRef(false);
+    const [requesting, setRequesting] = useState(false);
+    const handleContinue = async () => {
+        if (busy.current) return;
+        busy.current = true;
+        setRequesting(true);
+        try { await ImagePicker.requestCameraPermissionsAsync(); } catch { /* 오류여도 다음 권한을 요청해요. */ }
+        try { await Location.requestForegroundPermissionsAsync(); } catch { /* 거부·오류여도 로그인으로 이동해요. */ }
+        router.replace('/login');
+    };
+    const handleLater = () => {
+        if (busy.current) return;
+        busy.current = true;
         router.replace('/login');
     };
 
@@ -57,8 +70,8 @@ export default function PermissionScreen() {
 
                 {/* 설명 */}
                 <Text style={styles.description}>
-                    필요한 기능만 사용할 때 권한을 요청해요.{'\n'}
-                    사진은 저장하지 않고, 알림도 중요한 정보에만 사용돼요.
+                    카메라와 위치 권한을 요청해요.{'\n'}
+                    사진과 위치는 저장하지 않아요.
                 </Text>
 
                 {/* 카메라 */}
@@ -90,7 +103,7 @@ export default function PermissionScreen() {
                     />
                 </View>
 
-                {/* 알림 */}
+                {/* 위치 */}
                 <View
                     style={[
                         styles.permissionCard,
@@ -99,21 +112,21 @@ export default function PermissionScreen() {
                 >
                     <View style={styles.notificationIconBox}>
                         <Ionicons
-                            name="notifications-outline"
+                            name="location-outline"
                             size={24}
                             color={MINT_DEEP}
                         />
                     </View>
 
                     <View style={styles.cardText}>
-                        <Text style={styles.cardTitle}>알림</Text>
+                        <Text style={styles.cardTitle}>위치</Text>
 
                         <Text style={styles.cardDescription}>
-                            약속방 일정 변경, 도착 정보 등을 알려드려요
+                            지도에서 내 위치와 주변 역을 보여드려요
                         </Text>
 
                         <Text style={styles.cardSubDescription}>
-                            중요한 안내만 받아볼 수 있어요
+                            앱을 사용하는 동안만 위치를 확인해요
                         </Text>
                     </View>
 
@@ -136,6 +149,8 @@ export default function PermissionScreen() {
             >
                 <Pressable
                     onPress={handleContinue}
+                    disabled={requesting}
+                    accessibilityState={{ disabled: requesting, busy: requesting }}
                     accessibilityRole="button"
                     style={({ pressed }) => [
                         styles.startButton,
@@ -148,7 +163,8 @@ export default function PermissionScreen() {
                 </Pressable>
 
                 <Pressable
-                    onPress={handleContinue}
+                    onPress={handleLater}
+                    disabled={requesting}
                     accessibilityRole="button"
                     style={({ pressed }) => [
                         styles.laterButton,

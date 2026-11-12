@@ -1,6 +1,7 @@
 import { get } from '@/services/api/client';
 import { useMock as isMockMode } from '@/services/api/config';
 import { ApiError } from '@/services/api/errors';
+import { isMapBounds, type MapBounds } from '@/utils/home-map';
 import { MOCK_LINES, MOCK_STATIONS, searchStations as searchMockStations } from '@/mocks/stations';
 import type { Line, Station, StationDetail, StationSearchOptions, StationSearchResult } from '@/types/station';
 
@@ -56,7 +57,20 @@ function parseLines(value: unknown): Line[] {
 
 const cloneStation = (station: Station): Station => ({ ...station, lines: station.lines.map(line => ({ ...line })) });
 
-/** 명세 5.2 GET /stations — 이번 범위는 keyword 검색만 써요(bbox 는 B-4). */
+/** 명세 5.2: 지도에 보이는 범위, 첫 페이지 최대 500개. */
+export async function fetchStationsInBounds(bounds: MapBounds, options: { size?: number } = {}): Promise<StationSearchResult> {
+    if (!isMapBounds(bounds)) throw new ApiError('VALIDATION_ERROR', null, null, 400);
+    const size = Number.isFinite(options.size) ? Math.max(1, Math.min(500, Math.trunc(options.size!))) : 500;
+    if (isMockMode()) {
+        const matches = MOCK_STATIONS.filter(s => s.longitude >= bounds.minLng && s.longitude <= bounds.maxLng
+            && s.latitude >= bounds.minLat && s.latitude <= bounds.maxLat);
+        return { items: matches.slice(0, size).map(cloneStation), page: 0, size, totalElements: matches.length };
+    }
+    const bbox = [bounds.minLng, bounds.minLat, bounds.maxLng, bounds.maxLat].join(',');
+    return parseSearchResult(await get<unknown>('/stations', { query: { bbox, size } }));
+}
+
+/** 명세 5.2 GET /stations keyword 검색. */
 export async function searchStations(keyword: string, options: StationSearchOptions = {}): Promise<StationSearchResult> {
     const query = keyword.trim();
     const page = Number.isFinite(options.page) ? Math.max(0, Math.trunc(options.page!)) : 0;

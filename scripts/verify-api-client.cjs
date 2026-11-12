@@ -45,6 +45,14 @@ function createRuntime(env = {}, react = require('react')) {
         'expo-status-bar': { StatusBar: 'StatusBar' },
         'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
         '@expo/vector-icons/Ionicons': 'Ionicons',
+        'react-native-webview': { WebView: 'WebView' },
+        'expo-location': {
+            Accuracy: { Balanced: 3 },
+            getForegroundPermissionsAsync: async () => ({ granted: false }),
+            requestForegroundPermissionsAsync: async () => ({ granted: false }),
+            getCurrentPositionAsync: async () => { throw Error('위치 응답을 지정하세요'); },
+        },
+        'expo-image-picker': { requestCameraPermissionsAsync: async () => ({ granted: false }) },
     };
     Object.defineProperty(external, '@stomp/stompjs', { get() {
         const module = { exports: {} };
@@ -91,7 +99,285 @@ const serverEnv = { EXPO_PUBLIC_API_BASE_URL: ' https://example.test/api/v1/// '
 const jsonResponse = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, text: async () => JSON.stringify(payload) });
 const plain = value => JSON.parse(JSON.stringify(value));
 
+const map126Bounds = { minLng: 126.9, minLat: 37.4, maxLng: 127.2, maxLat: 37.7 };
+
+function webMap126Fixture() {
+    const scripts = []; const overlays = []; const centers = []; const events = new Map();
+    let loadCallback; let map; let clears = 0; let relayouts = 0;
+    const doc = {
+        getElementById: id => scripts.find(script => script.id === id) ?? null,
+        createElement: tag => {
+            const listeners = new Map();
+            return { tagName: tag, style: {}, addEventListener: (event, fn) => listeners.set(event, fn),
+                removeEventListener: (event, fn) => { if (listeners.get(event) === fn) listeners.delete(event); },
+                emit: event => listeners.get(event)?.(), listenerCount: () => listeners.size,
+                remove() { scripts.splice(scripts.indexOf(this), 1); } };
+        },
+        head: { appendChild: el => scripts.push(el) },
+    };
+    class LatLng {
+        constructor(lat, lng) { this.lat = lat; this.lng = lng; }
+        getLat() { return this.lat; } getLng() { return this.lng; }
+    }
+    const sdk = {
+        LatLng, load: fn => { loadCallback = fn; },
+        Map: class {
+            constructor(_node, options) { map = this; this.center = options.center; }
+            setCenter(point) { centers.push(point); this.center = point; }
+            getCenter() { return this.center; }
+            relayout() { relayouts++; }
+            getBounds() { return { getSouthWest: () => new LatLng(37.4, 126.9), getNorthEast: () => new LatLng(37.7, 127.2) }; }
+        },
+        CustomOverlay: class { constructor(options) { this.options = options; overlays.push(this); } setMap(value) { this.detached = value === null; } },
+        event: { addListener: (_map, name, fn) => events.set(name, fn), removeListener: (_map, name, fn) => { if (events.get(name) === fn) events.delete(name); } },
+    };
+    const host = { document: doc };
+    const container = { ownerDocument: doc, replaceChildren: () => { clears++; } };
+    const point = { latitude: 37.5, longitude: 127 };
+    const state = { center: point, myLocation: point, centerRevision: 0, markers: [{ ...point, id: 1, isSupported: true }, { ...point, id: 2, isSupported: false }] };
+    return { host, sdk, scripts, overlays, centers, events, container, state,
+        load() { host.kakao = { maps: sdk }; scripts[0].emit('load'); }, finishLoad: () => loadCallback(),
+        clears: () => clears, map: () => map, relayouts: () => relayouts };
+}
+
+test('126 web SDK URL encoding, single shared script, and maps.load completion', async () => {
+    const r = createRuntime(); const { mapSdkUrl, loadMapSdk } = r.load('src/components/map/map-web.ts');
+    const f = webMap126Fixture();
+    const url = new URL(mapSdkUrl(' a&?한글 '));
+    assert.equal(url.origin, 'https://dapi.kakao.com'); assert.equal(url.searchParams.get('appkey'), 'a&?한글');
+    assert.equal(url.searchParams.get('autoload'), 'false');
+    const first = loadMapSdk('key', f.host); const second = loadMapSdk('key', f.host);
+    assert.equal(first, second); assert.equal(f.scripts.length, 1);
+    let finished = false; void first.then(() => { finished = true; });
+    f.load(); await settle(); assert.equal(finished, false);
+    f.finishLoad(); assert.equal(await first, f.sdk); assert.equal(await second, f.sdk);
+    assert.equal(f.scripts[0].listenerCount(), 0); assert.equal(r.timers.size, 0);
+    assert.equal(await loadMapSdk('key', f.host), f.sdk); assert.equal(f.scripts.length, 1);
+});
+
+test('126 web SDK missing key, network failure, missing SDK and timeout allow safe retry', async () => {
+    for (const mode of ['network', 'missing', 'timeout', 'callback-timeout']) {
+        const r = createRuntime(); const { loadMapSdk } = r.load('src/components/map/map-web.ts'); const f = webMap126Fixture();
+        await assert.rejects(loadMapSdk('', f.host)); assert.equal(f.scripts.length, 0);
+        const pending = loadMapSdk('key', f.host); const rejection = assert.rejects(pending);
+        if (mode === 'network') f.scripts[0].emit('error');
+        if (mode === 'missing') f.scripts[0].emit('load');
+        if (mode === 'callback-timeout') f.load();
+        if (mode.includes('timeout')) { r.advance(14999); assert.equal(f.scripts.length, 1); r.advance(1); }
+        await rejection; assert.equal(f.scripts.length, 0); assert.equal(r.timers.size, 0);
+        if (mode === 'callback-timeout') f.finishLoad(); // Timed-out completion cannot revive the old request.
+        const retry = loadMapSdk('key', f.host);
+        if (!f.host.kakao) f.load();
+        f.finishLoad(); assert.equal(await retry, f.sdk);
+    }
+});
+
+test('126 web map state validation and bbox conversion preserve native marker semantics', () => {
+    const r = createRuntime(); const { validMapState, mapBounds, createWebMap } = r.load('src/components/map/map-web.ts');
+    const f = webMap126Fixture();
+    assert.equal(validMapState(f.state), true);
+    for (const change of [{ center: { latitude: NaN, longitude: 127 } }, { myLocation: {} }, { centerRevision: 1.5 }, { markers: [{}] },
+        { markers: [{ ...f.state.markers[0], isSupported: 'true' }] }, { markers: Array(501).fill(f.state.markers[0]) }]) {
+        assert.equal(validMapState({ ...f.state, ...change }), false);
+    }
+    const regions = []; let ready = 0;
+    const controller = createWebMap(f.container, f.sdk, f.state, { onRegionChange: bounds => regions.push(plain(bounds)), onReady: () => ready++, onError() { assert.fail(); } });
+    assert.deepEqual(plain(mapBounds(f.map())), map126Bounds); assert.deepEqual(regions, [map126Bounds]);
+    assert.deepEqual(f.overlays.map(o => /background-color:([^;]+)/.exec(o.options.content.style.cssText)[1]), ['#12a77a', '#8c93a3', '#2879ef']);
+    assert.deepEqual(f.overlays.map(o => o.options.zIndex), [1, 1, 2]);
+    f.events.get('tilesloaded')(); assert.equal(ready, 1);
+    f.events.get('idle')(); assert.equal(regions.length, 2);
+    const count = f.centers.length;
+    controller.update({ ...f.state, markers: [] }); assert.equal(f.centers.length, count); assert.ok(f.overlays.slice(0, 3).every(o => o.detached));
+    controller.update({ ...f.state, centerRevision: 1 }); assert.equal(f.centers.length, count + 1);
+    controller.update({ ...f.state, center: { latitude: 37.6, longitude: 127.1 } }); assert.equal(f.centers.at(-1).getLat(), 37.6);
+    const callback = f.events.get('idle');
+    controller.resize(); assert.equal(f.relayouts(), 1); assert.equal(f.centers.at(-1).getLat(), 37.6);
+    const before = regions.length;
+    controller.dispose(); controller.dispose(); callback(); controller.update(f.state); controller.resize();
+    assert.equal(f.events.size, 0); assert.equal(f.clears(), 1); assert.equal(regions.length, before);
+    assert.ok(f.overlays.every(o => o.detached));
+});
+
+test('126 web existing location timeout keeps City Hall fallback and discards late browser coordinates', async () => {
+    const r = map126Runtime(); let resolve;
+    r.native.Platform.OS = 'web';
+    r.external['expo-location'].getForegroundPermissionsAsync = async () => ({ granted: true });
+    r.external['expo-location'].getCurrentPositionAsync = () => new Promise(done => { resolve = done; });
+    r.view(); await settle(); r.advance(10000); await settle();
+    const { DEFAULT_MAP_CENTER, LOCATION_GUIDANCE } = r.load('src/utils/home-map.ts');
+    assert.deepEqual(plain(r.view().center), plain(DEFAULT_MAP_CENTER)); assert.equal(r.view().guidance, LOCATION_GUIDANCE);
+    resolve({ coords: { latitude: 37.5, longitude: 127 } }); await settle();
+    assert.equal(r.view().myLocation, null); r.unmount();
+});
+
+test('126 web permission query/request timeout ignores late permission, while native waiting is unchanged', async () => {
+    for (const platform of ['web', 'ios', 'android']) for (const phase of ['query', 'request']) {
+        const r = map126Runtime(); r.native.Platform.OS = platform;
+        let finish; let positions = 0;
+        const permission = () => new Promise(resolve => { finish = resolve; });
+        r.external['expo-location'].getForegroundPermissionsAsync = phase === 'query' ? permission : async () => ({ granted: false });
+        r.external['expo-location'].requestForegroundPermissionsAsync = permission;
+        r.external['expo-location'].getCurrentPositionAsync = async () => { positions++; return { coords: { latitude: 37.5, longitude: 127 } }; };
+        r.view(); await settle();
+        if (phase === 'request') { r.view().locate(); await settle(); }
+        const revision = r.view().centerRevision;
+        r.advance(10000); await settle();
+        const { DEFAULT_MAP_CENTER, LOCATION_GUIDANCE } = r.load('src/utils/home-map.ts');
+        assert.deepEqual(plain(r.view().center), plain(DEFAULT_MAP_CENTER)); assert.equal(r.view().guidance, LOCATION_GUIDANCE);
+        assert.equal(r.view().centerRevision, revision + (platform === 'web' ? 1 : 0));
+        finish({ granted: true }); await settle();
+        assert.equal(positions, platform === 'web' ? 0 : 1);
+        assert.equal(r.view().myLocation === null, platform === 'web'); r.unmount();
+    }
+});
+
+test('126 bbox 쿼리·기본 size 500·상한·역 응답 파싱', async () => {
+    const r = createRuntime(serverEnv); const calls = [];
+    const station = plain(r.load('src/mocks/stations.ts').MOCK_STATIONS[0]);
+    r.context.fetch = async url => { calls.push(new URL(url)); return jsonResponse({ success: true, data: { items: [station], page: 0, size: 500, totalElements: 501 } }); };
+    const service = r.load('src/services/station.ts');
+    const result = await service.fetchStationsInBounds(map126Bounds);
+    assert.deepEqual(plain(result.items), [station]); assert.equal(result.totalElements, 501);
+    assert.equal(calls[0].searchParams.get('bbox'), '126.9,37.4,127.2,37.7');
+    assert.equal(calls[0].searchParams.get('size'), '500'); assert.equal(calls[0].searchParams.has('keyword'), false);
+    await service.fetchStationsInBounds(map126Bounds, { size: 999 }); assert.equal(calls[1].searchParams.get('size'), '500');
+    await service.fetchStationsInBounds(map126Bounds, { size: 12 }); assert.equal(calls[2].searchParams.get('size'), '12');
+});
+test('126 bbox min>=max·범위 밖·NaN·잘못된 타입은 요청 전 VALIDATION_ERROR', async () => {
+    const r = createRuntime(serverEnv); let calls = 0;
+    r.context.fetch = async () => { calls++; throw Error(); };
+    const service = r.load('src/services/station.ts');
+    for (const change of [{ minLng: 127.2 }, { minLat: 38 }, { minLng: -181 }, { maxLng: 181 }, { minLat: -91 }, { maxLat: 91 }, { minLng: NaN }, { maxLat: Infinity }, { minLng: '126' }]) {
+        await assert.rejects(service.fetchStationsInBounds({ ...map126Bounds, ...change }), e => e.code === 'VALIDATION_ERROR' && e.status === 400);
+    }
+    assert.equal(calls, 0);
+});
+test('126 bbox 응답의 누락·잘못된 역은 UNKNOWN_ERROR', async () => {
+    const r = createRuntime(serverEnv); const service = r.load('src/services/station.ts');
+    for (const data of [null, {}, { items: [{}], page: 0, size: 500, totalElements: 1 }, { items: [], page: '0', size: 500, totalElements: 0 }]) {
+        r.context.fetch = async () => jsonResponse({ success: true, data });
+        await assert.rejects(service.fetchStationsInBounds(map126Bounds), e => e.code === 'UNKNOWN_ERROR');
+    }
+});
+test('126 mock bbox 좌표 필터·size·원본 보호', async () => {
+    const r = createRuntime(); const stations = r.load('src/mocks/stations.ts').MOCK_STATIONS;
+    const expected = stations.filter(s => s.longitude >= map126Bounds.minLng && s.longitude <= map126Bounds.maxLng && s.latitude >= map126Bounds.minLat && s.latitude <= map126Bounds.maxLat);
+    const result = await r.load('src/services/station.ts').fetchStationsInBounds(map126Bounds, { size: 2 });
+    assert.deepEqual(plain(result.items), plain(expected.slice(0, 2))); assert.equal(result.totalElements, expected.length);
+    result.items[0].name = '변경'; assert.notEqual(stations.find(s => s.id === result.items[0].id).name, '변경');
+});
+test('126 위치 허용·거부·실패·타임아웃의 좌표와 안내', () => {
+    const { resolveLocation, DEFAULT_MAP_CENTER, LOCATION_GUIDANCE } = createRuntime().load('src/utils/home-map.ts');
+    const coordinate = { latitude: 37.5, longitude: 127 };
+    assert.deepEqual(plain(resolveLocation({ kind: 'granted', coordinate })), { center: coordinate, myLocation: coordinate, guidance: '' });
+    for (const kind of ['denied', 'failed', 'timeout']) assert.deepEqual(plain(resolveLocation({ kind })), { center: plain(DEFAULT_MAP_CENTER), myLocation: null, guidance: LOCATION_GUIDANCE });
+    assert.equal(resolveLocation({ kind: 'granted', coordinate: { latitude: NaN, longitude: 127 } }).myLocation, null);
+});
+test('126 WebView 키 인코딩·JSON 메시지·이동 도메인 검증', () => {
+    const { buildMapHtml, parseMapMessage, isAllowedMapNavigation } = createRuntime().load('src/components/map/map-html.ts');
+    const key = '</script>"&abc=한글'; const html = buildMapHtml(key);
+    assert.ok(html.includes(encodeURIComponent(key))); assert.ok(!html.includes(key));
+    for (const raw of ['', '{', 'null', '[]', '{"type":"future"}', '{"type":"region","bounds":{}}']) assert.equal(parseMapMessage(raw), null);
+    assert.deepEqual(plain(parseMapMessage(JSON.stringify({ type: 'region', bounds: map126Bounds }))), { type: 'region', bounds: map126Bounds });
+    assert.equal(parseMapMessage('{"type":"error","key":"secret"}').key, undefined);
+    for (const url of ['https://localhost', 'https://dapi.kakao.com/v2/maps/sdk.js']) assert.equal(isAllowedMapNavigation(url), true);
+    for (const url of ['https://kakao.com.evil.test', 'http://dapi.kakao.com', 'javascript:alert(1)', 'https://localhost:9999', 'https://user@kakao.com']) assert.equal(isAllowedMapNavigation(url), false);
+});
+
 const directionRoute114 = { stationId: 105, lineId: 2, headsign: '사당 방면', direction: 'INNER' };
+
+test('126 WebView 안에서도 잘못된 JSON·타입은 무시하고 지원 여부를 다른 색으로 표시', () => {
+    const html = createRuntime().load('src/components/map/map-html.ts').buildMapHtml('test');
+    const listeners = {}; const events = {}; const colors = []; let script;
+    class LatLng { constructor(latitude, longitude) { this.latitude = latitude; this.longitude = longitude; } getLat() { return this.latitude; } getLng() { return this.longitude; } }
+    const sandbox = {
+        window: { ReactNativeWebView: { postMessage() {} }, addEventListener: (name, fn) => { listeners[name] = fn; } },
+        document: { addEventListener() {}, getElementById: () => ({}), createElement: () => ({ style: {} }), head: { appendChild: el => { script = el; } } },
+        kakao: { maps: { LatLng, load: fn => fn(), event: { addListener: (_map, name, fn) => { events[name] = fn; } },
+            Map: class { setCenter() {} getBounds() { return { getSouthWest: () => new LatLng(37.4, 126.9), getNorthEast: () => new LatLng(37.7, 127.2) }; } },
+            CustomOverlay: class { constructor(options) { colors.push(options.content.style.backgroundColor); } setMap() {} },
+        } },
+    };
+    vm.runInNewContext(html.split('<script>')[1].split('</script>')[0], sandbox); script.onload();
+    for (const raw of ['{', 'null', '{"type":"unknown"}', JSON.stringify({ type: 'state', center: { latitude: 37.5, longitude: 127 }, myLocation: null, markers: [{}], revision: 1 })]) listeners.message({ data: raw });
+    assert.equal(colors.length, 0);
+    const point = { latitude: 37.5, longitude: 127 };
+    listeners.message({ data: JSON.stringify({ type: 'state', center: point, myLocation: point, revision: 1,
+        markers: [{ ...point, id: 1, isSupported: true }, { ...point, id: 2, isSupported: false }] }) });
+    assert.deepEqual(colors, ['#12a77a', '#8c93a3', '#2879ef']);
+});
+
+function map126Runtime() {
+    const r = createScreenRuntime(serverEnv, 'src/hooks/use-home-map.ts');
+    r.external.react.useCallback = (callback, dependencies) => {
+        const ref = r.external.react.useRef(null);
+        if (!ref.current || dependencies.some((v, i) => v !== ref.current.dependencies[i])) ref.current = { callback, dependencies };
+        return ref.current.callback;
+    };
+    let cleanup;
+    r.external['expo-router'].useFocusEffect = callback => r.external.react.useEffect(() => { cleanup = callback(); return cleanup; }, [callback]);
+    let account = 'a'; const component = () => r.screen.useHomeMap(true, account);
+    r.view = () => r.renderComponent({ type: component, props: {} });
+    r.account = value => { account = value; };
+    r.blur = () => cleanup?.();
+    r.native.Alert = { alert: (...args) => r.alerts.push(args) }; r.alerts = [];
+    return r;
+}
+test('126 홈은 권한을 갑자기 요청하지 않고 버튼만 요청·거부 설정 안내', async () => {
+    const r = map126Runtime(); let requested = 0;
+    r.external['expo-location'].requestForegroundPermissionsAsync = async () => { requested++; return { granted: false }; };
+    r.view(); await settle(); assert.equal(requested, 0);
+    r.view().locate(); await settle(); assert.equal(requested, 1); assert.equal(r.alerts.length, 1);
+    assert.equal(r.view().myLocation, null); r.unmount();
+});
+test('126 위치 응답은 화면 이탈·계정 전환·타임아웃 이후 무시', async () => {
+    for (const mode of ['blur', 'account', 'generation', 'timeout']) {
+        const r = map126Runtime(); let finish;
+        r.external['expo-location'].getForegroundPermissionsAsync = async () => ({ granted: true });
+        r.external['expo-location'].getCurrentPositionAsync = async options => { assert.equal(options.accuracy, 3); return await new Promise(resolve => { finish = resolve; }); };
+        r.view(); await settle();
+        if (mode === 'blur') r.blur();
+        if (mode === 'account') { r.account('b'); r.external['expo-location'].getForegroundPermissionsAsync = async () => ({ granted: false }); r.view(); }
+        if (mode === 'generation') await r.load('src/services/auth.ts').clearLocalSession();
+        if (mode === 'timeout') { r.advance(10000); await settle(); }
+        finish({ coords: { latitude: 37.5, longitude: 127 } }); await settle();
+        assert.equal(r.view().myLocation, null, mode); r.unmount();
+    }
+});
+test('126 bbox 디바운스·마지막 응답·실패 시 유지·이탈·계정 전환 가드', async () => {
+    const r = map126Runtime(); const pending = [];
+    r.load('src/services/station.ts').fetchStationsInBounds = async bounds => await new Promise((resolve, reject) => pending.push({ bounds, resolve, reject }));
+    r.view(); await settle();
+    r.view().onRegionChange(map126Bounds); r.advance(399); assert.equal(pending.length, 0);
+    r.advance(1); assert.equal(pending.length, 1);
+    r.view().onRegionChange({ ...map126Bounds, minLng: 127 }); r.advance(400);
+    const station = { id: 1, latitude: 37.5, longitude: 127.1, isSupported: false };
+    pending[1].resolve({ items: [station], totalElements: 501 }); await settle();
+    pending[0].resolve({ items: [], totalElements: 0 }); await settle();
+    assert.deepEqual(plain(r.view().markers), [station]); assert.equal(r.view().truncated, true);
+    r.view().onRegionChange(map126Bounds); r.advance(400); pending[2].reject(Error()); await settle();
+    assert.equal(r.view().markers.length, 1);
+    r.view().onRegionChange(map126Bounds); r.advance(400); r.blur(); pending[3].resolve({ items: [], totalElements: 0 }); await settle();
+    assert.equal(r.view().markers.length, 1);
+    r.account('b'); assert.equal(r.view().markers.length, 0); r.unmount();
+});
+test('126 권한 시작은 순서대로 요청·이중 탭 차단·오류에도 로그인, 나중에는 요청 없음', async () => {
+    for (const later of [false, true]) {
+        const r = createScreenRuntime({}, 'src/app/permission.tsx'); const calls = []; const routes = []; let finish;
+        r.external['expo-image-picker'].requestCameraPermissionsAsync = async () => { calls.push('camera'); await new Promise(resolve => { finish = resolve; }); throw Error(); };
+        r.external['expo-location'].requestForegroundPermissionsAsync = async () => { calls.push('location'); throw Error(); };
+        r.external['expo-router'].router.replace = route => routes.push(route);
+        const view = r.render(); const button = text => findElement(view, el => el.type === 'Pressable' && findText(el, text));
+        if (later) { button('나중에 할게요').props.onPress(); assert.equal(calls.length, 0); }
+        else {
+            const promise = button('시작하기').props.onPress(); button('시작하기').props.onPress(); button('나중에 할게요').props.onPress();
+            assert.deepEqual(calls, ['camera']); assert.equal(routes.length, 0); finish(); await promise;
+            assert.deepEqual(calls, ['camera', 'location']);
+        }
+        assert.deepEqual(routes, ['/login']); r.unmount();
+    }
+});
 const directionData114 = (result = 'CORRECT') => ({ result, reason: result === 'CORRECT' ? null : 'UNREADABLE',
     recognized: { stationName: null, lineName: null, headsign: null }, expected: { stationName: '강남', lineName: '2호선', headsign: '사당 방면' }, message: '안내' });
 const directionPhoto114 = { uri: 'file:///temporary.jpg', mimeType: 'image/jpeg', fileName: 'direction.jpg', file: new Blob(['jpeg'], { type: 'image/jpeg' }) };
