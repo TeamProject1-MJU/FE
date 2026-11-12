@@ -30,19 +30,24 @@ export function useRoomEvents(roomId: string, callbacks: Callbacks) {
         let active = true;
         const valid = () => active && generation === getSessionGeneration() && roomEventsScope() === scope;
         const queue = createRoomEventCoalescer(target => latest.current.refresh(target, valid), valid);
-        const unsubscribe = subscribeRoomEvents(roomId, event => {
-            if (!valid() || event.roomId.toLowerCase() !== roomId.toLowerCase()) return;
-            const result = latest.current.receive?.(event);
-            if (result !== false) queue.request(Array.isArray(result) ? result : roomEventTargets(event.type));
-        }, {
-            onReconnected: () => { if (valid()) queue.request(['detail', 'proposals', 'recommendation']); },
-            onRejected: code => {
-                if (valid() && (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND')) {
-                    latest.current.rejected(code);
-                    active = false; queue.dispose();
-                }
-            },
-        });
+        let unsubscribe: () => void = () => {};
+        try {
+            unsubscribe = subscribeRoomEvents(roomId, event => {
+                if (!valid() || event.roomId.toLowerCase() !== roomId.toLowerCase()) return;
+                const result = latest.current.receive?.(event);
+                if (result !== false) queue.request(Array.isArray(result) ? result : roomEventTargets(event.type));
+            }, {
+                onReconnected: () => { if (valid()) queue.request(['detail', 'proposals', 'recommendation']); },
+                onRejected: code => {
+                    if (valid() && (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND')) {
+                        latest.current.rejected(code);
+                        active = false; queue.dispose();
+                    }
+                },
+            });
+        } catch {
+            if (typeof __DEV__ !== 'undefined' && __DEV__) console.debug('[room-events] realtime subscription unavailable');
+        }
         return () => { active = false; queue.dispose(); unsubscribe(); };
     }, [roomId, scope]);
     return scope;

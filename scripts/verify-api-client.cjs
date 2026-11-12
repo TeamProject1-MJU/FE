@@ -171,6 +171,61 @@ test('#117 가짜 구독: 방장 퇴장 모으기·재연결·거절·이전 계
     r.unmount(); assert.equal(stopped, 3);
 });
 
+test('#117 구독 예외에도 마운트·언마운트와 coalescer 정리·개발 로그 유지', async () => {
+    for (const dev of [false, true]) {
+        const r = roomQueryScreen('src/hooks/use-room-events.ts');
+        const logs = []; let subscriptions = 0, refreshes = 0;
+        r.context.__DEV__ = dev;
+        r.context.console = { ...console, debug: (...args) => logs.push(args) };
+        r.load('src/services/realtime.ts').subscribeRoomEvents = (_roomId, _listener, options) => {
+            subscriptions++;
+            // Even queued work created immediately before a failed registration must be disposed.
+            options.onReconnected();
+            throw Error('invalid https://private.test/api token=secret message=private');
+        };
+        const callbacks = { refresh: () => { refreshes++; }, rejected: () => assert.fail('구독 예외는 접근 거부가 아님') };
+        const Component = () => r.screen.useRoomEvents(ROOM_QUERY_ID, callbacks);
+        assert.doesNotThrow(() => r.renderComponent({ type: Component, props: {} }));
+        assert.equal(subscriptions, 1);
+        assert.equal(r.timers.size, 3);
+        assert.deepEqual(logs, dev ? [['[room-events] realtime subscription unavailable']] : []);
+        assert.doesNotThrow(() => r.unmount());
+        assert.equal(r.timers.size, 0);
+        r.advance(1000); await settle(); assert.equal(refreshes, 0);
+    }
+});
+
+test('#117 방 상세는 추천 조회를 생략하고 detail·proposals 접근 거부로 방을 정리', async () => {
+    for (const target of ['detail', 'proposals']) {
+        for (const code of ['NOT_ROOM_MEMBER', 'ROOM_NOT_FOUND']) {
+            const r = roomQueryScreen('src/app/rooms/[roomId].tsx', { roomId: ROOM_QUERY_ID });
+            let listener, reject = false, recommendationCalls = 0;
+            const routes = [];
+            r.external['expo-router'].router.replace = route => routes.push(route);
+            r.load('src/services/realtime.ts').subscribeRoomEvents = (_id, receive) => { listener ??= receive; return () => {}; };
+            r.context.fetch = async url => {
+                if (url.includes('/recommendations')) { recommendationCalls++; return ok(null); }
+                if (url.endsWith('/invite-code')) return ok({ roomCode: 'ABC123' });
+                if (url.includes('station-proposals')) return reject && target === 'proposals'
+                    ? recoFail(code, code === 'NOT_ROOM_MEMBER' ? 403 : 404)
+                    : ok({ items: [], maxProposals: 9, selectedStation: null });
+                return reject && target === 'detail' ? recoFail(code, code === 'NOT_ROOM_MEMBER' ? 403 : 404) : ok(roomQueryDetail());
+            };
+            r.render(); await settle(); await settle(); r.render();
+            const emit = type => listener({ type, roomId: ROOM_QUERY_ID, payload: {}, at: '2026-11-12T10:00:00Z' });
+            emit('RECOMMENDATION_CREATED'); r.advance(300); await settle();
+            assert.equal(recommendationCalls, 0); assert.deepEqual(routes, []);
+            reject = true;
+            emit(target === 'detail' ? 'DEPARTURE_UPDATED' : 'STATION_PROPOSAL_CREATED');
+            r.advance(300); await settle(); await settle();
+            assert.ok(routes.includes('/rooms'), `${target}: ${code}`);
+            assert.equal(r.load('src/services/room-cache.ts').readCachedRoomDetail(ROOM_QUERY_ID), undefined);
+            assert.equal(recommendationCalls, 0);
+            r.unmount();
+        }
+    }
+});
+
 test('#117 mock 훅은 구독·타이머·재조회를 만들지 않아요', () => {
     const r = createScreenRuntime({}, 'src/hooks/use-room-events.ts');
     r.load('src/services/realtime.ts').subscribeRoomEvents = () => { throw Error('mock subscription'); };

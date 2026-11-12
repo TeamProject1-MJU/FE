@@ -44,7 +44,6 @@ import { ApiError, isAuthError } from '@/services/api/errors';
 import { useRoomEvents, roomEventsScope } from '@/hooks/use-room-events';
 import { mergeRoomUpdated, parseSelectedStationEvent } from '@/services/room-events';
 import { cacheRoomDetail, clearCachedRoomCode, getRoomCacheScope, removeCachedRoom } from '@/services/room-cache';
-import { fetchLatestRecommendation } from '@/services/recommendation';
 
 const NAVY = '#0f1c3f';
 const MINT = '#2bcf9a';
@@ -260,16 +259,10 @@ export default function RoomDetailScreen() {
 
     useRoomEvents(roomId, {
         rejected: rejectRoom,
-        refresh: async (target, valid) => {
+        refresh: async target => {
             if (target === 'detail') await load(true);
             if (target === 'proposals') await loadProposals(true);
-            if (target === 'recommendation') {
-                try { await fetchLatestRecommendation(roomId); }
-                catch (error) {
-                    if (valid() && error && typeof error === 'object' && 'code' in error
-                        && (error.code === 'NOT_ROOM_MEMBER' || error.code === 'ROOM_NOT_FOUND')) rejectRoom(error.code);
-                }
-            }
+            // This screen does not display recommendation results.
         },
         receive: event => {
             if (event.type !== 'ROOM_UPDATED' && event.type !== 'SELECTED_STATION_CHANGED') return;
