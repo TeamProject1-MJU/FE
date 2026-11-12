@@ -17,6 +17,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import LinkRoLogo from '@/components/linkro-logo';
+import KakaoMap from '@/components/KakaoMap';
+import { useHomeMap } from '@/hooks/use-home-map';
 import { getAuthStatus, getSession, useRedirectIfSignedOut } from '@/stores/auth-store';
 import {
     formatDday,
@@ -78,6 +80,7 @@ export default function HomeScreen() {
      *   다른 계정의 결과는 렌더할 때 계정 기준을 비교해서 바로 숨겨요. 인증 오류는 화면 안내 없이 기존 흐름에 맡겨요.
      */
     const serverMode = !isMockMode();
+    const homeMap = useHomeMap(serverMode, currentAccount());
     const requestId = useRef(0);
     const [load, setLoad] = useState<MeetingLoad>({ kind: 'loading' });
 
@@ -150,9 +153,20 @@ export default function HomeScreen() {
         <View style={styles.container}>
             <StatusBar style="dark" />
 
-            {/* 지도 영역 - 실제 카카오 지도 연동 전 디자인용 */}
+            {/* 서버 모드는 실제 지도, mock 모드는 기존 디자인 지도 */}
             <View style={[styles.mapArea, { bottom: tabBarHeight }]}>
-                <MockMap />
+                {serverMode ? <KakaoMap
+                    center={homeMap.center}
+                    myLocation={homeMap.myLocation}
+                    markers={homeMap.markers}
+                    centerRevision={homeMap.centerRevision}
+                    bottomInset={sheetHeight}
+                    onRegionChange={homeMap.onRegionChange}
+                /> : <MockMap />}
+                {serverMode && (homeMap.guidance || homeMap.truncated) && <View pointerEvents="none" style={{ position: 'absolute', top: insets.top + 125, alignSelf: 'center', backgroundColor: '#ffffffee', borderRadius: 8, padding: 8 }}>
+                    {!!homeMap.guidance && <Text style={{ color: SECONDARY, fontSize: 12 }}>{homeMap.guidance}</Text>}
+                    {homeMap.truncated && <Text style={{ color: SECONDARY, fontSize: 12 }}>일부 역만 표시했어요. 지도를 확대해 주세요.</Text>}
+                </View>}
             </View>
 
             {/* ❶ 상단 로고 + 검색창 */}
@@ -182,7 +196,7 @@ export default function HomeScreen() {
                 >
                     <Pressable
                         style={({ pressed }) => [styles.mapControlButton, pressed && styles.pressed]}
-                        onPress={() => showPreparing('현재 위치')}
+                        onPress={() => serverMode ? homeMap.locate() : showPreparing('현재 위치')}
                         accessibilityLabel="현재 위치"
                     >
                         <Ionicons name="locate-outline" size={22} color={NAVY} />
