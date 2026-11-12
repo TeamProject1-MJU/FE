@@ -5,6 +5,7 @@ import {
     chatContentLength,
     fetchChatMessages,
     getPendingChatAiCount,
+    parseChatMessage,
     sendChatMessage,
     subscribeChat,
 } from '@/services/chat';
@@ -13,6 +14,7 @@ import type {
     ChatMockScenario,
     PendingChatMessage,
 } from '@/types/chat';
+import { getRealtimeState, subscribeRealtimeState, subscribeRoomEvents } from '@/services/realtime';
 import { RoomError } from '@/types/room';
 import { useMock as isMockMode } from '@/services/api/config';
 import { getRoomCacheScope } from '@/services/room-cache';
@@ -39,7 +41,12 @@ type Context = {
     focused: boolean;
     valid: () => boolean;
     stopPolling: () => void;
-    poll: (message: ChatMessage) => void;
+    waitForAi: (message: ChatMessage) => void;
+    resumePolling: () => void;
+    receiveReplies: (messages: ChatMessage[]) => void;
+    queued: Map<string, PendingChatMessage>;
+    knownIds: Set<string>;
+    confirmedIds: Set<string>;
     aiPending: number;
     scope: string;
     active: boolean;
@@ -175,6 +182,8 @@ export function useRoomChat(roomId: string, mock?: string) {
                     ctx.hasMore = page.hasMore;
                 }
 
+                page.items.forEach(message => ctx.knownIds.add(message.id));
+                ctx.receiveReplies(page.items);
                 ctx.loaded = true;
                 ctx.blocked = false;
 
@@ -228,7 +237,12 @@ export function useRoomChat(roomId: string, mock?: string) {
                 try { return getRoomCacheScope() === account; } catch { return false; }
             },
             stopPolling: () => {},
-            poll: () => {},
+            waitForAi: () => {},
+            resumePolling: () => {},
+            receiveReplies: () => {},
+            queued: new Map(),
+            knownIds: new Set(),
+            confirmedIds: new Set(),
             aiPending: 0,
             scope,
             active: true,
@@ -246,57 +260,145 @@ export function useRoomChat(roomId: string, mock?: string) {
         context.current = ctx;
         draftRef.current = '';
 
-        // REST 1단계 전용 임시 수신: 3초 간격, 최대 60초. 실시간 수신 도입 시 이 블록을 교체해요.
+        // Blur pauses REST work; the listener continues receiving room messages.
         let timer: ReturnType<typeof setTimeout> | undefined;
-        let expiry: ReturnType<typeof setTimeout> | undefined;
-        let pollId = 0;
-        const waiting = new Map<string, ChatMessage>();
-        ctx.stopPolling = () => {
-            pollId++;
-            clearTimeout(timer);
-            clearTimeout(expiry);
-            waiting.clear();
-            ctx.aiPending = 0;
-            update(ctx, previous => ({ ...previous, aiPending: 0 }));
-        };
-        ctx.poll = message => {
-            if (isMockMode() || !ctx.valid() || ctx.blocked || !ctx.focused) return;
-            const running = waiting.size > 0;
-            waiting.set(message.id, message);
+        let generation = 0;
+        let fetching = false;
+        let latestPage: ReturnType<typeof fetchChatMessages> | undefined;
+        const waiting = new Map<string, { question: ChatMessage; deadline: number; expiry: ReturnType<typeof setTimeout> | undefined }>();
+        let latestReplyAt = -Infinity;
+        const received = ctx.confirmedIds;
+        const isReply = (message: ChatMessage) => message.senderType === 'AI'
+            || message.senderType === 'SYSTEM' && (message.content.startsWith('AI 사용 한도를 초과해')
+                || message.content.startsWith('AI가 답변을 만들지 못했어요'));
+        const publishWaiting = () => {
             ctx.aiPending = waiting.size;
             update(ctx, previous => ({ ...previous, aiPending: ctx.aiPending }));
-            if (running) return;
-            clearTimeout(timer);
-            clearTimeout(expiry);
-            const id = ++pollId;
-            expiry = setTimeout(() => ctx.stopPolling(), 60_000);
-            const tick = async () => {
-                if (!ctx.valid() || id !== pollId) return;
-                try {
-                    const page = await fetchChatMessages(roomId);
-                    if (!ctx.valid() || id !== pollId) return;
-                    const replies = page.items.filter(item => item.senderType === 'AI'
-                        || item.senderType === 'SYSTEM' && (item.content.startsWith('AI 사용 한도를 초과해')
-                            || item.content.startsWith('AI가 답변을 만들지 못했어요')));
-                    for (const [key, question] of waiting) {
-                        if (replies.some(reply => Date.parse(reply.createdAt) > Date.parse(question.createdAt))) waiting.delete(key);
-                    }
-                    ctx.aiPending = waiting.size;
-                    update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, page.items), aiPending: ctx.aiPending }));
-                } catch (error) {
-                    if (!ctx.valid() || id !== pollId) return;
-                    if (denied(error)) {
-                        ctx.blocked = true;
-                        ctx.stopPolling();
-                        update(ctx, previous => ({ ...previous, status: 'error', blocked: true, error: errorText(error), messages: [], pending: [] }));
+            if (!waiting.size) { clearTimeout(timer); timer = undefined; }
+        };
+        const resolveWaiting = (messages: ChatMessage[]) => {
+            for (const reply of messages.filter(isReply)) latestReplyAt = Math.max(latestReplyAt, Date.parse(reply.createdAt));
+            for (const [id, entry] of waiting) {
+                if (latestReplyAt > Date.parse(entry.question.createdAt)) {
+                    clearTimeout(entry.expiry);
+                    waiting.delete(id);
+                }
+            }
+            publishWaiting();
+        };
+        ctx.receiveReplies = resolveWaiting;
+        const block = (code: 'NOT_ROOM_MEMBER' | 'ROOM_NOT_FOUND') => {
+            ctx.blocked = true;
+            ctx.actionId++;
+            ctx.sendBaseline.clear();
+            ctx.queued.clear();
+            ctx.stopPolling();
+            update(ctx, previous => ({ ...previous, status: 'error', blocked: true,
+                error: errorText(new RoomError(code, '이 약속방에 접근할 수 없어요.', roomId)),
+                messages: [], pending: [], refreshing: false, historyLoading: false }));
+        };
+        const latest = async (ids?: string[]) => {
+            const epoch = generation;
+            if (!ctx.valid() || ctx.blocked || !ctx.focused) return;
+            try {
+                // Fallback polling and deadline requests share an in-flight page.
+                const request = latestPage ??= fetchChatMessages(roomId);
+                const page = await request.finally(() => {
+                    if (latestPage === request) latestPage = undefined;
+                });
+                if (!ctx.valid() || ctx.blocked || epoch !== generation) return;
+                page.items.forEach(message => ctx.knownIds.add(message.id));
+                resolveWaiting(page.items);
+                update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, page.items) }));
+            } catch (error) {
+                if (!ctx.valid() || epoch !== generation) return;
+                if (denied(error)) block((error as RoomError).code as 'NOT_ROOM_MEMBER' | 'ROOM_NOT_FOUND');
+            } finally {
+                if (ctx.valid() && epoch === generation && ids) {
+                    ids.forEach(id => { clearTimeout(waiting.get(id)?.expiry); waiting.delete(id); });
+                    publishWaiting();
+                }
+            }
+        };
+        const schedule = () => {
+            clearTimeout(timer); timer = undefined;
+            if (!ctx.valid() || ctx.blocked || !ctx.focused || !waiting.size || getRealtimeState() === 'open' || fetching) return;
+            timer = setTimeout(async () => {
+                timer = undefined;
+                fetching = true;
+                await latest();
+                fetching = false;
+                schedule();
+            }, 3000);
+        };
+        const armExpiry = (id: string) => {
+            const entry = waiting.get(id);
+            if (!entry || entry.expiry !== undefined) return;
+            entry.expiry = setTimeout(() => {
+                // Stop a fallback tick due at the same deadline before the final fetch.
+                clearTimeout(timer); timer = undefined;
+                void latest([id]);
+            }, Math.max(0, entry.deadline - Date.now()));
+        };
+        ctx.stopPolling = () => {
+            generation++;
+            latestPage = undefined;
+            if (ctx.blocked || !ctx.active) { ctx.queued.clear(); ctx.sendBaseline.clear(); }
+            clearTimeout(timer); timer = undefined;
+            waiting.forEach(entry => clearTimeout(entry.expiry));
+            if (!ctx.focused && ctx.active && !ctx.blocked) {
+                waiting.forEach(entry => { entry.expiry = undefined; });
+            } else waiting.clear();
+            publishWaiting();
+        };
+        ctx.resumePolling = () => {
+            waiting.forEach((_entry, id) => armExpiry(id));
+            schedule();
+        };
+        ctx.waitForAi = question => {
+            if (isMockMode() || !ctx.valid() || ctx.blocked) return;
+            if (!waiting.has(question.id)) waiting.set(question.id, { question, deadline: Date.now() + 60_000, expiry: undefined });
+            resolveWaiting([]); // A reply may have arrived before the POST response.
+            if (ctx.focused) ctx.resumePolling();
+        };
+        const offState = isMockMode() ? () => {} : subscribeRealtimeState(schedule);
+        let offEvents: () => void = () => {};
+        if (!isMockMode() && ctx.valid()) {
+            try {
+                offEvents = subscribeRoomEvents(roomId, event => {
+                    if (!ctx.valid() || ctx.blocked || event.type !== 'MESSAGE_CREATED') return;
+                    let message: ChatMessage;
+                    try { message = parseChatMessage(event.payload); }
+                    catch {
+                        if (typeof __DEV__ !== 'undefined' && __DEV__) console.debug('[chat] drop: invalid MESSAGE_CREATED payload');
                         return;
                     }
-                }
-                if (ctx.valid() && id === pollId && waiting.size) timer = setTimeout(tick, 3000);
-                else if (id === pollId) ctx.stopPolling();
-            };
-            timer = setTimeout(tick, 3000);
-        };
+                    const duplicate = received.has(message.id);
+                    received.add(message.id);
+                    ctx.knownIds.add(message.id);
+                    if (!duplicate && message.senderType === 'USER' && message.senderId === getSession()?.userId) {
+                        const entry = [...ctx.queued.values()]
+                            .filter(item => item.content === message.content && ctx.sendBaseline.has(item.clientId)
+                                && !ctx.sendBaseline.get(item.clientId)!.has(message.id))
+                            .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0];
+                        if (entry) {
+                            ctx.queued.delete(entry.clientId);
+                            ctx.sendBaseline.delete(entry.clientId);
+                            update(ctx, previous => ({ ...previous, pending: previous.pending.filter(item => item.clientId !== entry.clientId) }));
+                        }
+                    }
+                    resolveWaiting([message]);
+                    update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, [message]) }));
+                }, {
+                    onReconnected: () => { if (ctx.valid() && !ctx.blocked) void refresh(); },
+                    onRejected: code => {
+                        if (ctx.valid() && (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND')) block(code);
+                    },
+                });
+            } catch {
+                if (typeof __DEV__ !== 'undefined' && __DEV__) console.debug('[chat] realtime subscription unavailable; using REST fallback');
+            }
+        }
 
         const unsubscribe = subscribeChat(roomId, () => {
             update(ctx, previous => ({
@@ -312,12 +414,14 @@ export function useRoomChat(roomId: string, mock?: string) {
             ctx.sendBaseline.clear();
             ctx.stopPolling();
             unsubscribe();
+            offEvents();
+            offState();
         };
     }, [account, roomId, scenario, scope, refresh, update]);
 
     useFocusEffect(
         useCallback(() => {
-            if (context.current) context.current.focused = true;
+            if (context.current) { context.current.focused = true; context.current.resumePolling(); }
             void refresh();
             const ctx = context.current;
             return () => {
@@ -364,6 +468,7 @@ export function useRoomChat(roomId: string, mock?: string) {
 
             if (!ctx.valid() || actionId !== ctx.actionId) return;
 
+            page.items.forEach(message => ctx.knownIds.add(message.id));
             ctx.cursor = page.nextCursor;
             ctx.hasMore = page.hasMore;
 
@@ -412,6 +517,7 @@ export function useRoomChat(roomId: string, mock?: string) {
         }
 
         ctx.sending.add(entry.clientId);
+        ctx.queued.set(entry.clientId, entry);
         const actionId = ctx.actionId;
 
         const queued = {
@@ -441,15 +547,20 @@ export function useRoomChat(roomId: string, mock?: string) {
                 update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, latest.items) }));
                 const saved = latest.items.find(message => !knownIds.has(message.id) && message.senderType === 'USER'
                     && message.senderId === getSession()?.userId && message.content === entry.content);
+                latest.items.forEach(message => ctx.knownIds.add(message.id));
+                ctx.receiveReplies(latest.items);
+                if (!ctx.queued.has(entry.clientId)) return;
                 if (saved) {
+                    ctx.confirmedIds.add(saved.id);
+                    ctx.queued.delete(entry.clientId);
                     ctx.sendBaseline.delete(entry.clientId);
                     update(ctx, previous => ({ ...previous, pending: previous.pending.filter(item => item.clientId !== entry.clientId) }));
-                    if (saved.content.includes('@링크로')) ctx.poll(saved);
+                    if (saved.content.includes('@링크로')) ctx.waitForAi(saved);
                     return;
                 }
             }
             if (!isMockMode() && !ctx.sendBaseline.has(entry.clientId)) {
-                ctx.sendBaseline.set(entry.clientId, new Set(state.messages.map(message => message.id)));
+                ctx.sendBaseline.set(entry.clientId, new Set(ctx.knownIds));
             }
             const result = await sendChatMessage(
                 roomId,
@@ -459,7 +570,10 @@ export function useRoomChat(roomId: string, mock?: string) {
 
             if (!ctx.valid() || actionId !== ctx.actionId) return;
             ctx.sendBaseline.delete(entry.clientId);
-            if (result.aiPending) ctx.poll(result.message);
+            ctx.queued.delete(entry.clientId);
+            ctx.knownIds.add(result.message.id);
+            ctx.confirmedIds.add(result.message.id);
+            if (result.aiPending) ctx.waitForAi(result.message);
 
             update(ctx, previous => ({
                 ...previous,

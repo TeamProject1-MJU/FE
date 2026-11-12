@@ -398,7 +398,7 @@ async function finishMockAi(
  * API v1.12 10.1
  * POST /api/v1/rooms/{roomId}/messages { content }
  *
- * 서버 AI 답변은 use-room-chat의 임시 REST 재조회로 받아요.
+ * 서버 AI 답변은 use-room-chat의 실시간 구독과 REST 안전장치로 받아요.
  * mock은 기존 비동기 응답을 유지해요.
  *
  * clientId는 로컬 재시도 중복 방지용이며 API 요청 본문에 추가하지 않아요.
