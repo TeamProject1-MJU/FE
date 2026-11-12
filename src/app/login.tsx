@@ -16,7 +16,7 @@ const MINT_DEEP = '#12a77a';
 const KAKAO_YELLOW = '#fee500';
 const KAKAO_BLACK = '#191919';
 
-// TODO: 홈 화면 구현 후 실제 홈 라우트로 교체
+// 로그인에 성공하면 홈(/home)으로 이동해요.
 const HOME_ROUTE = '/home';
 
 export default function LoginScreen() {

@@ -65,9 +65,9 @@ type LoadError = 'ROOM_NOT_FOUND' | 'NOT_ROOM_MEMBER' | 'UNKNOWN';
  *   MEMBER: 후보 제안·투표·채팅·내 출발역 설정·나가기
  * - 일반 상세(7.4)에는 초대 코드가 없고, 방장만 7.9 로 따로 조회합니다.
  * - 다른 멤버의 출발역은 볼 수만 있고 편집 버튼은 내 카드에만 있어요.
- * - 하위 화면(추천·출발역 입력)에서 돌아오면 다시 조회해서 바뀐 mock 상태를 보여줍니다.
+ * - 하위 화면(추천·출발역 입력)에서 돌아오면 다시 조회해서 바뀐 상태를 보여줍니다.
  *
- * 테스트용:
+ * 테스트용(mock 모드에서만, 서버 모드는 ?mock= 을 쓰지 않아요):
  *   /rooms/room-1?mock=error          → 첫 조회 실패
  *   /rooms/room-4?mock=invite-error   → 초대 코드 첫 조회 실패 (다시 시도하면 성공)
  *   /rooms/room-4?mock=owner-give     → 내 방장을 다른 멤버에게 넘긴 상태로 진입 (초대 코드·수정 버튼 사라짐)
@@ -82,7 +82,8 @@ type LoadError = 'ROOM_NOT_FOUND' | 'NOT_ROOM_MEMBER' | 'UNKNOWN';
  *   /rooms/room-4?tab=vote&mock=proposals-full   → 후보 9/9, 제안 버튼 비활성 + 안내
  *   /rooms/room-2?tab=vote&mock=propose-error    → 첫 직접 제안 실패(NETWORK_ERROR), 다시 하면 성공
  *   /rooms/room-2?tab=vote&mock=vote-error       → 첫 투표 실패(NETWORK_ERROR), 다시 하면 성공
- * TODO: 실제 API·권한 검사·WebSocket 채팅은 후속 이슈에서 연동합니다.
+ * 서버 모드: 방 정보·멤버·초대 코드·방 수정·출발역·후보·투표는 services/room*.ts 로 서버를 불러요.
+ * TODO: 약속역 확정·해제(7.10·7.11), 나가기(7.8), 채팅(10장), WebSocket 실시간 갱신은 아직 서버 연동 전이에요(후속 이슈).
  */
 export default function RoomDetailScreen() {
     const insets = useSafeAreaInsets();
