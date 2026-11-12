@@ -1,6 +1,7 @@
 import { formatStationName } from '@/utils/station-name';
-import { ComponentProps, useState } from 'react';
+import { ComponentProps, useCallback, useRef, useState } from 'react';
 import {
+    ActivityIndicator,
     Alert,
     LayoutChangeEvent,
     Pressable,
@@ -10,20 +11,24 @@ import {
     useWindowDimensions,
     View,
 } from 'react-native';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import LinkRoLogo from '@/components/linkro-logo';
-import { useRedirectIfSignedOut } from '@/stores/auth-store';
+import { getAuthStatus, getSession, useRedirectIfSignedOut } from '@/stores/auth-store';
 import {
-    formatAppointmentParam,
     formatDday,
     formatMonthDay,
     formatTime,
     HOME_UPCOMING_MEETING,
 } from '@/constants/home-mock';
+import { useMock as isMockMode } from '@/services/api/config';
+import { ApiError, isAuthError } from '@/services/api/errors';
+import { getSessionGeneration } from '@/services/auth';
+import { fetchMyRooms } from '@/services/room';
+import { meetingRoomParams, pickUpcomingRoom, toHomeMeeting, type HomeMeetingCard } from '@/utils/upcoming-meeting';
 
 const NAVY = '#0f1c3f';
 const MINT = '#2bcf9a';
@@ -45,6 +50,18 @@ const SHEET_MAX_RATIO = 0.55;
 
 type IoniconName = ComponentProps<typeof Ionicons>['name'];
 
+/** 서버 모드 "다가오는 약속" 상태. done 은 어느 계정(로그인 세대:userId)의 결과인지 같이 들고 있어요. */
+type MeetingLoad =
+    | { kind: 'loading' }
+    | { kind: 'error' }
+    | { kind: 'done'; meeting: HomeMeetingCard | null; account: string | null };
+
+/** room-cache 범위와 같은 기준(로그인 세대:userId)이에요. 렌더 중에도 부작용 없이 읽어요. */
+function currentAccount() {
+    const userId = getSession()?.userId;
+    return getAuthStatus() === 'signedIn' && userId ? `${getSessionGeneration()}:${userId}` : null;
+}
+
 export default function HomeScreen() {
     const insets = useSafeAreaInsets();
     useRedirectIfSignedOut();
@@ -52,7 +69,53 @@ export default function HomeScreen() {
     const [sheetHeight, setSheetHeight] = useState(0);
 
     const tabBarHeight = TAB_BAR_CONTENT_HEIGHT + Math.max(insets.bottom, 8);
-    const meeting = HOME_UPCOMING_MEETING;
+
+    /*
+     * 다가오는 약속 (#102)
+     * - mock 모드: 기존 HOME_UPCOMING_MEETING 그대로, 서버를 부르지 않아요.
+     * - 서버 모드: 홈에 들어올 때마다 7.3 방 목록을 다시 불러와 지나지 않은 가장 가까운 약속 하나를 보여줘요.
+     *   이미 보여주던 값이 있으면 로딩으로 되돌리지 않고, 화면을 떠난 뒤 온 응답은 요청 번호로 무시해요.
+     *   다른 계정의 결과는 렌더할 때 계정 기준을 비교해서 바로 숨겨요. 인증 오류는 화면 안내 없이 기존 흐름에 맡겨요.
+     */
+    const serverMode = !isMockMode();
+    const requestId = useRef(0);
+    const [load, setLoad] = useState<MeetingLoad>({ kind: 'loading' });
+
+    const loadMeeting = useCallback(async () => {
+        if (!serverMode) return;
+        const id = ++requestId.current;
+        const generation = getSessionGeneration();
+        const account = currentAccount();
+        setLoad(prev => (prev.kind === 'done' && prev.account === account ? prev : { kind: 'loading' }));
+        try {
+            const rooms = await fetchMyRooms();
+            // 화면을 떠났거나 그사이 로그인 세대가 바뀌었으면 버려요.
+            if (id !== requestId.current || generation !== getSessionGeneration()) return;
+            const room = pickUpcomingRoom(rooms, new Date());
+            setLoad({ kind: 'done', meeting: room ? toHomeMeeting(room) : null, account: currentAccount() });
+        } catch (error) {
+            if (id !== requestId.current || error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
+            setLoad({ kind: 'error' });
+        }
+    }, [serverMode]);
+
+    useFocusEffect(
+        useCallback(() => {
+            void loadMeeting();
+            return () => { requestId.current++; };
+        }, [loadMeeting]),
+    );
+
+    const retryMeeting = () => {
+        setLoad({ kind: 'loading' });
+        void loadMeeting();
+    };
+
+    // 이전 계정의 결과는 다시 불러오기 전이라도 보여주지 않아요.
+    const meetingState: MeetingLoad = load.kind === 'done' && load.account !== currentAccount() ? { kind: 'loading' } : load;
+    const meeting: HomeMeetingCard | null = serverMode
+        ? (meetingState.kind === 'done' ? meetingState.meeting : null)
+        : HOME_UPCOMING_MEETING;
 
     const showPreparing = (name: string) => {
         Alert.alert('준비 중', `${name} 화면은 다음 작업에서 연결할 예정입니다.`);
@@ -73,15 +136,10 @@ export default function HomeScreen() {
             return;
         }
 
-        // API 연동 전에는 약속방 미리보기 화면으로 연결합니다.
+        // 약속방 목록(rooms/index.tsx)의 openRoom 과 같은 params 예요. mock 모드는 기존 미리보기 방(preview)이에요.
         router.push({
             pathname: '/rooms/[roomId]',
-            params: {
-                roomId: meeting.roomId,
-                roomName: meeting.title,
-                appointmentAt: formatAppointmentParam(meeting.appointmentAt),
-                maxMembers: String(meeting.maxMembers),
-            },
+            params: meetingRoomParams(meeting),
         });
     };
 
@@ -205,7 +263,29 @@ export default function HomeScreen() {
                     </View>
 
                     {/* ❸ 다가오는 약속 */}
-                    {meeting ? (
+                    {serverMode && meetingState.kind === 'loading' ? (
+                        <View style={styles.meetingCard} accessibilityLabel="다가오는 약속을 불러오고 있어요">
+                            <View style={styles.meetingInfo}>
+                                <Text style={styles.meetingLabel}>다가오는 약속</Text>
+                                <Text style={styles.meetingMeta}>약속을 불러오고 있어요</Text>
+                            </View>
+                            <ActivityIndicator color={NAVY} />
+                        </View>
+                    ) : serverMode && meetingState.kind === 'error' ? (
+                        <Pressable
+                            style={({ pressed }) => [styles.meetingCard, pressed && styles.pressed]}
+                            onPress={retryMeeting}
+                            accessibilityRole="button"
+                            accessibilityLabel="다가오는 약속 다시 불러오기"
+                        >
+                            <View style={styles.meetingInfo}>
+                                <Text style={styles.meetingLabel}>다가오는 약속</Text>
+                                <Text style={styles.meetingTitle}>약속을 불러오지 못했어요</Text>
+                                <Text style={styles.meetingMeta}>눌러서 다시 시도해 주세요</Text>
+                            </View>
+                            <Ionicons name="refresh" size={20} color={NAVY} />
+                        </Pressable>
+                    ) : meeting ? (
                         <Pressable
                             style={({ pressed }) => [styles.meetingCard, pressed && styles.pressed]}
                             onPress={openMeeting}

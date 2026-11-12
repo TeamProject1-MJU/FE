@@ -280,3 +280,20 @@ await deleteProposal(roomId, proposalId); // DELETE …/{proposalId} → data: n
 - 변경·조회 전후 `sessionGeneration:userId` 범위를 검사해요. 쓰기 전에 시작된 조회는 새 캐시를 덮거나 삭제하지 못해요. 화면의 ref 잠금과 조회 번호로 연타, 닫힌 시트, 화면 이탈, 다른 방·계정으로 전환한 뒤의 늦은 응답과 예약 이동을 막아요.
 - 수정 화면은 바꾼 필드만 보내고, 기존 약속 시각의 초·밀리초 차이만으로 시각이 바뀌었다고 판단하지 않아요. 이름만 바꾸면 기존 시각은 그대로 유지해요. 과거 시각은 입력 단계에서도 먼저 막아요.
 - mock 모드는 기존 기능·실패 플래그·객체 반환을 유지해요. 추천·후보·투표·확정 약속역을 새로 만들거나 지우는 API는 호출하지 않아요. 나가기·승계·약속역 지정/해제·WebSocket은 이번 범위 밖이에요.
+
+## 홈 "다가오는 약속" (#102, 명세 7.3)
+
+```ts
+import { fetchMyRooms } from '@/services/room';
+import { pickUpcomingRoom, toHomeMeeting, meetingRoomParams } from '@/utils/upcoming-meeting';
+
+const room = pickUpcomingRoom(await fetchMyRooms(), new Date()); // 지나지 않은 가장 가까운 약속, 없으면 null
+const card = room ? toHomeMeeting(room) : null; // 방 이름·약속 시각·약속역(없으면 "약속역 미정")·인원
+```
+
+- 홈 전용 API는 없어요. 서버 모드 홈은 기존 7.3 방 목록(`fetchMyRooms`)만 써요. mock 모드는 `constants/home-mock.ts`의 `HOME_UPCOMING_MEETING`을 그대로 쓰고 서버를 부르지 않아요.
+- `pickUpcomingRoom`: 약속 시각이 없거나 읽을 수 없는 방, 이미 지난 방은 빼고 가장 가까운 방 하나를 골라요(같은 시각이면 목록 순서). 남은 방이 없으면 빈 상태("예정된 약속이 없어요")예요.
+- 카드를 누르면 약속방 목록의 `openRoom`과 같은 params(`roomId`·`roomName`·`appointmentAt`·`maxMembers`)로 방 상세에 가요.
+- 홈에 들어올 때마다 다시 불러오되, 같은 계정에서 이미 보여주던 카드는 로딩으로 되돌리지 않아요. 화면을 떠난 뒤 온 응답과 로그인 세대가 바뀐 뒤 온 응답은 버려요. 결과는 계정(로그인 세대:userId, room-cache 범위와 같은 기준)과 함께 들고 있어서, 계정이 바뀌면 다시 불러오기 전에도 이전 계정의 방을 보여주지 않아요.
+- 로딩은 카드 자리의 불러오는 중 표시, 서버 오류는 "약속을 불러오지 못했어요"와 눌러서 다시 시도예요. 경로 탐색·AI 표지판·약속방 버튼은 그대로 쓸 수 있어요. 인증 오류(`TOKEN_*`·401)는 화면 안내 없이 A-1 흐름에 맡겨요.
+- 홈의 지도 그림(MockMap)은 지도 표시(B-4) 범위라 그대로예요. 도착정보·혼잡도 영역은 홈에 없어서 이번에 추가하지 않았어요.
