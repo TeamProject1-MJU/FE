@@ -13,7 +13,7 @@ const isDate = (value: unknown): value is string => typeof value === 'string' &&
 const isRole = (value: unknown) => value === 'OWNER' || value === 'MEMBER';
 const invalid = (): never => { throw new ApiError('UNKNOWN_ERROR'); };
 
-function parseRoomStation(value: unknown): RoomStation | null {
+export function parseRoomStation(value: unknown): RoomStation | null {
     if (value === null) return null;
     if (!isRecord(value) || !isNumber(value.id) || typeof value.name !== 'string' || typeof value.isSupported !== 'boolean'
         || !Array.isArray(value.lines) || !value.lines.every(line => isRecord(line) && isNumber(line.lineId)
