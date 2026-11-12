@@ -5761,3 +5761,304 @@ test('107 서버가 정한 새 방장과 약속역은 남은 계정의 재조회
     assert.equal(actual.selectedStation.id, 99002); assert.equal(actual.confirmedAt, detail.confirmedAt);
     assert.equal((await r.room.fetchInviteCode(ROOM_QUERY_ID)).roomCode, 'NEW123');
 });
+
+/* ---------- #125 AI 표지판 방향 확인 화면 ---------- */
+
+/** 화면 트리를 비교 가능한 값으로 바꿔요. 스타일은 실제 적용 값으로 합치고, 상태 없는 부품은 펼쳐요. */
+function flattenStyle125(style) {
+    if (Array.isArray(style)) return Object.assign({}, ...style.map(flattenStyle125));
+    return style && typeof style === 'object' ? { ...style } : {};
+}
+function serialize125(node) {
+    if (node == null || typeof node === 'boolean') return null;
+    if (Array.isArray(node)) return node.map(serialize125).flat().filter(value => value !== null);
+    if (typeof node !== 'object') return String(node);
+    const { children, style, ...rest } = node.props ?? {};
+    const props = {};
+    for (const [key, value] of Object.entries(rest).sort(([a], [b]) => a.localeCompare(b))) {
+        if (value === undefined) continue;
+        props[key] = typeof value === 'function' ? '[fn]' : value && typeof value === 'object' && value.$$typeof ? serialize125(value) : JSON.parse(JSON.stringify(value));
+    }
+    if (style !== undefined) {
+        if (typeof style === 'function') { props.style = flattenStyle125(style({ pressed: false })); props.pressedStyle = flattenStyle125(style({ pressed: true })); }
+        else props.style = flattenStyle125(style);
+    }
+    if (typeof node.type === 'function') {
+        const name = node.type.name;
+        if (name === 'ScanLine') return { t: name, p: props };
+        return { t: name, p: props, out: serialize125(node.type(node.props)) };
+    }
+    return { t: typeof node.type === 'string' ? node.type : String(node.type), p: props, c: serialize125(children) };
+}
+
+function directionMockScreen125(params) {
+    const r = createScreenRuntime({}, 'src/app/ai-direction.tsx', runtime => {
+        runtime.native.ScrollView = 'ScrollView'; runtime.native.Image = 'Image';
+        runtime.native.Alert = { alert() { throw Error('mock 화면은 알림을 띄우지 않아요'); } }; runtime.native.Linking = { openSettings: async () => {} };
+        const forbidden = () => { throw Error('mock 화면은 실제 사진 기능을 쓰지 않아요'); };
+        runtime.external['expo-image-picker'] = { requestCameraPermissionsAsync: forbidden, requestMediaLibraryPermissionsAsync: forbidden, launchCameraAsync: forbidden, launchImageLibraryAsync: forbidden };
+        runtime.external['expo-file-system'] = { Paths: { cache: { uri: 'file:///cache/' } }, File: class { constructor() { forbidden(); } } };
+        runtime.external['expo-image-manipulator'] = { SaveFormat: { JPEG: 'jpeg' }, ImageManipulator: { manipulate: forbidden } };
+    });
+    r.external['expo-router'].useLocalSearchParams = () => params;
+    r.context.fetch = () => { throw Error('mock 화면은 서버를 부르지 않아요'); };
+    const component = r.render().type; r.screen.default = component;
+    return r;
+}
+
+/** mock 화면의 모든 단계(대기·예시 시트·미리보기·분석 중·결과·오류·다시 시도)를 차례로 기록해요. */
+async function mockDirectionSnapshots125() {
+    const snapshots = {};
+    const action = (view, label) => findElement(view, e => e.type?.name === 'ActionButton' && e.props.label === label);
+    for (const [paramsName, params] of [['example', {}], ['route', { stationId: '105', stationName: '강남', lineId: '2', lineName: '2호선', direction: 'INNER', headsign: '사당 방면' }]]) {
+        const probe = directionMockScreen125(params);
+        snapshots[`${paramsName}:waiting`] = serialize125(probe.render());
+        action(probe.render(), '표지판 촬영').props.onPress();
+        snapshots[`${paramsName}:picker`] = serialize125(probe.render());
+        const cards = [];
+        (function collect(node) {
+            if (!node || typeof node !== 'object') return;
+            if (Array.isArray(node)) return node.forEach(collect);
+            if (node.props?.accessibilityLabel?.startsWith?.('예시 사진 ')) cards.push(node.props.accessibilityLabel);
+            collect(node.props?.children);
+        })(probe.render());
+        for (const label of cards) {
+            const r = directionMockScreen125(params);
+            action(r.render(), '사진 업로드').props.onPress();
+            findElement(r.render(), e => e.props?.accessibilityLabel === label).props.onPress();
+            snapshots[`${paramsName}:${label}:preview`] = serialize125(r.render());
+            action(r.render(), 'AI로 확인하기').props.onPress();
+            snapshots[`${paramsName}:${label}:analyzing`] = serialize125(r.render());
+            r.advance(1500); await settle();
+            snapshots[`${paramsName}:${label}:done`] = serialize125(r.render());
+            const retry = action(r.render(), '다시 시도');
+            if (retry) {
+                retry.props.onPress(); snapshots[`${paramsName}:${label}:retry`] = serialize125(r.render());
+                r.advance(1500); await settle(); snapshots[`${paramsName}:${label}:retry-done`] = serialize125(r.render());
+            }
+        }
+    }
+    return snapshots;
+}
+
+/** 상태 없는 부품을 펼친 트리예요. 버튼(ServerButton)과 애니메이션(ScanLine)은 그대로 둬요. */
+function deep125(node) {
+    if (Array.isArray(node)) return node.map(deep125);
+    if (!node || typeof node !== 'object') return node;
+    if (typeof node.type === 'function' && !['ServerButton', 'ScanLine'].includes(node.type.name)) return deep125(node.type(node.props));
+    return { ...node, props: { ...node.props, children: deep125(node.props?.children) } };
+}
+function findAll125(node, predicate, found = []) {
+    if (Array.isArray(node)) { node.forEach(child => findAll125(child, predicate, found)); return found; }
+    if (!node || typeof node !== 'object') return found;
+    if (predicate(node)) found.push(node);
+    findAll125(node.props?.children, predicate, found);
+    return found;
+}
+const texts125 = view => findAll125(deep125(view), e => e.type === 'Text').map(textOf);
+const photoUri125 = view => findElement(view, e => e.type === 'Image')?.props.source.uri ?? null;
+const alertText125 = view => { const alert = findElement(deep125(view), e => e.props?.accessibilityRole === 'alert'); return alert ? textOf(alert) : null; };
+const SERVER_ERROR_TEXT125 = {
+    AI_UNAVAILABLE: 'AI가 잠시 응답하지 않아요. 잠시 후 다시 시도해 주세요.',
+    AI_QUOTA_EXCEEDED: '분석 요청이 많아요. 잠시 후 다시 시도해 주세요.',
+    NETWORK_ERROR: '인터넷 연결을 확인한 뒤 다시 시도해 주세요.',
+    UNKNOWN_ERROR: '분석 응답을 확인하지 못했어요. 다시 시도해 주세요.',
+    IMAGE_INVALID: '다른 사진을 선택해 주세요. JPG·PNG 5MB 이하 사진이 필요해요.',
+    STATION_NOT_FOUND: '경로를 다시 선택해 주세요.',
+    VALIDATION_ERROR: '경로를 다시 선택해 주세요.',
+};
+const failure125 = code => code === 'NETWORK_ERROR' ? () => Promise.reject(Error('offline'))
+    : code === 'UNKNOWN_ERROR' ? () => Promise.resolve(jsonResponse({ success: true, data: { result: 'FUTURE' } }))
+        : () => Promise.resolve(jsonResponse({ success: false, error: { code } },
+            { AI_UNAVAILABLE: 503, AI_QUOTA_EXCEEDED: 429, TOKEN_INVALID: 401, STATION_NOT_FOUND: 404 }[code] ?? 400));
+
+/** #114 화면 장치에 화면 포커스 제어, 이동 기록, 서버로 보낸 사진·경로 기록을 더해요. */
+async function directionScreen125(params) {
+    const r = room107TrackFocus(directionScreen114(params)); r.routes = []; r.sent = []; r.calls = 0;
+    r.external['expo-router'].router.replace = route => r.routes.push(route);
+    const service = r.load('src/services/direction.ts'); const original = service.checkDirection;
+    service.checkDirection = (photo, route) => { r.sent.push({ photo, route: plain(route) }); return original(photo, route); };
+    r.respond = handler => { r.context.fetch = (...args) => { r.calls++; return handler(...args); }; };
+    r.hold = () => { let finish; r.respond(() => new Promise(resolve => { finish = resolve; })); return value => finish(value); };
+    r.pump = async () => { for (let i = 0; i < 6; i++) await settle(); return r.render(); };
+    r.button = label => directionButton114(r.render(), label);
+    r.press = async label => { const button = r.button(label); assert.ok(button, `버튼이 없어요: ${label}`); button.props.onPress(); return r.pump(); };
+    return r;
+}
+const OUTPUT125 = 'file:///cache/output.jpg';
+const deletedCount125 = r => r.deleted.filter(uri => uri === OUTPUT125).length;
+
+test('125 재시도 가능한 오류 4종은 사진을 유지하고 다시 시도는 같은 사진·같은 경로로 한 번만 보내요', async () => {
+    for (const code of ['AI_UNAVAILABLE', 'AI_QUOTA_EXCEEDED', 'NETWORK_ERROR', 'UNKNOWN_ERROR']) {
+        const r = await directionScreen125(); await r.press('표지판 촬영');
+        r.respond(failure125(code)); let view = await r.press('AI로 확인하기');
+        assert.equal(alertText125(view), SERVER_ERROR_TEXT125[code], code);
+        assert.equal(photoUri125(view), OUTPUT125, `${code}: 사진 유지`); assert.equal(deletedCount125(r), 0, `${code}: 임시 파일 유지`);
+        assert.ok(texts125(view).includes('분석하지 못했어요'));
+        for (const label of ['다시 시도', '표지판 촬영', '갤러리 선택']) assert.equal(r.button(label).props.disabled, false, `${code}: ${label}`);
+        const before = r.calls; const finish = r.hold(); const retry = r.button('다시 시도');
+        retry.props.onPress(); retry.props.onPress(); await settle();
+        assert.equal(r.calls, before + 1, `${code}: 재시도 이중 제출 차단`); assert.equal(r.sent.length, 2);
+        assert.equal(r.sent[1].photo, r.sent[0].photo, `${code}: 같은 사진`); assert.equal(r.sent[1].photo.uri, OUTPUT125);
+        assert.deepEqual(r.sent[1].route, r.sent[0].route); assert.deepEqual(r.sent[1].route, { stationId: 105, lineId: 2, headsign: '사당 방면' });
+        view = r.render(); assert.equal(r.button('AI로 확인하기').props.disabled, true); assert.equal(r.button('다시 시도'), null);
+        assert.ok(texts125(view).includes('AI가 표지판을 읽고 있어요')); assert.ok(findElement(view, e => e.type?.name === 'ScanLine'));
+        finish(jsonResponse({ success: true, data: directionData114() })); view = await r.pump();
+        assert.ok(texts125(view).includes('올바른 방향이에요')); assert.equal(photoUri125(view), null); assert.equal(deletedCount125(r), 1);
+        r.unmount();
+    }
+});
+
+test('125 재시도 오류 뒤 새 사진을 고르면 유지하던 사진과 임시 파일을 먼저 정리해요', async () => {
+    const r = await directionScreen125(); await r.press('표지판 촬영');
+    r.respond(failure125('AI_UNAVAILABLE')); await r.press('AI로 확인하기');
+    let permissionAsked = 0; const picker = r.external['expo-image-picker']; const ask = picker.requestMediaLibraryPermissionsAsync;
+    picker.requestMediaLibraryPermissionsAsync = async () => { permissionAsked++; assert.equal(deletedCount125(r), 1, '권한 요청 전에 정리'); return ask(); };
+    const view = await r.press('갤러리 선택');
+    assert.equal(permissionAsked, 1); assert.equal(alertText125(view), null); assert.equal(photoUri125(view), OUTPUT125);
+    assert.ok(r.button('AI로 확인하기')); assert.equal(r.button('다시 시도'), null); r.unmount();
+});
+
+test('125 IMAGE_INVALID는 사진을 지우고 다른 사진을, 경로 오류는 경로 재선택을, 인증 오류는 안내 없이 정리해요', async () => {
+    const image = await directionScreen125(); await image.press('표지판 촬영');
+    image.respond(failure125('IMAGE_INVALID')); let view = await image.press('AI로 확인하기');
+    assert.equal(alertText125(view), SERVER_ERROR_TEXT125.IMAGE_INVALID); assert.equal(photoUri125(view), null); assert.equal(deletedCount125(image), 1);
+    assert.equal(image.button('다시 시도'), null); assert.equal(image.button('AI로 확인하기'), null);
+    assert.ok(texts125(view).includes('표지판이 잘 보이는 다른 사진을 골라 주세요.'));
+    assert.equal(image.button('표지판 촬영').props.disabled, false); assert.equal(image.button('갤러리 선택').props.disabled, false); image.unmount();
+    for (const code of ['STATION_NOT_FOUND', 'VALIDATION_ERROR']) {
+        const r = await directionScreen125(); await r.press('표지판 촬영');
+        r.respond(failure125(code)); view = await r.press('AI로 확인하기');
+        assert.equal(alertText125(view), SERVER_ERROR_TEXT125[code]); assert.equal(photoUri125(view), null); assert.equal(deletedCount125(r), 1);
+        assert.equal(r.button('다시 시도'), null); assert.equal(r.button('표지판 촬영'), null);
+        await r.press('경로 다시 선택'); assert.deepEqual(r.routes, ['/route-search']); r.unmount();
+    }
+    const auth = await directionScreen125(); let authFailures = 0;
+    auth.load('src/services/api/client.ts').setAuthFailureHandler(() => { authFailures++; });
+    await auth.press('표지판 촬영'); auth.respond(failure125('TOKEN_INVALID')); view = await auth.press('AI로 확인하기');
+    assert.equal(authFailures, 1); assert.equal(alertText125(view), null); assert.equal(photoUri125(view), null); assert.equal(deletedCount125(auth), 1);
+    assert.equal(auth.alerts.length, 0); assert.ok(texts125(view).includes('표지판을 찍어 방향을 확인해요')); auth.unmount();
+});
+
+test('125 결과 3종은 제목·색·아이콘이 다르고 읽은 값·내 경로 값을 나란히, null은 읽지 못했어요로 보여주며 사진을 정리해요', async () => {
+    const looks = {};
+    for (const result of ['CORRECT', 'WRONG', 'RETAKE']) {
+        const r = await directionScreen125(); await r.press('표지판 촬영');
+        const recognized = result === 'RETAKE' ? { stationName: null, lineName: null, headsign: null }
+            : { stationName: '강남', lineName: '2호선', headsign: result === 'CORRECT' ? '사당 방면' : '성수 방면' };
+        r.respond(async () => jsonResponse({ success: true, data: { ...directionData114(result), recognized, message: `서버 안내 ${result}` } }));
+        const view = deep125(await r.press('AI로 확인하기'));
+        assert.equal(photoUri125(view), null, `${result}: 사진 정리`); assert.equal(deletedCount125(r), 1);
+        const title = findAll125(view, e => e.type === 'Text' && e.props.style?.some?.(s => s?.fontSize === 19)).map(e => ({ text: textOf(e), color: e.props.style[1].color }))[0];
+        const icon = findAll125(view, e => e.type === 'Ionicons' && e.props.size === 22)[0].props.name;
+        looks[result] = { ...title, icon };
+        assert.ok(texts125(view).includes(`서버 안내 ${result}`), `${result}: 서버 message`);
+        const cellViews = findAll125(view, e => e.type === 'View' && e.props.style?.width === '50%');
+        const cells = cellViews.map(cell => findAll125(cell, e => e.type === 'Text').map(textOf));
+        const read = value => value ?? '읽지 못했어요';
+        assert.deepEqual(cells, [
+            ['읽은 역 이름', recognized.stationName ? '강남역' : read(null)], ['내 경로 역 이름', '강남역'],
+            ['읽은 호선', read(recognized.lineName)], ['내 경로 호선', '2호선'],
+            ['읽은 방면', read(recognized.headsign)], ['내 경로 방면', '사당 방면'],
+        ], result);
+        const headsignCell = findAll125(cellViews[4], e => e.type === 'Text')[1];
+        const color = Object.assign({}, ...headsignCell.props.style.filter(Boolean)).color;
+        assert.equal(color, { CORRECT: '#12a77a', WRONG: '#e5484d', RETAKE: '#6b7488' }[result], `${result}: 방면 비교 색`);
+        assert.equal(headsignCell.props.numberOfLines, undefined, '값은 자르지 않아요');
+        assert.equal(r.button('표지판 촬영').props.disabled, false); assert.equal(!!r.button('경로 안내로 돌아가기'), true);
+        r.unmount();
+    }
+    assert.deepEqual(looks, {
+        CORRECT: { text: '올바른 방향이에요', color: '#12a77a', icon: 'checkmark-circle' },
+        WRONG: { text: '경로와 다른 표지판이에요', color: '#e5484d', icon: 'close-circle' },
+        RETAKE: { text: '다시 촬영해 주세요', color: '#b7791f', icon: 'camera-reverse-outline' },
+    });
+});
+
+test('125 유지하던 사진은 화면을 떠나면 정리되고, 요청 중 떠나면 응답 뒤 정리하며 늦은 응답은 나타나지 않아요', async () => {
+    const idle = await directionScreen125(); await idle.press('표지판 촬영');
+    idle.respond(failure125('NETWORK_ERROR')); await idle.press('AI로 확인하기'); assert.equal(deletedCount125(idle), 0);
+    idle.blur(); assert.equal(deletedCount125(idle), 1, '떠나면 유지하던 임시 파일 정리');
+    idle.focus(); let view = idle.render(); assert.equal(photoUri125(view), null); assert.equal(alertText125(view), null); idle.unmount();
+    for (const late of ['success', 'AI_UNAVAILABLE']) {
+        const r = await directionScreen125(); await r.press('표지판 촬영');
+        r.respond(failure125('AI_UNAVAILABLE')); await r.press('AI로 확인하기');
+        const finish = r.hold(); r.button('다시 시도').props.onPress(); await settle();
+        r.blur(); assert.equal(deletedCount125(r), 0, '요청 중에는 지우지 않아요');
+        finish(late === 'success' ? jsonResponse({ success: true, data: directionData114() }) : await failure125(late)()); await r.pump();
+        assert.equal(deletedCount125(r), 1, `${late}: 요청이 끝난 뒤 정리`);
+        r.focus(); view = r.render();
+        assert.equal(texts125(view).includes('올바른 방향이에요'), false); assert.equal(alertText125(view), null); assert.equal(photoUri125(view), null);
+        assert.equal(r.button('표지판 촬영').props.disabled, false); r.unmount();
+    }
+    const gone = await directionScreen125(); await gone.press('표지판 촬영');
+    gone.respond(failure125('AI_UNAVAILABLE')); await gone.press('AI로 확인하기'); gone.unmount();
+    assert.equal(deletedCount125(gone), 1, '언마운트 때 유지하던 임시 파일 정리');
+});
+
+test('125 계정이 바뀌면 재시도 응답을 버리고 유지하던 사진으로 다시 보내지 않아요', async () => {
+    const r = await directionScreen125(); await r.press('표지판 촬영');
+    r.respond(failure125('AI_UNAVAILABLE')); await r.press('AI로 확인하기');
+    const finish = r.hold(); r.button('다시 시도').props.onPress(); await settle();
+    await r.load('src/services/auth.ts').clearLocalSession();
+    finish(jsonResponse({ success: true, data: directionData114() })); let view = await r.pump();
+    assert.equal(texts125(view).includes('올바른 방향이에요'), false); assert.equal(alertText125(view), null); assert.equal(photoUri125(view), null);
+    assert.equal(deletedCount125(r), 1); assert.equal(r.button('표지판 촬영').props.disabled, false, '처리 중 잠금 해제'); r.unmount();
+    const kept = await directionScreen125(); await kept.press('표지판 촬영');
+    kept.respond(failure125('NETWORK_ERROR')); await kept.press('AI로 확인하기'); const calls = kept.calls;
+    await kept.load('src/services/auth.ts').clearLocalSession();
+    view = await kept.press('다시 시도');
+    assert.equal(kept.calls, calls, '이전 계정의 사진은 보내지 않아요'); assert.equal(photoUri125(view), null); assert.equal(deletedCount125(kept), 1); kept.unmount();
+});
+
+test('125 경로 정보가 없으면 안내와 경로 검색 버튼, 있으면 역·호선·방면 요약을 보여주고 보내는 route는 그대로예요', async () => {
+    for (const params of [{}, { stationId: '105', lineId: '2' }, { stationId: '0', lineId: '2', headsign: '사당 방면' }, { stationId: '105', lineId: '2', headsign: '  ' }]) {
+        const r = await directionScreen125(params); const view = r.render();
+        assert.ok(texts125(view).includes('확인할 경로가 없어요')); assert.ok(texts125(view).includes('방향을 확인할 경로를 먼저 선택해 주세요.'));
+        for (const label of ['표지판 촬영', '갤러리 선택', 'AI로 확인하기']) assert.equal(r.button(label), null);
+        await r.press('경로 검색'); assert.deepEqual(r.routes, ['/route-search']); r.unmount();
+    }
+    const full = await directionScreen125({ stationId: '105', stationName: '강남', lineId: '2', lineName: '2호선', headsign: '사당 방면', direction: 'INNER' });
+    // 내 경로 칩: '내 경로' 글자, 노선 배지 숫자, 요약 순서예요.
+    const chipText = view => { const texts = texts125(view); assert.ok(texts.includes('내 경로')); assert.equal(texts[texts.indexOf('내 경로') + 1], '2'); return texts[texts.indexOf('내 경로') + 2]; };
+    assert.equal(chipText(full.render()), '강남역 · 2호선 사당 방면');
+    await full.press('표지판 촬영'); full.respond(async () => jsonResponse({ success: true, data: directionData114() })); await full.press('AI로 확인하기');
+    assert.deepEqual(full.sent[0].route, { stationId: 105, lineId: 2, headsign: '사당 방면', direction: 'INNER' }); full.unmount();
+    const partial = await directionScreen125({ stationId: '105', lineId: '2', headsign: '사당 방면' });
+    assert.equal(chipText(partial.render()), '사당 방면'); partial.unmount();
+});
+
+/*
+ * 이 검사는 #125 에서 서버 모드 화면을 고치는 동안 mock 화면(트리·실제 적용 스타일·동작)이 바뀌지 않았음을
+ * 확인하려고 넣었어요. mock 화면이나 공통 부품(ActionButton·StatusTitle·Cell·styles 등)을 일부러 바꿀 때는
+ * 아래 명령으로 기준 파일을 갱신하고, 바뀐 단계가 의도한 것인지 확인한 뒤 함께 커밋하세요.
+ *   UPDATE_FIXTURES=1 node scripts/verify-api-client.cjs
+ * 평소 실행에서는 기준 파일을 쓰지 않고 비교만 해요.
+ */
+const MOCK_FIXTURE125 = path.join(root, 'scripts/fixtures/ai-direction-mock-125.json');
+const MOCK_FIXTURE_UPDATE125 = 'UPDATE_FIXTURES=1 node scripts/verify-api-client.cjs';
+test('125 mock 모드 화면은 #125 이전과 같은 트리·스타일·동작이에요', async () => {
+    const crypto = require('node:crypto');
+    const actual = Object.fromEntries(Object.entries(await mockDirectionSnapshots125())
+        .map(([key, value]) => [key, crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex')]));
+    if (process.env.UPDATE_FIXTURES === '1') {
+        fs.writeFileSync(MOCK_FIXTURE125, JSON.stringify({
+            note: 'mock 화면 단계별 트리의 sha256. scripts/verify-api-client.cjs 의 serialize125 로 만들고 UPDATE_FIXTURES=1 로 갱신해요.',
+            snapshots: actual,
+        }, null, 1) + '\n');
+        return;
+    }
+    const expected = JSON.parse(fs.readFileSync(MOCK_FIXTURE125, 'utf8')).snapshots;
+    const changed = Object.keys(actual).filter(key => key in expected && actual[key] !== expected[key]);
+    const added = Object.keys(actual).filter(key => !(key in expected));
+    const removed = Object.keys(expected).filter(key => !(key in actual));
+    if (changed.length || added.length || removed.length) {
+        assert.fail([
+            `mock 화면이 기준(${path.relative(root, MOCK_FIXTURE125)})과 달라졌어요.`,
+            ...(changed.length ? [`  달라진 단계 ${changed.length}개: ${changed.join(', ')}`] : []),
+            ...(added.length ? [`  새로 생긴 단계: ${added.join(', ')}`] : []),
+            ...(removed.length ? [`  없어진 단계: ${removed.join(', ')}`] : []),
+            `일부러 바꾼 거라면 기준 파일 다시 만들기: ${MOCK_FIXTURE_UPDATE125}`,
+        ].join('\n'));
+    }
+});

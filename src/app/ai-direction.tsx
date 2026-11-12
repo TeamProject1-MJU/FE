@@ -82,22 +82,62 @@ const SERVER_ERROR_TEXT = {
     AI_QUOTA_EXCEEDED: '분석 요청이 많아요. 잠시 후 다시 시도해 주세요.',
 };
 
+/** 같은 사진으로 다시 보낼 수 있는 오류: 사진과 임시 파일을 화면이 열려 있는 동안 유지해요 (#125) */
+const RETRYABLE_ERRORS: readonly DirectionErrorCode[] = ['AI_UNAVAILABLE', 'AI_QUOTA_EXCEEDED', 'NETWORK_ERROR', 'UNKNOWN_ERROR'];
+/** 경로를 다시 골라야 하는 오류 */
+const ROUTE_ERRORS: readonly DirectionErrorCode[] = ['STATION_NOT_FOUND', 'VALIDATION_ERROR'];
+
+type ResultLook = { icon: IconName; color: string; title: string; card: 'guideCardOk' | 'guideCardBad' | 'guideCardRetake'; badgeIcon: IconName };
+const RESULT_LOOK: Record<DirectionCheckResponse['result'], ResultLook> = {
+    CORRECT: { icon: 'checkmark-circle', color: MINT_DEEP, title: '올바른 방향이에요', card: 'guideCardOk', badgeIcon: 'arrow-forward' },
+    WRONG: { icon: 'close-circle', color: RED, title: '경로와 다른 표지판이에요', card: 'guideCardBad', badgeIcon: 'alert' },
+    RETAKE: { icon: 'camera-reverse-outline', color: AMBER, title: '다시 촬영해 주세요', card: 'guideCardRetake', badgeIcon: 'camera' },
+};
+
+function errorLook(code: DirectionErrorCode): { icon: IconName; color: string; title: string } {
+    if (code === 'IMAGE_INVALID') return { icon: 'image-outline', color: RED, title: '이 사진은 분석할 수 없어요' };
+    if (ROUTE_ERRORS.includes(code)) return { icon: 'map-outline', color: RED, title: '경로를 확인하지 못했어요' };
+    return { icon: code === 'NETWORK_ERROR' ? 'cloud-offline-outline' : 'hourglass-outline', color: AMBER, title: '분석하지 못했어요' };
+}
+
+const COMPARE_FIELDS = [
+    { key: 'stationName', label: '역 이름' },
+    { key: 'lineName', label: '호선' },
+    { key: 'headsign', label: '방면' },
+] as const;
+
+/** 표시 비교용: 띄어쓰기와 끝의 '역'·'방면'은 무시해요. */
+const sameSign = (a: string, b: string) => {
+    const normalize = (value: string) => value.replace(/\s+/g, '').replace(/(역|방면)$/, '');
+    return normalize(a) === normalize(b);
+};
+
+type ServerStage = 'route' | 'picking' | 'analyzing' | 'result' | 'error' | 'photo' | 'idle';
+
 function ServerDirectionScreen() {
     const insets = useSafeAreaInsets();
-    const params = useLocalSearchParams<{ stationId?: string; lineId?: string; headsign?: string; direction?: string }>();
+    const params = useLocalSearchParams<{ stationId?: string; stationName?: string; lineId?: string; lineName?: string; headsign?: string; direction?: string }>();
     const validRoute = typeof params.stationId === 'string' && Number.isSafeInteger(Number(params.stationId)) && Number(params.stationId) > 0 &&
         typeof params.lineId === 'string' && Number.isSafeInteger(Number(params.lineId)) && Number(params.lineId) > 0 &&
         typeof params.headsign === 'string' && !!params.headsign.trim();
     const route: DirectionCheckRoute = { stationId: Number(params.stationId), lineId: Number(params.lineId), headsign: typeof params.headsign === 'string' ? params.headsign : '',
         ...(['UP', 'DOWN', 'INNER', 'OUTER', 'LOOP'].includes(params.direction ?? '') ? { direction: params.direction as DirectionCode } : {}) };
+    // 화면 표시용 값이에요. 서버로 보내는 route 에는 넣지 않아요.
+    const shown = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
+    const lineName = shown(params.lineName);
+    const line = { id: route.lineId, name: lineName || `${route.lineId}호선`, color: LINE_COLORS[route.lineId] ?? null };
+    const routeSummary = [formatStationName(shown(params.stationName)), [lineName, shown(params.headsign)].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
+
     const [photo, setPhoto] = useState<DirectionPhoto | null>(null);
     const [data, setData] = useState<DirectionCheckResponse | null>(null);
     const [error, setError] = useState<DirectionErrorCode | null>(null);
-    const [busy, setBusy] = useState(false);
+    const [busy, setBusy] = useState<'pick' | 'analyze' | null>(null);
     const active = useRef(false);
     const requestId = useRef(0);
     const inFlight = useRef(false);
     const temporary = useRef(new Set<string>());
+    /** 사진을 고른 계정 세대. 계정이 바뀌면 유지하던 사진으로 다시 보내지 않아요. */
+    const photoGeneration = useRef(-1);
     const clean = useCallback(() => {
         for (const uri of temporary.current) {
             try { const file = new File(uri); if (file.exists) file.delete(); temporary.current.delete(uri); } catch { /* Retry cleanup at the next lifecycle boundary. */ }
@@ -105,13 +145,19 @@ function ServerDirectionScreen() {
     }, []);
     useFocusEffect(useCallback(() => {
         active.current = true;
-        setBusy(false); setPhoto(null); setData(null); setError(null);
+        setBusy(null); setPhoto(null); setData(null); setError(null);
+        // 화면을 떠나면 유지하던 사진의 임시 파일도 지워요. 요청 중이면 그 요청이 끝날 때 지워요.
         return () => { active.current = false; requestId.current++; if (!inFlight.current) clean(); };
     }, [clean]));
     useEffect(() => () => { if (!inFlight.current) clean(); }, [clean]);
+    const goBack = () => {
+        if (router.canGoBack()) router.back();
+        else router.replace('/home');
+    };
     const pick = async (camera: boolean) => {
         if (inFlight.current || !validRoute) return;
-        inFlight.current = true; setBusy(true); setError(null); setData(null); setPhoto(null); clean();
+        // 새 사진을 고르면 유지하던 사진과 임시 파일을 먼저 정리해요.
+        inFlight.current = true; setBusy('pick'); setError(null); setData(null); setPhoto(null); clean();
         const id = ++requestId.current;
         const generation = getSessionGeneration();
         const current = () => active.current && id === requestId.current && generation === getSessionGeneration();
@@ -147,6 +193,7 @@ function ServerDirectionScreen() {
                 const size = blob ? blob.size : new File(output.uri).size;
                 if (size > 0 && size <= MAX_IMAGE_BYTES) {
                     if (!current()) return;
+                    photoGeneration.current = generation;
                     setPhoto({ uri: output.uri, mimeType: 'image/jpeg', fileName: 'direction.jpg', ...(blob ? { file: blob } : {}) });
                     return;
                 }
@@ -156,64 +203,271 @@ function ServerDirectionScreen() {
             if (current()) { setError('IMAGE_INVALID'); clean(); }
         } finally {
             inFlight.current = false;
-            if (current()) setBusy(false);
+            if (current()) setBusy(null);
             else clean();
         }
     };
+    /** 처음 확인과 '다시 시도' 모두 지금 들고 있는 같은 사진으로 보내요. */
     const analyze = async () => {
         if (!photo || !validRoute || inFlight.current) return;
-        inFlight.current = true; setBusy(true); setError(null);
+        if (photoGeneration.current !== getSessionGeneration()) { clean(); setPhoto(null); setError(null); return; }
+        inFlight.current = true; setBusy('analyze'); setError(null); setData(null);
         const id = ++requestId.current;
         const generation = getSessionGeneration();
-        const current = () => active.current && id === requestId.current && generation === getSessionGeneration();
+        const mounted = () => active.current && id === requestId.current;
+        const current = () => mounted() && generation === getSessionGeneration();
+        let keep = false;
         try {
             const response = await checkDirection(photo, route);
             if (current()) setData(response);
         } catch (failure) {
-            if (current() && !isAuthError(failure)) setError(failure instanceof DirectionCheckError ? failure.code : 'UNKNOWN_ERROR');
+            if (current() && !isAuthError(failure)) {
+                const code = failure instanceof DirectionCheckError ? failure.code : 'UNKNOWN_ERROR';
+                setError(code);
+                keep = RETRYABLE_ERRORS.includes(code);
+            }
         } finally {
             inFlight.current = false;
-            clean();
-            if (current()) { setBusy(false); setPhoto(null); }
+            // 결과·사진 오류·경로 오류·인증 오류, 화면 이탈·계정 전환 뒤에는 사진과 임시 파일을 정리해요.
+            if (!keep) clean();
+            if (mounted()) { setBusy(null); if (!keep) setPhoto(null); }
         }
     };
-    return <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-        <ScrollView contentContainerStyle={{ padding: 20, gap: 18 }}>
-            <ServerButton label="닫기" onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/home'); }} />
-            <Text style={styles.panelTitle}>AI 표지판 방향 확인</Text>
-            {!validRoute ? <>
-                <Text>방향을 확인할 경로를 먼저 선택해 주세요.</Text>
-                <ServerButton label="경로 검색" onPress={() => router.replace('/route-search')} />
-            </> : <>
-                <Text>{route.headsign} · 사진은 분석에만 사용해요.</Text>
-                {photo && <Image source={{ uri: photo.uri }} style={{ width: '100%', height: 240 }} resizeMode="contain" />}
-                {busy && <><ActivityIndicator /><Text>사진을 준비하거나 분석하고 있어요. 잠시 기다려 주세요.</Text></>}
-                <View style={styles.buttonRow}>
-                    <ServerButton label="표지판 촬영" disabled={busy} onPress={() => { void pick(true); }} />
-                    <ServerButton label="갤러리 선택" disabled={busy} onPress={() => { void pick(false); }} />
-                </View>
-                {photo && <ServerButton label="AI로 확인하기" disabled={busy} onPress={() => { void analyze(); }} />}
-                {error && <Text accessibilityRole="alert">{SERVER_ERROR_TEXT[error]}</Text>}
-                {(error === 'STATION_NOT_FOUND' || error === 'VALIDATION_ERROR') && <ServerButton label="경로 다시 선택" disabled={busy} onPress={() => router.replace('/route-search')} />}
-                {data && <>
-                    <Text style={styles.panelTitle}>{data.result === 'CORRECT' ? '올바른 방향이에요' : data.result === 'WRONG' ? '경로와 다른 표지판이에요' : '다시 촬영해 주세요'}</Text>
-                    <Text>{data.message}</Text>
-                    <View style={styles.buttonRow}>
-                        {(['recognized', 'expected'] as const).map(key => <View key={key} style={styles.flex}>
-                            <Text>{key === 'recognized' ? '읽은 표지판' : '기대한 경로'}</Text>
-                            {(['stationName', 'lineName', 'headsign'] as const).map(field => <Text key={field}>{data[key][field] ?? '읽지 못했어요'}</Text>)}
-                        </View>)}
+
+    const stage: ServerStage = !validRoute ? 'route' : busy === 'analyze' ? 'analyzing' : busy === 'pick' ? 'picking'
+        : data ? 'result' : error ? 'error' : photo ? 'photo' : 'idle';
+    const locked = busy !== null;
+    const pickButtons = (primary: boolean) => (
+        <View style={styles.buttonRow}>
+            <ServerButton icon="camera" label="표지판 촬영" variant={primary ? 'fill' : 'outline'} disabled={locked} onPress={() => { void pick(true); }} />
+            <ServerButton icon="image-outline" label="갤러리 선택" variant="outline" disabled={locked} onPress={() => { void pick(false); }} />
+        </View>
+    );
+    const guideText = stage === 'route' ? '경로를 먼저 선택해 주세요'
+        : stage === 'analyzing' ? 'AI가 표지판을 읽고 있어요'
+            : stage === 'picking' ? '사진을 준비하고 있어요'
+                : stage === 'result' && data ? RESULT_LOOK[data.result].title
+                    : photo ? '선택한 사진이에요' : '표지판이 네모 안에 들어오게 찍어 주세요';
+
+    return (
+        <View style={styles.container}>
+            <StatusBar style="light" />
+
+            {/* 헤더 (mock 화면과 같은 모양) */}
+            <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
+                <Pressable style={styles.headerButton} onPress={goBack} accessibilityRole="button" accessibilityLabel="닫기">
+                    <Ionicons name="close" size={24} color={WHITE} />
+                </Pressable>
+                <Text style={styles.headerTitle}>AI 방향 안내</Text>
+                <View style={styles.headerButton} />
+            </View>
+
+            {/* 작은 화면·큰 글꼴에서도 잘리지 않게 화면 전체를 스크롤해요. */}
+            <ScrollView style={styles.flex} contentContainerStyle={styles.serverScroll} bounces={false}>
+                {validRoute && (
+                    <View style={styles.routeChip}>
+                        <Text style={styles.routeChipLabel}>내 경로</Text>
+                        <LineBadge line={line} size={18} />
+                        <Text style={styles.routeChipText}>{routeSummary}</Text>
                     </View>
-                </>}
-            </>}
-        </ScrollView>
-    </View>;
+                )}
+
+                {/* 사진 영역 */}
+                <View style={styles.serverCamera}>
+                    <View style={styles.frame}>
+                        {photo ? (
+                            <Image source={{ uri: photo.uri }} style={styles.serverPhoto} resizeMode="contain" accessibilityLabel="선택한 표지판 사진" />
+                        ) : stage === 'result' && data ? (
+                            <Ionicons name={RESULT_LOOK[data.result].icon} size={58} color={RESULT_LOOK[data.result].color} />
+                        ) : (
+                            <Ionicons name={stage === 'route' ? 'map-outline' : 'scan-outline'} size={54} color="rgba(255,255,255,0.35)" />
+                        )}
+                        <Corner position="topLeft" />
+                        <Corner position="topRight" />
+                        <Corner position="bottomLeft" />
+                        <Corner position="bottomRight" />
+                        {stage === 'analyzing' && <ScanLine />}
+                    </View>
+                    <View style={[styles.guide, styles.serverGuide]}>
+                        <Ionicons name="scan-circle-outline" size={16} color={WHITE} />
+                        <Text style={[styles.guideText, styles.shrink]}>{guideText}</Text>
+                    </View>
+                </View>
+
+                {/* 아래 패널 */}
+                <View style={[styles.serverPanel, { paddingBottom: insets.bottom + 18 }]}>
+                    {stage === 'route' && (
+                        <>
+                            <StatusTitle icon="map-outline" color={NAVY} title="확인할 경로가 없어요" wrap />
+                            <Text style={styles.panelText}>방향을 확인할 경로를 먼저 선택해 주세요.</Text>
+                            <View style={styles.buttonRow}>
+                                <ServerButton icon="search" label="경로 검색" onPress={() => router.replace('/route-search')} />
+                            </View>
+                        </>
+                    )}
+
+                    {stage === 'idle' && (
+                        <>
+                            <Text style={styles.panelTitle}>표지판을 찍어 방향을 확인해요</Text>
+                            <Text style={styles.panelText}>역 이름·노선·방면이 보이게 찍거나 갤러리에서 고르면 AI가 내 경로와 비교해요.</Text>
+                            {pickButtons(true)}
+                            <PrivacyNote />
+                        </>
+                    )}
+
+                    {(stage === 'picking' || stage === 'analyzing') && (
+                        <View style={styles.analyzing} accessibilityLiveRegion="polite">
+                            <ActivityIndicator color={stage === 'analyzing' ? AI : NAVY} />
+                            <Text style={[styles.panelTitle, styles.center]}>
+                                {stage === 'analyzing' ? 'AI가 표지판을 읽고 있어요' : '사진을 준비하고 있어요'}
+                            </Text>
+                            <Text style={[styles.panelText, styles.center]}>
+                                {stage === 'analyzing'
+                                    ? '역 이름·노선·방면을 내 경로와 비교하는 중이에요. 최대 30초 걸릴 수 있어요.'
+                                    : '분석하기 좋은 크기로 사진을 줄이고 있어요. 잠시 기다려 주세요.'}
+                            </Text>
+                        </View>
+                    )}
+                    {stage === 'analyzing' && (
+                        <View style={styles.buttonRow}>
+                            <ServerButton icon="sparkles" label="AI로 확인하기" tone="ai" disabled onPress={() => { void analyze(); }} />
+                        </View>
+                    )}
+                    {stage === 'picking' && pickButtons(true)}
+
+                    {stage === 'photo' && (
+                        <>
+                            <Text style={styles.panelTitle}>이 사진으로 확인할까요?</Text>
+                            <Text style={styles.panelText}>사진은 분석에만 쓰고 저장하지 않아요.</Text>
+                            <View style={styles.buttonRow}>
+                                <ServerButton icon="sparkles" label="AI로 확인하기" tone="ai" disabled={locked} onPress={() => { void analyze(); }} />
+                            </View>
+                            <Text style={styles.serverHint}>다른 사진으로 바꾸려면</Text>
+                            {pickButtons(false)}
+                        </>
+                    )}
+
+                    {stage === 'result' && data && (
+                        <>
+                            <ServerResult data={data} />
+                            {data.result === 'CORRECT' && (
+                                <View style={styles.buttonRow}>
+                                    <ServerButton icon="map-outline" label="경로 안내로 돌아가기" disabled={locked} onPress={goBack} />
+                                </View>
+                            )}
+                            <Text style={styles.serverHint}>
+                                {data.result === 'CORRECT' ? '다른 표지판도 확인하려면' : '표지판을 다시 찍거나 다른 사진을 골라 주세요'}
+                            </Text>
+                            {pickButtons(data.result !== 'CORRECT')}
+                            {data.result !== 'CORRECT' && (
+                                <View style={styles.buttonRow}>
+                                    <ServerButton icon="map-outline" label="경로 안내로 돌아가기" variant="outline" disabled={locked} onPress={goBack} />
+                                </View>
+                            )}
+                        </>
+                    )}
+
+                    {stage === 'error' && error && (
+                        <>
+                            <StatusTitle {...errorLook(error)} wrap />
+                            <Text style={styles.message} accessibilityRole="alert">{SERVER_ERROR_TEXT[error]}</Text>
+                            {RETRYABLE_ERRORS.includes(error) && (photo ? (
+                                <>
+                                    <View style={styles.buttonRow}>
+                                        <ServerButton icon="refresh" label="다시 시도" tone="ai" disabled={locked} onPress={() => { void analyze(); }} />
+                                    </View>
+                                    <Text style={styles.serverHint}>같은 사진으로 다시 확인해요. 다른 사진을 골라도 돼요.</Text>
+                                    {pickButtons(false)}
+                                </>
+                            ) : pickButtons(true))}
+                            {error === 'IMAGE_INVALID' && (
+                                <>
+                                    <Text style={styles.serverHint}>표지판이 잘 보이는 다른 사진을 골라 주세요.</Text>
+                                    {pickButtons(true)}
+                                </>
+                            )}
+                            {ROUTE_ERRORS.includes(error) && (
+                                <View style={styles.buttonRow}>
+                                    <ServerButton icon="map-outline" label="경로 다시 선택" disabled={locked} onPress={() => router.replace('/route-search')} />
+                                </View>
+                            )}
+                        </>
+                    )}
+                </View>
+            </ScrollView>
+        </View>
+    );
 }
 
-function ServerButton({ label, onPress, disabled = false }: { label: string; onPress: () => void; disabled?: boolean }) {
-    return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.action, { backgroundColor: NAVY, opacity: disabled ? 0.5 : 1 }]}>
-        <Text style={{ color: WHITE }}>{label}</Text>
-    </Pressable>;
+/** 서버 결과: 결과 3종을 제목·색·아이콘으로 구분하고, 읽은 값과 내 경로 값을 나란히 보여줘요. */
+function ServerResult({ data }: { data: DirectionCheckResponse }) {
+    const look = RESULT_LOOK[data.result];
+    return (
+        <View>
+            <View style={[styles.row, styles.wrapRow]}>
+                <StatusTitle icon={look.icon} color={look.color} title={look.title} wrap />
+                <View style={styles.aiChip}>
+                    <Ionicons name="sparkles" size={11} color={AI} />
+                    <Text style={styles.aiChipText}>AI 분석</Text>
+                </View>
+            </View>
+
+            {/* 서버 안내 문구 */}
+            <View style={[styles.guideCard, styles[look.card]]}>
+                <View style={[styles.guideIcon, { backgroundColor: look.color }]}>
+                    <Ionicons name={look.badgeIcon} size={20} color={WHITE} />
+                </View>
+                <Text style={[styles.message, styles.flex, styles.serverMessage]}>{data.message}</Text>
+            </View>
+
+            {/* 읽은 표지판 vs 내 경로 */}
+            <View style={styles.grid}>
+                {COMPARE_FIELDS.map(({ key, label }) => {
+                    const read = data.recognized[key];
+                    const want = data.expected[key];
+                    const shownRead = key === 'stationName' && read ? formatStationName(read) : read;
+                    const shownWant = key === 'stationName' && want ? formatStationName(want) : want;
+                    const differs = read != null && want != null && !sameSign(read, want);
+                    return [
+                        <Cell key={`${key}-read`} label={`읽은 ${label}`} value={shownRead ?? '읽지 못했어요'} muted={read == null}
+                              bad={data.result === 'WRONG' && differs} good={data.result === 'CORRECT' && read != null && !differs} wrap />,
+                        <Cell key={`${key}-want`} label={`내 경로 ${label}`} value={shownWant ?? '정보 없음'} muted={want == null} wrap />,
+                    ];
+                })}
+            </View>
+
+            {data.result === 'RETAKE' && (
+                <View style={styles.tips}>
+                    {['표지판 전체가 네모 안에 들어오게', '글자가 흐리지 않게 가까이에서', '빛 반사가 없는 각도로'].map(tip => (
+                        <View key={tip} style={styles.tipRow}>
+                            <Ionicons name="checkmark" size={15} color={MINT_DEEP} />
+                            <Text style={[styles.tipText, styles.shrink]}>{tip}</Text>
+                        </View>
+                    ))}
+                </View>
+            )}
+        </View>
+    );
+}
+
+function PrivacyNote() {
+    return (
+        <View style={styles.serverNote}>
+            <Ionicons name="shield-checkmark-outline" size={16} color={SECONDARY} />
+            <Text style={styles.serverNoteText}>사진은 분석에만 쓰고 저장하지 않아요.</Text>
+        </View>
+    );
+}
+
+function ServerButton({ icon, label, onPress, disabled = false, variant, tone }: {
+    icon: IconName;
+    label: string;
+    onPress: () => void;
+    disabled?: boolean;
+    variant?: 'fill' | 'outline';
+    tone?: 'navy' | 'ai';
+}) {
+    return <ActionButton icon={icon} label={label} onPress={onPress} variant={variant} tone={tone} disabled={disabled} fluid />;
 }
 
 function MockDirectionScreen() {
@@ -571,20 +825,22 @@ function ResultPanel({
 
 /* ---------- 작은 부품 ---------- */
 
-function StatusTitle({ icon, color, title }: { icon: IconName; color: string; title: string }) {
+/** wrap: 서버 화면에서 큰 글꼴일 때 제목이 줄바꿈되게 해요 (mock 화면은 쓰지 않아요). */
+function StatusTitle({ icon, color, title, wrap }: { icon: IconName; color: string; title: string; wrap?: boolean }) {
     return (
-        <View style={styles.statusRow}>
+        <View style={[styles.statusRow, wrap && styles.shrink]}>
             <Ionicons name={icon} size={22} color={color} />
-            <Text style={[styles.statusTitle, { color }]}>{title}</Text>
+            <Text style={[styles.statusTitle, { color }, wrap && styles.shrink]}>{title}</Text>
         </View>
     );
 }
 
-function Cell({ label, value, good, bad }: { label: string; value: string; good?: boolean; bad?: boolean }) {
+/** wrap: 값을 자르지 않고 줄바꿈해요. muted: 값이 없을 때 흐리게 보여줘요. (둘 다 서버 화면 전용) */
+function Cell({ label, value, good, bad, wrap, muted }: { label: string; value: string; good?: boolean; bad?: boolean; wrap?: boolean; muted?: boolean }) {
     return (
         <View style={styles.cell}>
             <Text style={styles.cellLabel}>{label}</Text>
-            <Text style={[styles.cellValue, good && { color: MINT_DEEP }, bad && { color: RED }]} numberOfLines={1}>
+            <Text style={[styles.cellValue, good && { color: MINT_DEEP }, bad && { color: RED }, muted && styles.cellMuted]} numberOfLines={wrap ? undefined : 1}>
                 {value}
             </Text>
         </View>
@@ -597,12 +853,18 @@ function ActionButton({
                           onPress,
                           variant = 'fill',
                           tone = 'navy',
+                          disabled,
+                          fluid,
                       }: {
     icon: IconName;
     label: string;
     onPress: () => void;
     variant?: 'fill' | 'outline';
     tone?: 'navy' | 'ai';
+    /** 서버 화면 전용: 처리 중 버튼 잠금 */
+    disabled?: boolean;
+    /** 서버 화면 전용: 큰 글꼴에서 높이가 늘어나고 글자가 줄바꿈돼요. */
+    fluid?: boolean;
 }) {
     const fill = variant === 'fill';
     const color = tone === 'ai' ? AI : NAVY;
@@ -612,12 +874,16 @@ function ActionButton({
                 styles.action,
                 fill ? { backgroundColor: color } : { borderWidth: 1.5, borderColor: color, backgroundColor: WHITE },
                 pressed && styles.pressed,
+                fluid && styles.actionFluid,
+                disabled && styles.disabled,
             ]}
             onPress={onPress}
+            disabled={disabled}
             accessibilityRole="button"
+            accessibilityState={disabled ? { disabled: true } : undefined}
         >
             <Ionicons name={icon} size={18} color={fill ? WHITE : color} />
-            <Text style={[styles.actionText, { color: fill ? WHITE : color }]}>{label}</Text>
+            <Text style={[styles.actionText, { color: fill ? WHITE : color }, fluid && styles.actionTextFluid]}>{label}</Text>
         </Pressable>
     );
 }
@@ -1150,5 +1416,109 @@ const styles = StyleSheet.create({
 
     pressed: {
         opacity: 0.72,
+    },
+
+    /* ---------- 서버 모드 화면 전용 (#125) ---------- */
+
+    shrink: {
+        flexShrink: 1,
+    },
+
+    center: {
+        textAlign: 'center',
+    },
+
+    wrapRow: {
+        flexWrap: 'wrap',
+        justifyContent: 'space-between',
+        gap: 6,
+    },
+
+    disabled: {
+        opacity: 0.5,
+    },
+
+    actionFluid: {
+        height: 'auto',
+        minHeight: 50,
+        paddingVertical: 12,
+        paddingHorizontal: 10,
+    },
+
+    actionTextFluid: {
+        flexShrink: 1,
+        textAlign: 'center',
+    },
+
+    cellMuted: {
+        color: SECONDARY,
+        fontWeight: '600',
+    },
+
+    serverScroll: {
+        flexGrow: 1,
+    },
+
+    serverCamera: {
+        paddingVertical: 24,
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 16,
+    },
+
+    serverPhoto: {
+        position: 'absolute',
+        top: 6,
+        right: 6,
+        bottom: 6,
+        left: 6,
+        borderRadius: 8,
+    },
+
+    serverGuide: {
+        maxWidth: '90%',
+    },
+
+    serverPanel: {
+        flexGrow: 1,
+        paddingHorizontal: 20,
+        paddingTop: 22,
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
+        backgroundColor: WHITE,
+    },
+
+    serverHint: {
+        marginTop: 16,
+        color: SECONDARY,
+        fontSize: 13,
+        fontWeight: '600',
+        lineHeight: 18,
+    },
+
+    serverMessage: {
+        marginTop: 0,
+    },
+
+    guideCardRetake: {
+        backgroundColor: '#fff6e0',
+    },
+
+    serverNote: {
+        marginTop: 14,
+        padding: 11,
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 7,
+        borderRadius: 11,
+        backgroundColor: BACKGROUND,
+    },
+
+    serverNoteText: {
+        flex: 1,
+        color: SECONDARY,
+        fontSize: 12.5,
+        fontWeight: '600',
+        lineHeight: 17,
     },
 });
