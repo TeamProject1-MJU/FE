@@ -2155,6 +2155,52 @@ test('118 재전송 확인은 화면에 있던 ID·다른 작성자·다른 본�
     assert.equal(posts, 2); assert.equal(r.render().pending.length, 0); r.unmount();
 });
 
+test('118 타임아웃 뒤 새로고침·화면 복귀로 저장된 메시지가 합쳐져도 재전송 POST를 추가하지 않아요', async () => {
+    for (const returnToScreen of [false, true]) {
+        const r = chat118Hook(); let saved; let posts = 0;
+        r.context.fetch = async (_url, options) => {
+            if (options.method === 'POST') {
+                posts++;
+                saved = chat118Message({ content: JSON.parse(options.body).content, createdAt: new Date(Date.now() - 3600_000).toISOString() });
+                return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(Error('timeout'))));
+            }
+            return ok({ items: saved ? [saved] : [], hasMore: false, nextCursor: null });
+        };
+        r.render(); await settle(); r.render().setDraft('서버에는 저장됐어요'); r.render().send(); await settle();
+        r.advance(10_000); await settle(); assert.equal(r.render().pending[0].status, 'failed');
+        if (returnToScreen) { r.blur(); r.focus(); await settle(); }
+        else await r.render().reload();
+        assert.equal(r.render().messages[0].id, saved.id);
+        const entry = r.render().pending[0];
+        r.render().retrySend(entry); await settle(); await settle();
+        assert.equal(posts, 1); assert.equal(r.render().pending.length, 0);
+        assert.deepEqual(plain(r.render().messages), [saved]); r.unmount();
+    }
+});
+
+test('118 의도적으로 같은 본문을 두 번 보내면 두 번째 기준의 첫 메시지를 저장 결과로 오인하지 않아요', async () => {
+    const r = chat118Hook(); let posts = 0; const items = [];
+    r.context.fetch = async (_url, options) => {
+        if (options.method === 'POST') {
+            posts++;
+            if (posts === 2) throw TypeError('두 번째 전송 실패: 서버 저장 안 됨');
+            const message = chat118Message({ id: posts === 1 ? ROOM_QUERY_ID : ROOM_QUERY_ID2, content: JSON.parse(options.body).content });
+            items.unshift(message); return ok({ message, aiPending: false });
+        }
+        return ok({ items, hasMore: false, nextCursor: null });
+    };
+    r.render(); await settle();
+    r.render().setDraft('같은 내용을 다시 보냅니다'); r.render().send(); await settle(); await settle();
+    assert.equal(r.render().messages.length, 1); assert.equal(r.render().pending.length, 0);
+    r.render().setDraft('같은 내용을 다시 보냅니다'); r.render().send(); await settle();
+    assert.equal(r.render().pending[0].status, 'failed');
+    await r.render().reload();
+    r.render().retrySend(r.render().pending[0]); await settle(); await settle();
+    assert.equal(posts, 3); assert.equal(r.render().pending.length, 0);
+    assert.equal(r.render().messages.length, 2);
+    assert.equal(new Set(r.render().messages.map(message => message.id)).size, 2); r.unmount();
+});
+
 test('118 AI 재조회는 AI·링크로 닉네임 입장 안내를 무시하고 지정된 실패 안내만 감지해요', async () => {
     for (const failure of ['AI 사용 한도를 초과해 답변하지 못했어요.', 'AI가 답변을 만들지 못했어요. 다시 시도해 주세요.']) {
         const r = chat118Hook(); let items = [];

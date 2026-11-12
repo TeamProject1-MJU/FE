@@ -51,6 +51,7 @@ type Context = {
     hasMore: boolean;
     cursor: string | null;
     sending: Set<string>;
+    sendBaseline: Map<string, Set<string>>;
 };
 
 const initial = (scope: string): State => ({
@@ -239,6 +240,7 @@ export function useRoomChat(roomId: string, mock?: string) {
             hasMore: false,
             cursor: null,
             sending: new Set(),
+            sendBaseline: new Map(),
         };
 
         context.current = ctx;
@@ -307,6 +309,7 @@ export function useRoomChat(roomId: string, mock?: string) {
 
         return () => {
             ctx.active = false;
+            ctx.sendBaseline.clear();
             ctx.stopPolling();
             unsubscribe();
         };
@@ -321,6 +324,7 @@ export function useRoomChat(roomId: string, mock?: string) {
                 if (ctx && !isMockMode()) {
                     ctx.actionId++;
                     ctx.focused = false;
+                    ctx.sendBaseline.clear();
                     ctx.stopPolling();
                     update(ctx, previous => ({ ...previous, pending: previous.pending.map(entry => entry.status === 'sending'
                         ? { ...entry, status: 'failed', errorMessage: '전송 결과를 확인하지 못했어요. 다시 시도하면 저장 여부를 먼저 확인해요.' } : entry) }));
@@ -429,19 +433,24 @@ export function useRoomChat(roomId: string, mock?: string) {
         }));
 
         try {
-            // 폰·서버 시계 대신 조회 직전 화면에 없던 ID와 작성자·본문으로 저장 여부를 확인해요.
+            // 최초 POST 전 기준을 유지해 새로고침으로 합쳐진 메시지도 저장된 것으로 확인해요.
             if (!isMockMode() && entry.status === 'failed') {
-                const knownIds = new Set(state.messages.map(message => message.id));
+                // 기준이 유실됐다면 최신 목록의 동일 메시지를 우선 확인해 중복 전송을 피합니다.
+                const knownIds = ctx.sendBaseline.get(entry.clientId) ?? new Set<string>();
                 const latest = await fetchChatMessages(roomId);
                 if (!ctx.valid() || actionId !== ctx.actionId) return;
                 update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, latest.items) }));
                 const saved = latest.items.find(message => !knownIds.has(message.id) && message.senderType === 'USER'
                     && message.senderId === getSession()?.userId && message.content === entry.content);
                 if (saved) {
+                    ctx.sendBaseline.delete(entry.clientId);
                     update(ctx, previous => ({ ...previous, pending: previous.pending.filter(item => item.clientId !== entry.clientId) }));
                     if (saved.content.includes('@링크로')) ctx.poll(saved);
                     return;
                 }
+            }
+            if (!isMockMode() && !ctx.sendBaseline.has(entry.clientId)) {
+                ctx.sendBaseline.set(entry.clientId, new Set(state.messages.map(message => message.id)));
             }
             const result = await sendChatMessage(
                 roomId,
@@ -450,6 +459,7 @@ export function useRoomChat(roomId: string, mock?: string) {
             );
 
             if (!ctx.valid() || actionId !== ctx.actionId) return;
+            ctx.sendBaseline.delete(entry.clientId);
             if (result.aiPending) ctx.poll(result.message);
 
             update(ctx, previous => ({
