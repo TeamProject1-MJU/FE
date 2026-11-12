@@ -28,6 +28,7 @@ import { getSession } from '@/stores/auth-store';
 import { createServerRoom, joinServerRoom, fetchServerInviteCode, leaveServerRoom, setServerSelectedStation, updateServerDeparture, updateServerRoom, fetchServerRoomDetail, fetchServerRoomMembers, fetchServerRooms } from '@/services/room-query';
 import { createServerProposal, deleteServerProposal, fetchServerProposals, voteServerProposal } from '@/services/room-proposals';
 import { assertRoomCacheScope, getRoomCacheScope, readCachedMembers, readCachedRoom, subscribeRoomCacheReset } from '@/services/room-cache';
+import { forgetRoom } from '@/services/realtime';
 import { emitRoomMockChange } from '@/stores/room-mock-events';
 import {
     RoomError,
@@ -1176,7 +1177,7 @@ export async function leaveRoom(
     roomId: string,
     mock?: LeaveRoomMock,
 ): Promise<LeaveRoomResult> {
-    if (!isMockMode()) return leaveServerRoom(roomId);
+    if (!isMockMode()) return leaveServerRoom(roomId).then(result => { forgetRoom(roomId); return result; });
     if (selectedStationInFlight.has(roomId)) {
         throw new RoomError(
             'ROOM_BUSY',
