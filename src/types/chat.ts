@@ -12,8 +12,8 @@ export type ChatMessage = {
     senderType: ChatSenderType;
     /** AI·SYSTEM 메시지는 null */
     senderId: string | null;
-    /** 전송 응답에는 없을 수 있어 멤버 정보로 보완해요. */
-    nickname?: string | null;
+    /** 서버가 저장한 닉네임. AI·SYSTEM은 null */
+    nickname: string | null;
     content: string;
     /** ISO 8601 형식 */
     createdAt: string;
