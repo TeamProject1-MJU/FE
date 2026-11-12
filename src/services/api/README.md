@@ -243,3 +243,20 @@ listRecommendationRuns(roomId); // 이 앱 세션에서 본 실행만, 최근 �
 - 요청 전 `getRoomCacheScope()`로 계정 범위를 잡고 응답 뒤 `assertRoomCacheScope()`로 확인해요. 계정이 바뀐 뒤의 늦은 응답은 `AUTH_REQUIRED`로 버려요. 계정이 바뀌면(`subscribeRoomCacheReset`) 이전 실행 목록도 비워요.
 - 화면은 8.1 요청 중 계산 버튼과 "다시 추천받기"를 막고, 상태가 반영되기 전 연타도 한 번만 보내요.
 - 후보 제안·투표(추천 → 후보 올리기 포함)는 mock 유지, WS 수신 재조회와 새 필드 화면 표시는 범위 밖이에요.
+
+## 홈 "다가오는 약속" (#102, 명세 7.3)
+
+```ts
+import { fetchMyRooms } from '@/services/room';
+import { pickUpcomingRoom, toHomeMeeting, meetingRoomParams } from '@/utils/upcoming-meeting';
+
+const room = pickUpcomingRoom(await fetchMyRooms(), new Date()); // 지나지 않은 가장 가까운 약속, 없으면 null
+const card = room ? toHomeMeeting(room) : null; // 방 이름·약속 시각·약속역(없으면 "약속역 미정")·인원
+```
+
+- 홈 전용 API는 없어요. 서버 모드 홈은 기존 7.3 방 목록(`fetchMyRooms`)만 써요. mock 모드는 `constants/home-mock.ts`의 `HOME_UPCOMING_MEETING`을 그대로 쓰고 서버를 부르지 않아요.
+- `pickUpcomingRoom`: 약속 시각이 없거나 읽을 수 없는 방, 이미 지난 방은 빼고 가장 가까운 방 하나를 골라요(같은 시각이면 목록 순서). 남은 방이 없으면 빈 상태("예정된 약속이 없어요")예요.
+- 카드를 누르면 약속방 목록의 `openRoom`과 같은 params(`roomId`·`roomName`·`appointmentAt`·`maxMembers`)로 방 상세에 가요.
+- 홈에 들어올 때마다 다시 불러오되, 같은 계정에서 이미 보여주던 카드는 로딩으로 되돌리지 않아요. 화면을 떠난 뒤 온 응답과 로그인 세대가 바뀐 뒤 온 응답은 버려요. 결과는 계정(로그인 세대:userId, room-cache 범위와 같은 기준)과 함께 들고 있어서, 계정이 바뀌면 다시 불러오기 전에도 이전 계정의 방을 보여주지 않아요.
+- 로딩은 카드 자리의 불러오는 중 표시, 서버 오류는 "약속을 불러오지 못했어요"와 눌러서 다시 시도예요. 경로 탐색·AI 표지판·약속방 버튼은 그대로 쓸 수 있어요. 인증 오류(`TOKEN_*`·401)는 화면 안내 없이 A-1 흐름에 맡겨요.
+- 홈의 지도 그림(MockMap)은 지도 표시(B-4) 범위라 그대로예요. 도착정보·혼잡도 영역은 홈에 없어서 이번에 추가하지 않았어요.

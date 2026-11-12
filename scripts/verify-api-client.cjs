@@ -3179,3 +3179,209 @@ test('추천 화면(서버): isStale true 만 다시 추천받기 안내, null �
     assert.equal(r.calls.filter(call => call.options.method === 'POST').length, 1);
     r.unmount();
 });
+
+/* ---------- 홈 "다가오는 약속" 서버 연동 (#102) ---------- */
+
+const HOME_DAY = 86_400_000;
+const homeRoom = (id, offsetMs, overrides = {}) => roomQuerySummary({
+    id, name: `방 ${id.slice(0, 4)}`, appointmentAt: offsetMs === null ? null : new Date(Date.now() + offsetMs).toISOString(), ...overrides,
+});
+
+test('다가오는 약속 고르기: 지난 방·시각 없는 방·읽을 수 없는 시각 제외, 가장 가까운 방, 전부 지났으면 null', () => {
+    const { pickUpcomingRoom, toHomeMeeting, meetingRoomParams } = createRuntime().load('src/utils/upcoming-meeting.ts');
+    const { formatAppointmentParam } = createRuntime().load('src/constants/home-mock.ts');
+    const now = new Date('2026-11-12T12:00:00+09:00');
+    const at = iso => roomQuerySummary({ id: iso, appointmentAt: iso });
+    const past = at('2026-11-12T11:59:00+09:00');
+    const soon = at('2026-11-12T12:30:00+09:00');
+    const later = at('2026-11-20T19:00:00+09:00');
+    const exact = at('2026-11-12T12:00:00+09:00');
+    const none = roomQuerySummary({ id: 'none', appointmentAt: null });
+    const broken = roomQuerySummary({ id: 'broken', appointmentAt: '시각 아님' });
+    assert.equal(pickUpcomingRoom([later, past, none, soon, broken], now).id, soon.id);
+    assert.equal(pickUpcomingRoom([later, soon], now).id, soon.id, '목록 순서와 상관없이 가장 가까운 방');
+    assert.equal(pickUpcomingRoom([past, exact, later], now).id, exact.id, '지금 시각과 같으면 아직 지나지 않은 약속');
+    assert.equal(pickUpcomingRoom([past, none, broken], now), null);
+    assert.equal(pickUpcomingRoom([], now), null);
+    const twin = { ...soon, id: 'twin' };
+    assert.equal(pickUpcomingRoom([soon, twin], now).id, soon.id, '같은 시각이면 목록 순서');
+    const card = toHomeMeeting({ ...later, name: '서버 모임', memberCount: 3, maxMembers: 4, selectedStation: roomQueryStation(88001) });
+    assert.deepEqual(plain({ ...card, appointmentAt: card.appointmentAt.toISOString() }), {
+        roomId: later.id, title: '서버 모임', appointmentAt: new Date(later.appointmentAt).toISOString(), stationName: '서버 역 88001', memberCount: 3, maxMembers: 4,
+    });
+    assert.equal(toHomeMeeting(later).stationName, null);
+    assert.deepEqual(plain(meetingRoomParams(card)), { roomId: later.id, roomName: '서버 모임', appointmentAt: formatAppointmentParam(new Date(later.appointmentAt)), maxMembers: '4' });
+});
+
+/** 홈 화면만 구동해요. 실제 React·브라우저 렌더링을 대신하지 않아요. */
+function homeRuntime(env = serverEnv) {
+    const r = createScreenRuntime(env, 'src/app/home.tsx');
+    r.native.ScrollView = 'ScrollView';
+    r.native.Alert = { alert() {} };
+    r.native.useWindowDimensions = () => ({ width: 390, height: 844 });
+    r.external.react.useCallback = (callback, dependencies) => {
+        const ref = r.external.react.useRef(null);
+        if (!ref.current || dependencies.some((value, index) => value !== ref.current.dependencies[index])) ref.current = { callback, dependencies };
+        return ref.current.callback;
+    };
+    let focusCallback;
+    let blur;
+    r.external['expo-router'].useFocusEffect = callback => { focusCallback = callback; r.external.react.useEffect(callback, [callback]); };
+    /** 다른 화면에 갔다가 홈으로 돌아온 것처럼 포커스 효과를 다시 실행해요. */
+    r.refocus = () => { blur?.(); blur = focusCallback(); };
+    r.pushes = [];
+    r.external['expo-router'].router.push = target => { r.pushes.push(target); };
+    if (env === serverEnv) r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_ME, nickname: '서버 나' });
+    r.calls = [];
+    r.respond = handler => { r.context.fetch = async (url, options) => { r.calls.push({ url, options }); return handler(url, options); }; };
+    r.view = () => r.render();
+    return r;
+}
+const homeMeetingCard = view => findElement(view, element => element.props?.accessibilityLabel?.startsWith('다가오는 약속 '));
+
+test('서버 홈: 7.3 방 목록으로 가장 가까운 약속 카드(서버 값)를 보여주고 누르면 openRoom 과 같은 params 예요', async () => {
+    const r = homeRuntime();
+    const format = r.load('src/constants/home-mock.ts');
+    const near = homeRoom('aaaa0000-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 2 * HOME_DAY, { name: '가까운 서버 모임', memberCount: 3, maxMembers: 4, selectedStation: roomQueryStation(88001) });
+    const far = homeRoom('bbbb0000-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 9 * HOME_DAY, { name: '먼 서버 모임' });
+    const past = homeRoom('cccc0000-cccc-4ccc-8ccc-cccccccccccc', -HOME_DAY, { name: '지난 서버 모임' });
+    const none = homeRoom('dddd0000-dddd-4ddd-8ddd-dddddddddddd', null, { name: '시각 없는 모임' });
+    r.respond(async () => ok([far, past, none, near]));
+    let view = r.view();
+    assert.ok(findText(view, '약속을 불러오고 있어요'), '처음에는 카드 자리에 불러오는 중');
+    assert.equal(findText(view, '주말 저녁 모임'), null, '가짜 값 없음');
+    await settle(); view = r.view();
+    assert.deepEqual(r.calls.map(call => [call.options.method, call.url]), [['GET', 'https://example.test/api/v1/rooms']]);
+    const card = homeMeetingCard(view);
+    assert.equal(card.props.accessibilityLabel, '다가오는 약속 가까운 서버 모임');
+    const when = new Date(near.appointmentAt);
+    assert.ok(findText(card, format.formatDday(when)));
+    assert.ok(findText(card, format.formatMonthDay(when)));
+    assert.ok(findText(card, `${format.formatTime(when)} · 서버 역 88001역 · 3/4명`));
+    card.props.onPress();
+    assert.deepEqual(plain(r.pushes), [{ pathname: '/rooms/[roomId]', params: {
+        roomId: near.id, roomName: '가까운 서버 모임', appointmentAt: format.formatAppointmentParam(when), maxMembers: '4',
+    } }]);
+
+    // 약속역이 없으면 기존 문구 "약속역 미정"이에요.
+    r.respond(async () => ok([{ ...near, selectedStation: null }]));
+    r.refocus(); await settle(); view = r.view();
+    assert.ok(findText(homeMeetingCard(view), `${format.formatTime(when)} · 약속역 미정 · 3/4명`));
+    r.unmount();
+});
+
+test('서버 홈: 방 0개·전부 지났거나 시각 없음은 "예정된 약속이 없어요"', async () => {
+    for (const rooms of [[], [homeRoom('aaaa0000-aaaa-4aaa-8aaa-aaaaaaaaaaaa', -HOME_DAY), homeRoom('bbbb0000-bbbb-4bbb-8bbb-bbbbbbbbbbbb', null)]]) {
+        const r = homeRuntime();
+        r.respond(async () => ok(rooms));
+        r.view(); await settle(); const view = r.view();
+        assert.ok(findText(view, '예정된 약속이 없어요'), `${rooms.length}개`);
+        assert.equal(homeMeetingCard(view), null);
+        findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '예정된 약속이 없어요')).props.onPress();
+        assert.deepEqual(plain(r.pushes), ['/rooms']);
+        r.unmount();
+    }
+});
+
+test('서버 홈: 서버 오류는 안내와 다시 시도, 다른 기능 버튼은 그대로, 인증 오류는 안내 없음', async () => {
+    const r = homeRuntime();
+    r.respond(async () => jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR' } }, 500));
+    r.view(); await settle(); let view = r.view();
+    assert.ok(findText(view, '약속을 불러오지 못했어요'));
+    assert.ok(findElement(view, element => element.type === 'Pressable' && element.props.accessibilityLabel === '경로 탐색'));
+    for (const title of ['AI 표지판 방향 확인', '약속방']) {
+        const feature = findElement(view, element => typeof element.type === 'function' && element.props?.title === title);
+        assert.ok(feature, title);
+        feature.props.onPress();
+    }
+    findElement(view, element => element.props?.accessibilityLabel === '경로 탐색').props.onPress();
+    assert.deepEqual(plain(r.pushes), ['/ai-direction', '/rooms', '/route-search']);
+    r.respond(async () => ok([homeRoom('aaaa0000-aaaa-4aaa-8aaa-aaaaaaaaaaaa', HOME_DAY, { name: '다시 불러온 모임' })]));
+    findElement(view, element => element.props?.accessibilityLabel === '다가오는 약속 다시 불러오기').props.onPress();
+    view = r.view();
+    assert.ok(findText(view, '약속을 불러오고 있어요'), '다시 시도 중에는 불러오는 중');
+    await settle(); view = r.view();
+    assert.equal(homeMeetingCard(view).props.accessibilityLabel, '다가오는 약속 다시 불러온 모임');
+    r.unmount();
+
+    for (const response of [fail('TOKEN_INVALID'), fail('TOKEN_EXPIRED')]) {
+        const auth = homeRuntime();
+        auth.respond(async () => response);
+        auth.view(); await settle(); await settle(); const authView = auth.view();
+        assert.equal(findText(authView, '약속을 불러오지 못했어요'), null, '인증 오류는 화면 안내 없음');
+        auth.unmount();
+    }
+});
+
+test('서버 홈: 다시 들어와도 보여주던 카드를 로딩으로 되돌리지 않고, 떠난 뒤 온 응답은 무시해요', async () => {
+    const r = homeRuntime();
+    r.respond(async () => ok([homeRoom('aaaa0000-aaaa-4aaa-8aaa-aaaaaaaaaaaa', HOME_DAY, { name: '처음 모임' })]));
+    r.view(); await settle();
+    let resolveNext;
+    r.respond(() => new Promise(resolve => { resolveNext = resolve; }));
+    r.refocus(); let view = r.view(); await settle();
+    assert.equal(r.calls.length, 2, '들어올 때마다 다시 조회');
+    assert.equal(homeMeetingCard(view).props.accessibilityLabel, '다가오는 약속 처음 모임', '다시 조회 중에도 이전 카드 유지');
+    assert.equal(findText(view, '약속을 불러오고 있어요'), null);
+    resolveNext(ok([homeRoom('bbbb0000-bbbb-4bbb-8bbb-bbbbbbbbbbbb', HOME_DAY / 2, { name: '새 모임' })]));
+    await settle(); view = r.view();
+    assert.equal(homeMeetingCard(view).props.accessibilityLabel, '다가오는 약속 새 모임');
+
+    // 화면을 떠난 뒤 온 응답은 반영하지 않아요.
+    r.respond(() => new Promise(resolve => { resolveNext = resolve; }));
+    r.refocus(); await settle();
+    assert.equal(r.calls.length, 3);
+    r.unmount();
+    resolveNext(ok([homeRoom('cccc0000-cccc-4ccc-8ccc-cccccccccccc', HOME_DAY / 4, { name: '떠난 뒤 응답' })]));
+    await settle(); view = r.view();
+    assert.equal(homeMeetingCard(view).props.accessibilityLabel, '다가오는 약속 새 모임');
+});
+
+test('서버 홈: 계정이 바뀌면 다시 불러오기 전에도 이전 계정의 방을 보여주지 않아요', async () => {
+    const r = homeRuntime();
+    r.respond(async () => ok([homeRoom('aaaa0000-aaaa-4aaa-8aaa-aaaaaaaaaaaa', HOME_DAY, { name: '이전 계정 모임' })]));
+    r.view(); await settle();
+    assert.ok(homeMeetingCard(r.view()));
+    await r.load('src/services/auth.ts').clearLocalSession();
+    const nextUser = '33333333-3333-4333-8333-333333333333';
+    r.load('src/stores/auth-store.ts').signIn({ userId: nextUser, nickname: '다음 사용자' });
+    let view = r.view();
+    assert.equal(findText(view, '이전 계정 모임'), null);
+    assert.equal(homeMeetingCard(view), null);
+    assert.ok(findText(view, '약속을 불러오고 있어요'));
+    r.respond(async () => ok([roomQuerySummary({ id: 'eeee0000-eeee-4eee-8eee-eeeeeeeeeeee', name: '다음 계정 모임', appointmentAt: new Date(Date.now() + HOME_DAY).toISOString() })]));
+    r.refocus(); await settle(); view = r.view();
+    assert.equal(homeMeetingCard(view).props.accessibilityLabel, '다가오는 약속 다음 계정 모임');
+
+    // 이전 계정 때 보낸 요청이 늦게 와도 새 계정 화면에 섞이지 않아요.
+    let resolveOld;
+    r.respond(() => new Promise(resolve => { resolveOld = resolve; }));
+    r.refocus();
+    await r.load('src/services/auth.ts').clearLocalSession();
+    r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_ME, nickname: '서버 나' });
+    resolveOld(ok([homeRoom('ffff0000-ffff-4fff-8fff-ffffffffffff', HOME_DAY, { name: '늦은 이전 응답' })]));
+    await settle(); view = r.view();
+    assert.equal(findText(view, '늦은 이전 응답'), null);
+    assert.equal(homeMeetingCard(view), null);
+    r.unmount();
+});
+
+test('mock 홈은 HOME_UPCOMING_MEETING 그대로이고 서버를 부르지 않아요', async () => {
+    const r = homeRuntime({});
+    r.respond(async () => { throw Error('서버를 부르면 안 돼요'); });
+    const { HOME_UPCOMING_MEETING, formatAppointmentParam, formatDday, formatMonthDay, formatTime } = r.load('src/constants/home-mock.ts');
+    let view = r.view(); await settle(); view = r.view();
+    const card = homeMeetingCard(view);
+    assert.equal(card.props.accessibilityLabel, `다가오는 약속 ${HOME_UPCOMING_MEETING.title}`);
+    assert.ok(findText(card, formatDday(HOME_UPCOMING_MEETING.appointmentAt)));
+    assert.ok(findText(card, formatMonthDay(HOME_UPCOMING_MEETING.appointmentAt)));
+    assert.ok(findText(card, `${formatTime(HOME_UPCOMING_MEETING.appointmentAt)} · 시청역 · 3/4명`));
+    assert.equal(findText(view, '약속을 불러오고 있어요'), null);
+    card.props.onPress();
+    assert.deepEqual(plain(r.pushes), [{ pathname: '/rooms/[roomId]', params: {
+        roomId: 'preview', roomName: '주말 저녁 모임', appointmentAt: formatAppointmentParam(HOME_UPCOMING_MEETING.appointmentAt), maxMembers: '4',
+    } }]);
+    r.refocus(); await settle();
+    assert.equal(r.calls.length, 0);
+    r.unmount();
+});

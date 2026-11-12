@@ -1,8 +1,10 @@
 /**
- * 홈 화면 mock 데이터 (#32)
+ * 홈 화면 mock 데이터 (#32)와 날짜 표시 함수
  *
- * 실제 API(사용자 정보, 내 약속방 목록) 연동 전까지 홈 화면에서만 사용합니다.
- * API 연동 시 이 파일 대신 services 의 응답으로 교체합니다.
+ * - HOME_UPCOMING_MEETING: mock 모드(EXPO_PUBLIC_USE_MOCK=true) 홈의 "다가오는 약속" 카드에서만 써요.
+ *   서버 모드 홈은 7.3 방 목록(fetchMyRooms)에서 고른 약속을 보여줘요(#102, utils/upcoming-meeting.ts).
+ * - formatDday·formatMonthDay·formatTime·formatAppointmentParam: 홈과 약속방 화면들이 같이 쓰는 날짜 함수예요.
+ *   다른 화면이 import 하므로 옮기거나 이름을 바꾸지 않아요.
  */
 
 export type HomeUpcomingMeeting = {
