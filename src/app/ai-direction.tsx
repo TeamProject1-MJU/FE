@@ -1,7 +1,13 @@
 import { formatStationName } from '@/utils/station-name';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { router, useLocalSearchParams } from 'expo-router';
-import { ActivityIndicator, Animated, Easing, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { ActivityIndicator, Alert, Animated, Easing, Image, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
+import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
+import { File, Paths } from 'expo-file-system';
+import { useMock } from '@/services/api/config';
+import { isAuthError } from '@/services/api/errors';
+import { getSessionGeneration } from '@/services/auth';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -14,6 +20,8 @@ import {
     type DirectionCheckResponse,
     type DirectionCode,
     type DirectionErrorCode,
+    type DirectionPhoto,
+    type DirectionCheckRoute,
 } from '@/types/direction';
 
 const NAVY = '#0f1c3f';
@@ -48,6 +56,9 @@ const EXAMPLE_ROUTE = {
 };
 
 const ERROR_TEXT: Record<DirectionErrorCode, string> = {
+    STATION_NOT_FOUND: '경로를 다시 선택해 주세요.',
+    VALIDATION_ERROR: '경로를 다시 선택해 주세요.',
+    UNKNOWN_ERROR: '분석 응답을 확인하지 못했어요. 다시 시도해 주세요.',
     AI_UNAVAILABLE: 'AI가 잠시 응답하지 않아요. 잠시 후 다시 시도해 주세요.',
     AI_QUOTA_EXCEEDED: '오늘 사용할 수 있는 분석 횟수를 모두 사용했어요.',
     IMAGE_INVALID: '사진 형식을 확인해 주세요. JPG·PNG 사진만 분석할 수 있어요.',
@@ -58,10 +69,154 @@ const ERROR_TEXT: Record<DirectionErrorCode, string> = {
  * AI 표지판 방향 확인 (#37, 상세설계서 그림 22~25, API 명세 9.1)
  *
  * 경로 안내 화면의 '표지판으로 방향 확인'에서 route 파트 값(stationId·lineId·direction·headsign)을 받아 엽니다.
- * 지금은 실제 카메라·앨범·업로드·AI 분석 없이 예시 사진으로 결과 흐름만 확인합니다.
- * TODO: expo-image-picker 촬영·선택 + POST /ai/direction-check 연동
+ * 서버 모드는 카메라·갤러리 사진을 분석하고, mock 모드는 기존 예시 사진 흐름을 유지합니다.
  */
 export default function AiDirectionScreen() {
+    return useMock() ? <MockDirectionScreen /> : <ServerDirectionScreen />;
+}
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const SERVER_ERROR_TEXT = {
+    ...ERROR_TEXT,
+    IMAGE_INVALID: '다른 사진을 선택해 주세요. JPG·PNG 5MB 이하 사진이 필요해요.',
+    AI_QUOTA_EXCEEDED: '분석 요청이 많아요. 잠시 후 다시 시도해 주세요.',
+};
+
+function ServerDirectionScreen() {
+    const insets = useSafeAreaInsets();
+    const params = useLocalSearchParams<{ stationId?: string; lineId?: string; headsign?: string; direction?: string }>();
+    const validRoute = typeof params.stationId === 'string' && Number.isSafeInteger(Number(params.stationId)) && Number(params.stationId) > 0 &&
+        typeof params.lineId === 'string' && Number.isSafeInteger(Number(params.lineId)) && Number(params.lineId) > 0 &&
+        typeof params.headsign === 'string' && !!params.headsign.trim();
+    const route: DirectionCheckRoute = { stationId: Number(params.stationId), lineId: Number(params.lineId), headsign: typeof params.headsign === 'string' ? params.headsign : '',
+        ...(['UP', 'DOWN', 'INNER', 'OUTER', 'LOOP'].includes(params.direction ?? '') ? { direction: params.direction as DirectionCode } : {}) };
+    const [photo, setPhoto] = useState<DirectionPhoto | null>(null);
+    const [data, setData] = useState<DirectionCheckResponse | null>(null);
+    const [error, setError] = useState<DirectionErrorCode | null>(null);
+    const [busy, setBusy] = useState(false);
+    const active = useRef(false);
+    const requestId = useRef(0);
+    const inFlight = useRef(false);
+    const temporary = useRef(new Set<string>());
+    const clean = useCallback(() => {
+        for (const uri of temporary.current) {
+            try { const file = new File(uri); if (file.exists) file.delete(); temporary.current.delete(uri); } catch { /* Retry cleanup at the next lifecycle boundary. */ }
+        }
+    }, []);
+    useFocusEffect(useCallback(() => {
+        active.current = true;
+        setBusy(false); setPhoto(null); setData(null); setError(null);
+        return () => { active.current = false; requestId.current++; if (!inFlight.current) clean(); };
+    }, [clean]));
+    useEffect(() => () => { if (!inFlight.current) clean(); }, [clean]);
+    const pick = async (camera: boolean) => {
+        if (inFlight.current || !validRoute) return;
+        inFlight.current = true; setBusy(true); setError(null); setData(null); setPhoto(null); clean();
+        const id = ++requestId.current;
+        const generation = getSessionGeneration();
+        const current = () => active.current && id === requestId.current && generation === getSessionGeneration();
+        try {
+            const permission = camera ? await ImagePicker.requestCameraPermissionsAsync() : await ImagePicker.requestMediaLibraryPermissionsAsync();
+            if (!current()) return;
+            if (!permission.granted) {
+                Alert.alert('사진 접근 권한이 필요해요', '설정 앱에서 카메라·사진 권한을 허용해 주세요.', [
+                    { text: '취소', style: 'cancel' }, { text: '설정 열기', onPress: () => { void Linking.openSettings().catch(() => Alert.alert('설정 앱에서 권한을 변경해 주세요.')); } },
+                ]);
+                return;
+            }
+            const options: ImagePicker.ImagePickerOptions = { mediaTypes: ['images'], quality: 1, exif: false, base64: false };
+            const result = camera ? await ImagePicker.launchCameraAsync(options) : await ImagePicker.launchImageLibraryAsync(options);
+            if (result.canceled) return;
+            const asset = result.assets[0];
+            // Only delete picker-owned cache files, never an original library asset.
+            if (Platform.OS !== 'web' && asset.uri.startsWith(Paths.cache.uri)) temporary.current.add(asset.uri);
+            if (!current()) return;
+            if (!(asset.width > 0 && asset.height > 0) || asset.width * asset.height > 50000000) throw new DirectionCheckError('IMAGE_INVALID', '');
+            // Re-encode every source, including HEIC, so extension/MIME cannot disguise another format.
+            for (const [edge, quality] of [[2560, 0.85], [1920, 0.7], [1280, 0.5]] as const) {
+                const context = ImageManipulator.manipulate(asset.uri);
+                const scale = Math.min(1, edge / Math.max(asset.width, asset.height));
+                context.resize({ width: Math.max(1, Math.round(asset.width * scale)), height: Math.max(1, Math.round(asset.height * scale)) });
+                const rendered = await context.renderAsync();
+                let output: Awaited<ReturnType<typeof rendered.saveAsync>>;
+                try { output = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: quality }); }
+                finally { rendered.release(); context.release(); }
+                if (Platform.OS !== 'web') temporary.current.add(output.uri);
+                if (!current()) return;
+                const blob = Platform.OS === 'web' ? await (await fetch(output.uri)).blob() : undefined;
+                const size = blob ? blob.size : new File(output.uri).size;
+                if (size > 0 && size <= MAX_IMAGE_BYTES) {
+                    if (!current()) return;
+                    setPhoto({ uri: output.uri, mimeType: 'image/jpeg', fileName: 'direction.jpg', ...(blob ? { file: blob } : {}) });
+                    return;
+                }
+            }
+            throw new DirectionCheckError('IMAGE_INVALID', '');
+        } catch {
+            if (current()) { setError('IMAGE_INVALID'); clean(); }
+        } finally {
+            inFlight.current = false;
+            if (current()) setBusy(false);
+            else clean();
+        }
+    };
+    const analyze = async () => {
+        if (!photo || !validRoute || inFlight.current) return;
+        inFlight.current = true; setBusy(true); setError(null);
+        const id = ++requestId.current;
+        const generation = getSessionGeneration();
+        const current = () => active.current && id === requestId.current && generation === getSessionGeneration();
+        try {
+            const response = await checkDirection(photo, route);
+            if (current()) setData(response);
+        } catch (failure) {
+            if (current() && !isAuthError(failure)) setError(failure instanceof DirectionCheckError ? failure.code : 'UNKNOWN_ERROR');
+        } finally {
+            inFlight.current = false;
+            clean();
+            if (current()) { setBusy(false); setPhoto(null); }
+        }
+    };
+    return <View style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+        <ScrollView contentContainerStyle={{ padding: 20, gap: 18 }}>
+            <ServerButton label="닫기" onPress={() => { if (router.canGoBack()) router.back(); else router.replace('/home'); }} />
+            <Text style={styles.panelTitle}>AI 표지판 방향 확인</Text>
+            {!validRoute ? <>
+                <Text>방향을 확인할 경로를 먼저 선택해 주세요.</Text>
+                <ServerButton label="경로 검색" onPress={() => router.replace('/route-search')} />
+            </> : <>
+                <Text>{route.headsign} · 사진은 분석에만 사용해요.</Text>
+                {photo && <Image source={{ uri: photo.uri }} style={{ width: '100%', height: 240 }} resizeMode="contain" />}
+                {busy && <><ActivityIndicator /><Text>사진을 준비하거나 분석하고 있어요. 잠시 기다려 주세요.</Text></>}
+                <View style={styles.buttonRow}>
+                    <ServerButton label="표지판 촬영" disabled={busy} onPress={() => { void pick(true); }} />
+                    <ServerButton label="갤러리 선택" disabled={busy} onPress={() => { void pick(false); }} />
+                </View>
+                {photo && <ServerButton label="AI로 확인하기" disabled={busy} onPress={() => { void analyze(); }} />}
+                {error && <Text accessibilityRole="alert">{SERVER_ERROR_TEXT[error]}</Text>}
+                {(error === 'STATION_NOT_FOUND' || error === 'VALIDATION_ERROR') && <ServerButton label="경로 다시 선택" disabled={busy} onPress={() => router.replace('/route-search')} />}
+                {data && <>
+                    <Text style={styles.panelTitle}>{data.result === 'CORRECT' ? '올바른 방향이에요' : data.result === 'WRONG' ? '경로와 다른 표지판이에요' : '다시 촬영해 주세요'}</Text>
+                    <Text>{data.message}</Text>
+                    <View style={styles.buttonRow}>
+                        {(['recognized', 'expected'] as const).map(key => <View key={key} style={styles.flex}>
+                            <Text>{key === 'recognized' ? '읽은 표지판' : '기대한 경로'}</Text>
+                            {(['stationName', 'lineName', 'headsign'] as const).map(field => <Text key={field}>{data[key][field] ?? '읽지 못했어요'}</Text>)}
+                        </View>)}
+                    </View>
+                </>}
+            </>}
+        </ScrollView>
+    </View>;
+}
+
+function ServerButton({ label, onPress, disabled = false }: { label: string; onPress: () => void; disabled?: boolean }) {
+    return <Pressable accessibilityRole="button" disabled={disabled} onPress={onPress} style={[styles.action, { backgroundColor: NAVY, opacity: disabled ? 0.5 : 1 }]}>
+        <Text style={{ color: WHITE }}>{label}</Text>
+    </Pressable>;
+}
+
+function MockDirectionScreen() {
     const insets = useSafeAreaInsets();
     const params = useLocalSearchParams<{
         stationId?: string;

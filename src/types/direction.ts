@@ -18,6 +18,7 @@ export type DirectionCheckRoute = {
 export type DirectionResult = 'CORRECT' | 'WRONG' | 'RETAKE';
 
 export type DirectionReason =
+    | 'UNKNOWN'
     | 'LINE_NOT_ON_ROUTE'
     | 'DIRECTION_MISMATCH'
     | 'NOT_A_SIGN'
@@ -40,7 +41,9 @@ export type DirectionCheckResponse = {
 };
 
 /** 9.1 오류 코드 */
-export type DirectionErrorCode = 'IMAGE_INVALID' | 'AI_QUOTA_EXCEEDED' | 'AI_UNAVAILABLE' | 'NETWORK_ERROR';
+export type DirectionErrorCode = 'IMAGE_INVALID' | 'AI_QUOTA_EXCEEDED' | 'AI_UNAVAILABLE' | 'NETWORK_ERROR' | 'STATION_NOT_FOUND' | 'VALIDATION_ERROR' | 'UNKNOWN_ERROR';
+
+export type DirectionPhoto = { uri: string; mimeType: 'image/jpeg' | 'image/png'; fileName: string; file?: Blob };
 
 export class DirectionCheckError extends Error {
     code: DirectionErrorCode;
