@@ -56,6 +56,17 @@ export const ROOM_NAME_MAX = 30;
 export function roomNameLength(value: string) {
     return Array.from(value.trim()).length;
 }
+
+/**
+ * 방 이름 검사 (#143): 생성·수정 화면과 서비스(서버·mock)가 모두 이 함수 하나로 판정하고 같은 문구를 써요.
+ * roomNameLength(앞뒤 공백 제외, 코드 포인트) 기준 1~30자면 null, 아니면 오류 문구예요.
+ */
+export function validateRoomName(value: string): string | null {
+    const length = roomNameLength(value);
+    if (length === 0) return '약속방 이름을 입력해 주세요.';
+    if (length > ROOM_NAME_MAX) return `약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`;
+    return null;
+}
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 /** 오늘 기준 n일 뒤 시각 (시연 날짜와 상관없이 D-day 가 자연스럽게 보이도록) */
@@ -400,16 +411,15 @@ export function mockTransferOwner(roomId: string, direction: 'give' | 'take') {
 export async function createRoom(request: CreateRoomRequest, failForTest = false): Promise<CreatedRoom> {
     if (!isMockMode()) {
         const name = typeof request?.name === 'string' ? request.name.trim() : '';
-        if (roomNameLength(name) === 0) throw new RoomError('VALIDATION_ERROR', '약속방 이름을 입력해 주세요.');
-        if (roomNameLength(name) > ROOM_NAME_MAX) throw new RoomError('VALIDATION_ERROR', `약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`);
+        const invalid = validateRoomName(name);
+        if (invalid) throw new RoomError('VALIDATION_ERROR', invalid);
         return createServerRoom({ name, appointmentAt: request.appointmentAt });
     }
     await wait(MOCK_DELAY_MS);
     if (failForTest) throw new RoomError('NETWORK_ERROR', '약속방을 만들지 못했어요. 잠시 후 다시 시도해 주세요.');
     const name = request.name.trim();
-    const length = roomNameLength(name);
-    if (length === 0) throw new RoomError('VALIDATION_ERROR', '약속방 이름을 입력해 주세요.');
-    if (length > ROOM_NAME_MAX) throw new RoomError('VALIDATION_ERROR', `약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`);
+    const invalid = validateRoomName(name);
+    if (invalid) throw new RoomError('VALIDATION_ERROR', invalid);
 
     const room: RoomSummary = {
         id: newId(),
@@ -651,8 +661,8 @@ export async function updateRoom(
         const next: UpdateRoomPatch = {};
         if (patch?.name !== undefined) {
             if (typeof patch.name !== 'string') throw new RoomError('VALIDATION_ERROR', '약속방 이름을 입력해 주세요.');
-            const length = roomNameLength(patch.name);
-            if (length === 0 || length > ROOM_NAME_MAX) throw new RoomError('VALIDATION_ERROR', `약속방 이름은 1~${ROOM_NAME_MAX}자로 입력해 주세요.`);
+            const invalid = validateRoomName(patch.name);
+            if (invalid) throw new RoomError('VALIDATION_ERROR', invalid);
             next.name = patch.name.trim();
         }
         if (patch?.appointmentAt !== undefined) next.appointmentAt = patch.appointmentAt;
@@ -665,9 +675,8 @@ export async function updateRoom(
 
     const next: UpdateRoomPatch = {};
     if (patch.name !== undefined) {
-        const length = roomNameLength(patch.name);
-        if (length === 0) throw new RoomError('VALIDATION_ERROR', '약속방 이름을 입력해 주세요.');
-        if (length > ROOM_NAME_MAX) throw new RoomError('VALIDATION_ERROR', `약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`);
+        const invalid = validateRoomName(patch.name);
+        if (invalid) throw new RoomError('VALIDATION_ERROR', invalid);
         next.name = patch.name.trim();
     }
     if (patch.appointmentAt !== undefined) {

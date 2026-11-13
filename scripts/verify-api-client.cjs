@@ -7380,3 +7380,127 @@ test('148 실제 사용자 서비스의 로그아웃은 지난 약속 안내가 
         assert.equal(store.getSelectedRoute(), null); assert.equal(calls, 0); r.unmount();
     }
 });
+
+/* ---------- #143 방 이름 글자 수 기준 통일 ---------- */
+
+const ROOM_NAME_EMPTY143 = '약속방 이름을 입력해 주세요.';
+const ROOM_NAME_LONG143 = '약속방 이름은 30자까지 쓸 수 있어요.';
+/** [이름, 기대 문구(null 이면 통과)] */
+function roomNameCases143() {
+    const mixed30 = '가'.repeat(10) + 'a'.repeat(10) + '😀🚇'.repeat(5);
+    return [
+        ['가'.repeat(30), null], ['가'.repeat(31), ROOM_NAME_LONG143],
+        ['a'.repeat(30), null], ['a'.repeat(31), ROOM_NAME_LONG143],
+        ['😀'.repeat(15) + '🚇'.repeat(15), null], ['😀'.repeat(16) + '🚇'.repeat(15), ROOM_NAME_LONG143],
+        [mixed30, null], [mixed30 + '가', ROOM_NAME_LONG143],
+        [`  ${'가'.repeat(30)}  `, null], [`\t${'😀'.repeat(30)}\n`, null], [` ${'a'.repeat(31)} `, ROOM_NAME_LONG143],
+        ['', ROOM_NAME_EMPTY143], ['   ', ROOM_NAME_EMPTY143], ['\t\n　', ROOM_NAME_EMPTY143],
+    ];
+}
+
+test('143 validateRoomName: 한글·영문·이모지·혼합 30/31, 앞뒤 공백 제외, 공백만은 빈 이름', () => {
+    const room = createRuntime().load('src/services/room.ts');
+    assert.equal(room.ROOM_NAME_MAX, 30);
+    for (const [name, expected] of roomNameCases143()) {
+        assert.equal(room.validateRoomName(name), expected, JSON.stringify(name));
+        if (expected === null) assert.ok(room.roomNameLength(name) <= 30 && room.roomNameLength(name) >= 1);
+    }
+    // 이모지 30자는 UTF-16 으로 60이지만 30자로 세요.
+    assert.equal('😀'.repeat(30).length, 60); assert.equal(room.roomNameLength('😀'.repeat(30)), 30);
+});
+
+test('143 mock 서비스 생성·수정도 같은 판정·같은 문구, 저장되는 이름은 trim 된 값', async () => {
+    for (const [name, expected] of roomNameCases143()) {
+        const r = createRuntime(); const room = r.load('src/services/room.ts');
+        const created = room.createRoom({ name, appointmentAt: null }); r.advance(1000);
+        if (expected) await assert.rejects(created, { code: 'VALIDATION_ERROR', message: expected }, JSON.stringify(name));
+        else assert.equal((await created).name, name.trim());
+        const updated = room.updateRoom('room-4', { name }); r.advance(1000);
+        if (expected) await assert.rejects(updated, { code: 'VALIDATION_ERROR', message: expected }, JSON.stringify(name));
+        else assert.equal((await updated).name, name.trim());
+    }
+});
+
+test('143 서버 모드 생성·수정: 같은 판정·문구로 전송 전에 막고, 보내는 name 은 trim 된 값', async () => {
+    for (const [name, expected] of roomNameCases143()) {
+        const r = roomQueryRuntime(); const bodies = [];
+        r.respond(async (url, options) => {
+            if (options.method === 'POST') { bodies.push(['POST', JSON.parse(options.body)]); return jsonResponse({ success: true, data: { ...createdRoomData(), name: name.trim() || 'x' } }, 201); }
+            if (options.method === 'PATCH') { bodies.push(['PATCH', JSON.parse(options.body)]); return jsonResponse({ success: true, data: null }); }
+            return jsonResponse({ success: true, data: roomQueryDetail() });
+        });
+        const create = r.room.createRoom({ name, appointmentAt: null });
+        const update = r.room.updateRoom(ROOM_QUERY_ID, { name });
+        if (expected) {
+            await assert.rejects(create, { code: 'VALIDATION_ERROR', message: expected });
+            await assert.rejects(update, { code: 'VALIDATION_ERROR', message: expected });
+            assert.deepEqual(bodies, []);
+        } else {
+            await create; await update.catch(() => {});
+            assert.deepEqual(bodies.map(([method, body]) => [method, body.name]), [['POST', name.trim()], ['PATCH', name.trim()]], JSON.stringify(name));
+        }
+    }
+});
+
+/** 글자 수가 기본 색이 아닌 색(빨강)으로 바뀌었는지. 두 화면의 빨강 값은 원래 달라서 기본 색과 비교해요. */
+function overColor143(counter) {
+    const styles = [counter.props.style].flat().filter(Boolean);
+    return Object.assign({}, ...styles).color !== styles[0].color;
+}
+test('143 생성·수정 화면: 수정 화면 maxLength 없음, 이모지 30자 기존 이름 그대로·저장 가능, 두 화면 같은 판정·문구', async () => {
+    // 수정 화면: 이모지 30자 기존 이름
+    const emojiName = '😀'.repeat(15) + '🚇'.repeat(15);
+    const r = roomQueryScreen('src/app/rooms/[roomId]/edit.tsx', { roomId: ROOM_QUERY_ID }); const patches = [];
+    let detail = { ...roomQueryDetail(), name: emojiName };
+    r.context.fetch = async (_url, options) => {
+        if (options.method === 'PATCH') { patches.push(JSON.parse(options.body)); detail = { ...detail, ...JSON.parse(options.body) }; return jsonResponse({ success: true, data: null }); }
+        return jsonResponse({ success: true, data: detail });
+    };
+    r.render(); await settle(); let view = r.render();
+    const input = () => findElement(view, element => element.props?.accessibilityLabel === '약속 이름');
+    assert.equal(input().props.maxLength, undefined);
+    assert.equal(input().props.value, emojiName);
+    assert.ok(findElement(view, element => element.type === 'Text' && textOf(element) === '30/30'));
+    // 이름을 바꾸지 않으면 바뀐 것이 없어요(잘리지 않음). 한 글자 바꿔 저장하면 30자 이모지 이름이 그대로 가요.
+    assert.equal(roomWriteButton(view, '저장').props.disabled, true);
+    const changed = '🚇' + emojiName.slice(2);
+    input().props.onChangeText(` ${changed} `); view = r.render();
+    await roomWriteButton(view, '저장').props.onPress(); await settle();
+    assert.deepEqual(patches, [{ name: changed }]);
+    r.unmount();
+
+    // 같은 입력에 두 화면이 같은 판정·같은 문구
+    for (const [name, expected] of roomNameCases143()) {
+        const create = roomQueryScreen('src/app/rooms/new.tsx'); let createCalls = 0;
+        create.context.fetch = async () => { createCalls++; return jsonResponse({ success: true, data: { ...createdRoomData(), name: name.trim() } }, 201); };
+        let createView = create.render();
+        findElement(createView, element => element.type === 'TextInput').props.onChangeText(name); createView = create.render();
+        // 성공하면 결과 화면으로 바뀌므로 글자 수는 누르기 전에 읽어요.
+        const counter = findElement(createView, element => element.type === 'Text' && /^\d+\/30$/.test(textOf(element)));
+        const createRed = overColor143(counter);
+        await roomWriteButton(createView, '약속방 만들기').props.onPress(); createView = create.render();
+
+        const edit = roomQueryScreen('src/app/rooms/[roomId]/edit.tsx', { roomId: ROOM_QUERY_ID }); let editCalls = 0;
+        edit.context.fetch = async (_url, options) => {
+            if (options.method === 'PATCH') { editCalls++; return jsonResponse({ success: true, data: null }); }
+            return jsonResponse({ success: true, data: roomQueryDetail() });
+        };
+        edit.render(); await settle(); let editView = edit.render();
+        findElement(editView, element => element.props?.accessibilityLabel === '약속 이름').props.onChangeText(name); editView = edit.render();
+        const editCounter = findElement(editView, element => element.type === 'Text' && /^\d+\/30$/.test(textOf(element)));
+        const editRed = overColor143(editCounter);
+        await roomWriteButton(editView, '저장').props.onPress(); await settle(); editView = edit.render();
+
+        const label = JSON.stringify(name);
+        assert.equal(textOf(counter), textOf(editCounter), label);
+        assert.equal(createRed, editRed, label); assert.equal(createRed, Array.from(name.trim()).length > 30, label);
+        if (expected) {
+            assert.ok(findElement(createView, element => element.type === 'Text' && textOf(element) === expected), label);
+            assert.ok(findElement(editView, element => element.type === 'Text' && textOf(element) === expected), label);
+            assert.equal(createCalls, 0, label); assert.equal(editCalls, 0, label);
+        } else {
+            assert.equal(createCalls, 1, label); assert.equal(editCalls, name.trim() === roomQueryDetail().name ? 0 : 1, label);
+        }
+        create.unmount(); edit.unmount();
+    }
+});

@@ -22,6 +22,7 @@ import {
     fetchRoomDetail,
     ROOM_NAME_MAX,
     roomNameLength,
+    validateRoomName,
     updateRoom,
     type UpdateRoomPatch,
 } from '@/services/room';
@@ -170,8 +171,8 @@ export default function RoomEditScreen() {
 
     const validate = () => {
         const errors: { name?: string; time?: string } = {};
-        if (nameLength === 0) errors.name = '약속방 이름을 입력해 주세요.';
-        else if (nameLength > ROOM_NAME_MAX) errors.name = `약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`;
+        const nameError = validateRoomName(name);
+        if (nameError) errors.name = nameError;
         if (timePartial) errors.time = '약속 날짜와 시간을 모두 고르거나, 둘 다 비워 두세요.';
         else if (pickedAt && timeChanged && pickedAt.getTime() < Date.now()) errors.time = '지금 이후의 약속 시각을 선택해 주세요.';
         setFieldError(errors);
@@ -319,7 +320,6 @@ export default function RoomEditScreen() {
                             onChangeText={value => { setName(value); setFieldError(prev => ({ ...prev, name: undefined })); setSaveError(''); }}
                             placeholder="약속 이름을 입력하세요"
                             placeholderTextColor="#a1a8b8"
-                            maxLength={ROOM_NAME_MAX + 10}
                             returnKeyType="done"
                             editable={!saving && !saved}
                             accessibilityLabel="약속 이름"

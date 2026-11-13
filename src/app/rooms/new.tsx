@@ -9,7 +9,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { CalendarModal, TimeWheelModal } from '@/components/rooms/appointment-picker';
 import { formatAppointmentParam, formatMonthDay, formatTime } from '@/constants/home-mock';
 import { ApiError, isAuthError } from '@/services/api/errors';
-import { createRoom, ROOM_NAME_MAX, roomNameLength } from '@/services/room';
+import { createRoom, ROOM_NAME_MAX, roomNameLength, validateRoomName } from '@/services/room';
 import { RoomError, type CreatedRoom } from '@/types/room';
 
 const NAVY = '#0f1c3f';
@@ -55,8 +55,8 @@ export default function NewRoomScreen() {
 
     const submit = async () => {
         if (submitting.current) return;
-        if (nameLength === 0) return setNotice('약속방 이름을 입력해 주세요.');
-        if (nameLength > ROOM_NAME_MAX) return setNotice(`약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`);
+        const nameError = validateRoomName(roomName);
+        if (nameError) return setNotice(nameError);
         // 약속 시각은 선택 (명세: 시각 없는 방도 있음). 날짜·시간 중 하나만 고르면 안내합니다.
         if (!!date !== !!time) return setNotice('약속 날짜와 시간을 모두 고르거나, 둘 다 비워 두세요.');
 
