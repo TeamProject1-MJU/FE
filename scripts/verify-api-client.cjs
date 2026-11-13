@@ -8268,3 +8268,150 @@ test('138 시간 창: 화면에서도 옛 미답 질문이 답변을 가로채�
     r.event(ai138WindowReply(11, 125_000)); assert.equal(r.render().aiPending, 0); assert.equal(r.timers.size, 0);
     r.unmount();
 });
+
+/* ---------- #139 응답 유실 뒤 재시도의 중복 저장 방지 ---------- */
+
+/** 명세 10.1·10.2 를 흉내 내는 가짜 서버. post: 'ok' | 'saveLose'(저장 후 응답 유실) | 'lose'(저장 안 됨, 응답 실패) */
+function chat139Server(r, initial = 10) {
+    const server = { messages: [], seq: 0, post: 'ok', posts: 0, gets: 0, hold: null };
+    server.make = (senderId, content) => {
+        const n = ++server.seq;
+        return chat118Message({ id: `01900000-0000-7000-8000-${String(500000 + n).padStart(12, '0')}`, senderId,
+            nickname: senderId === ROOM_QUERY_ME ? '서버 나' : '상대', content, createdAt: new Date(Date.UTC(2026, 10, 12, 9, 0, 0) + n * 1000).toISOString() });
+    };
+    server.addOthers = count => { for (let i = 0; i < count; i++) server.messages.push(server.make(ROOM_QUERY_OTHER, `상대 ${server.seq + 1}`)); };
+    server.mine = content => server.messages.filter(message => message.senderId === ROOM_QUERY_ME && message.content === content);
+    server.addOthers(initial);
+    r.context.fetch = async (url, options) => {
+        if (options.method === 'POST') {
+            server.posts++;
+            const mode = server.post; const message = server.make(ROOM_QUERY_ME, JSON.parse(options.body).content);
+            if (mode !== 'lose') server.messages.push(message);
+            if (mode !== 'ok') throw new TypeError('응답 유실');
+            return ok({ message, aiPending: false });
+        }
+        server.gets++;
+        if (server.hold) await server.hold(server.gets);
+        const cursor = new URL(url).searchParams.get('cursor'); const size = 30;
+        const all = [...server.messages].reverse();
+        const start = cursor ? all.findIndex(message => message.id === cursor) + 1 : 0;
+        const items = all.slice(start, start + size); const hasMore = start + size < all.length;
+        return ok({ items, hasMore, nextCursor: hasMore ? items.at(-1).id : null });
+    };
+    return server;
+}
+async function chat139Hook(initial = 10, realtime = 'open') {
+    const r = chat118Hook(realtime); const server = chat139Server(r, initial);
+    r.render(); await drain137();
+    r.sendText = async (content, mode) => { server.post = mode; r.render().setDraft(content); r.render().send(); await drain137(); return r.render().pending.at(-1); };
+    r.retry = async entry => { r.render().retrySend(r.render().pending.find(item => item.clientId === entry.clientId)); await drain137(); };
+    return { r, server };
+}
+const mineIn139 = (view, content) => view.messages.filter(message => message.senderId === ROOM_QUERY_ME && message.content === content);
+
+test('139 저장됐는데 응답 유실 → 이후 40개 추가(최신 30개 밖) → 재시도: 원본을 찾아 저장 처리, POST 추가 없음', async () => {
+    const { r, server } = await chat139Hook();
+    const entry = await r.sendText('안녕하세요', 'saveLose');
+    assert.equal(entry.status, 'failed'); assert.equal(server.posts, 1);
+    server.addOthers(40); server.post = 'ok';
+    await r.retry(entry);
+    assert.equal(server.posts, 1); assert.equal(server.mine('안녕하세요').length, 1);
+    assert.equal(r.render().pending.length, 0);
+    assert.deepEqual(plain(mineIn139(r.render(), '안녕하세요')).map(message => message.id), server.mine('안녕하세요').map(message => message.id));
+    r.unmount();
+});
+
+test('139 응답 유실이지만 실제로 저장 안 됨 → 재시도: 기준점까지 확인 후 POST 1번', async () => {
+    const { r, server } = await chat139Hook();
+    const entry = await r.sendText('저장 안 된 메시지', 'lose');
+    server.addOthers(40); server.post = 'ok'; server.gets = 0;
+    await r.retry(entry);
+    assert.equal(server.posts, 2); assert.ok(server.gets >= 2); // 최신 30개를 넘어 기준점까지 확인했어요
+    assert.equal(server.mine('저장 안 된 메시지').length, 1); assert.equal(r.render().pending.length, 0);
+    r.unmount();
+});
+
+test('139 같은 본문 두 번 전송·둘 다 저장 후 응답 유실 → 각각 다른 메시지로 확인, POST 추가 없음', async () => {
+    const { r, server } = await chat139Hook();
+    const first = await r.sendText('같은 본문', 'saveLose'); const second = await r.sendText('같은 본문', 'saveLose');
+    server.addOthers(35); server.post = 'ok';
+    await r.retry(first); await r.retry(second);
+    assert.equal(server.posts, 2); assert.equal(r.render().pending.length, 0);
+    const shown = plain(mineIn139(r.render(), '같은 본문')).map(message => message.id);
+    assert.equal(shown.length, 2); assert.equal(new Set(shown).size, 2);
+    r.unmount();
+});
+
+test('139 같은 본문 두 번 전송·하나만 저장 → 하나는 확인, 하나는 다시 보내요', async () => {
+    const { r, server } = await chat139Hook();
+    const first = await r.sendText('하나만 저장', 'saveLose'); const second = await r.sendText('하나만 저장', 'lose');
+    server.addOthers(35); server.post = 'ok';
+    await r.retry(first); assert.equal(server.posts, 2);
+    await r.retry(second); assert.equal(server.posts, 3);
+    assert.equal(server.mine('하나만 저장').length, 2); assert.equal(r.render().pending.length, 0);
+    assert.equal(mineIn139(r.render(), '하나만 저장').length, 2);
+    r.unmount();
+});
+
+test('139 상한까지 기준점을 못 만나면 자동 전송 없이 불명 안내, 한 번 더 누르면 POST 1번', async () => {
+    const { r, server } = await chat139Hook(5);
+    const entry = await r.sendText('너무 오래전 메시지', 'lose');
+    server.addOthers(400); server.post = 'ok';
+    await r.retry(entry);
+    let pending = r.render().pending[0];
+    assert.equal(server.posts, 1);
+    assert.equal(pending.status, 'failed'); assert.equal(pending.unconfirmed, true);
+    assert.equal(pending.errorMessage, '저장됐는지 확인하지 못했어요. 다시 보내면 같은 메시지가 두 번 저장될 수 있어요.');
+    assert.equal(pending.clientId, entry.clientId); // 재시도에도 같은 clientId(나중의 멱등 키)
+    // 화면 버튼은 "그래도 다시 보내기"
+    const panel = createScreenRuntime(serverEnv, 'src/components/rooms/chat-panel.tsx', runtime => {
+        Object.assign(runtime.native, { ScrollView: 'ScrollView', Platform: { OS: 'ios', select: value => value.ios }, Keyboard: { dismiss() {}, addListener: () => ({ remove() {} }) } });
+    });
+    const panelView = panel.renderComponent({ type: panel.screen.default, props: { controller: r.render(), myUserId: ROOM_QUERY_ME, members: [] } });
+    assert.ok(findElement(panelView, element => element.props?.label === '그래도 다시 보내기'));
+    server.gets = 0;
+    await r.retry(pending);
+    assert.equal(server.posts, 2); assert.equal(server.gets, 0); // 확인 없이 보내요
+    assert.equal(r.render().pending.length, 0);
+    r.unmount();
+});
+
+test('139 기준점을 알 수 없으면(유실) 확인하지 않고 불명이에요', async () => {
+    const hook = createRuntime(serverEnv).load('src/hooks/use-room-chat.ts'); let fetched = 0;
+    const result = await hook.checkChatSend(async () => { fetched++; return { items: [], hasMore: false, nextCursor: null }; }, undefined, () => true, () => true);
+    assert.equal(result.status, 'unknown'); assert.equal(fetched, 0);
+    // 빈 방에서 처음까지 다 봤으면 확실히 저장 안 됨이에요.
+    const empty = await hook.checkChatSend(async () => ({ items: [], hasMore: false, nextCursor: null }), new Set(), () => true, () => true);
+    assert.equal(empty.status, 'notSaved');
+});
+
+test('139 WS 로 내 메시지가 늦게 도착: 오래된 전송부터 하나씩 확인, 이후 재시도에 중복 POST 없음', async () => {
+    const { r, server } = await chat139Hook();
+    const first = await r.sendText('늦게 온 메시지', 'saveLose'); const second = await r.sendText('늦게 온 메시지', 'saveLose');
+    const [savedFirst] = server.mine('늦게 온 메시지');
+    r.event(savedFirst); r.event(savedFirst); // 같은 WS 를 두 번 받아도 한 전송만 확인돼요
+    assert.deepEqual(plain(r.render().pending.map(item => item.clientId)), [second.clientId]);
+    server.addOthers(35); server.post = 'ok';
+    await r.retry(second);
+    assert.equal(server.posts, 2); assert.equal(r.render().pending.length, 0);
+    assert.equal(new Set(plain(mineIn139(r.render(), '늦게 온 메시지')).map(message => message.id)).size, 2);
+    assert.equal(first.content, '늦게 온 메시지');
+    r.unmount();
+});
+
+test('139 확인 중 화면 이탈·권한 상실이면 결과를 버리고 POST 하지 않아요', async () => {
+    for (const cause of ['blur', 'reject']) {
+        const { r, server } = await chat139Hook();
+        const entry = await r.sendText('확인 중 이탈', 'lose');
+        server.addOthers(40); server.post = 'ok';
+        let release; const gate = new Promise(resolve => { release = resolve; });
+        const start = server.gets; server.hold = count => count === start + 2 ? gate : undefined;
+        r.render().retrySend(r.render().pending[0]); await settle(); await settle();
+        if (cause === 'blur') r.blur(); else r.reject('NOT_ROOM_MEMBER');
+        release(); await drain137();
+        assert.equal(server.posts, 1, cause);
+        if (cause === 'reject') { assert.equal(r.render().blocked, true); assert.equal(r.render().pending.length, 0); }
+        else assert.equal(r.render().pending[0].clientId, entry.clientId);
+        r.unmount();
+    }
+});

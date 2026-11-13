@@ -402,8 +402,24 @@ async function finishMockAi(
  * mock은 기존 비동기 응답을 유지해요.
  *
  * clientId는 로컬 재시도 중복 방지용이며 API 요청 본문에 추가하지 않아요.
+ * 서버 멱등 키로 쓸 값은 chatRequestKey 한 곳에서 만들어요(#139). 지금은 서버에 보내지 않아요.
  * 서버 전송 결과를 모르는 실패는 훅에서 최신 페이지를 확인한 뒤 재시도해요.
  */
+/** 전송 하나의 로컬 식별자. 재시도해도 같은 값을 유지해요(#139). */
+export function createChatClientId() {
+    return `chat-client-${Date.now()}-${chatClientSequence++}`;
+}
+let chatClientSequence = 1;
+
+/**
+ * 서버에 보낼 요청 식별자(멱등 키)를 만드는 곳이에요(#139). 같은 전송의 재시도는 같은 값이에요.
+ * 지금 명세(v1.13 10.1)에는 요청 식별자 필드가 없어서 서버에 보내지 않고, mock 의 중복 방지 키로만 써요.
+ * TODO(BE 멱등 키): 서버가 지원하면 POST 헤더(예: Idempotency-Key)에 이 값을 넣어요.
+ */
+export function chatRequestKey(clientId: string) {
+    return clientId;
+}
+
 export async function sendChatMessage(
     roomId: string,
     request: SendChatMessageRequest,
@@ -436,7 +452,7 @@ export async function sendChatMessage(
     const detail = await requireChatMember(roomId);
     const key = storeKey(roomId, options.mock);
     const requestKey = options.clientId
-        ? `${key}:${options.clientId}`
+        ? `${key}:${chatRequestKey(options.clientId)}`
         : null;
 
     const previous = requestKey
