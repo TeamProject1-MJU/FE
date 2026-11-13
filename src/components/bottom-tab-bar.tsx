@@ -29,7 +29,7 @@ export function useTabBarHeight() {
 
 /**
  * 하단 탭바 (홈·경로·약속방·마이) (#42)
- * TODO: 홈·마이 화면의 탭바도 이 컴포넌트로 바꿉니다.
+ * TODO: 홈·마이 화면의 탭바도 이 컴포넌트로 바꿉니다. (이슈 미정)
  */
 export default function BottomTabBar({ active }: { active: TabKey }) {
     const insets = useSafeAreaInsets();

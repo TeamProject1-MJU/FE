@@ -45,7 +45,7 @@ type Props = {
  * - 방장(현재 OWNER)만 열 수 있어요. 열 때마다 7.9 를 다시 조회합니다 (방장이 바뀌었으면 NOT_ROOM_OWNER).
  * - 조회 중 / 성공(코드 + 복사) / 실패(다시 시도) 상태를 가집니다.
  * - 복사는 화면에 보이는 roomCode 문자열을 그대로 클립보드에 넣어요.
- * TODO(범위 밖): 외부 공유(Share 시트)
+ * TODO: 외부 공유(Share 시트) (이슈 미정)
  */
 export default function InviteCodeSheet({ visible, roomId, roomName, bottomInset, onClose, mockError, onAccessError }: Props) {
     const [state, setState] = useState<State>({ status: 'loading' });

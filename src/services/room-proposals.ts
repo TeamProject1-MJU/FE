@@ -13,7 +13,8 @@
  * - 요청 전 계정 범위를 잡고, 응답 뒤 다른 계정으로 바뀌었으면 늦은 응답을 버려요(AUTH_REQUIRED).
  * - NOT_ROOM_MEMBER·ROOM_NOT_FOUND 는 방 캐시를 비우고 같은 RoomError 로 알려요. 화면은 기존 방 접근 불가 화면을 보여줘요.
  * - 인증 오류(TOKEN_*·401)는 A-1 공통 처리에 맡기려고 ApiError 그대로 던져요.
- * - 실시간 갱신(WS)·투표로 자동 확정·최종 약속역 지정(7.10·7.11)은 범위 밖이에요.
+ * - 이 파일은 REST 만 다뤄요. 실시간 갱신(STATION_PROPOSAL_*)은 #117(hooks/use-room-events.ts)에서 7.15 재조회로 하고,
+ *   최종 약속역 지정(7.10·7.11)은 room.ts setSelectedStation(#107)이 해요. 투표로 자동 확정하지 않아요.
  */
 
 import { delete as apiDelete, get, post, put } from '@/services/api/client';
