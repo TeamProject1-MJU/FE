@@ -7,11 +7,17 @@ import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
+import KakaoMap from '@/components/KakaoMap';
 import Congestion from '@/components/route/Congestion';
 import NextTrains from '@/components/route/NextTrains';
 import { formatFare } from '@/components/route/RouteCard';
+import RouteMapLegend from '@/components/route/RouteMapLegend';
 import RouteMapPreview from '@/components/route/RouteMapPreview';
 import RouteTimeline from '@/components/route/RouteTimeline';
+import { useRouteMap } from '@/hooks/use-route-map';
+import { useMock as isMockMode } from '@/services/api/config';
+import { getSessionGeneration } from '@/services/auth';
+import { getAuthStatus, getSession } from '@/stores/auth-store';
 import { getSelectedRoute } from '@/stores/route-store';
 import type { RouteStep } from '@/types/route';
 
@@ -21,12 +27,22 @@ const BACKGROUND = '#f3f5f8';
 const WHITE = '#ffffff';
 const SECONDARY = '#6b7488';
 const BORDER = '#e6e9ef';
+/** 서버 모드 경로 지도 높이. 경로선과 역 마커가 보이면서 아래 경로 정보 카드가 첫 화면에 걸리도록 정했어요. */
+const ROUTE_MAP_HEIGHT = 220;
+
+/** 홈과 같은 계정 기준(로그인 세대:userId). 계정이 바뀐 뒤에는 지도 메시지를 처리하지 않아요. */
+function currentAccount() {
+    const userId = getSession()?.userId;
+    return getAuthStatus() === 'signedIn' && userId ? `${getSessionGeneration()}:${userId}` : null;
+}
 
 /**
  * 경로 안내 화면 (#35, 상세설계서 그림 21)
  *
  * 명세 6.1: 별도 경로 안내 API 없음. 경로 탐색에서 고른 route 객체를 그대로 받아
  * route.steps 의 guidance·line·direction·stops 를 그립니다.
+ * 지도 (#129): 서버 모드는 카카오맵에 구간 경로선·혼잡도 색·출발/환승/도착 마커와 범례를 보여주고,
+ * mock 모드는 기존 정적 그림(RouteMapPreview)을 그대로 보여줍니다. 지도가 실패해도 아래 경로 정보는 그대로예요.
  * TODO: 현재 이동 단계(step index) 추적·실시간 위치 안내는 후속 이슈에서 구현합니다.
  */
 export default function RouteGuideScreen() {
@@ -34,6 +50,8 @@ export default function RouteGuideScreen() {
     const { routeId, arrivals } = useLocalSearchParams<{ routeId?: string; arrivals?: string }>();
     const selected = getSelectedRoute(routeId);
     const firstSubway = selected?.route.steps.find(step => step.type === 'SUBWAY');
+    const serverMode = !isMockMode();
+    const routeMap = useRouteMap(selected?.route ?? null, serverMode, currentAccount());
 
     const goBack = () => {
         if (router.canGoBack()) router.back();
@@ -87,7 +105,27 @@ export default function RouteGuideScreen() {
                         </View>
                     )}
 
-                    <RouteMapPreview route={selected.route} />
+                    {serverMode && routeMap.data ? (
+                        <>
+                            <View style={styles.map}>
+                                <KakaoMap
+                                    key={routeMap.mapKey}
+                                    center={routeMap.data.center}
+                                    myLocation={null}
+                                    markers={routeMap.data.markers}
+                                    lines={routeMap.data.lines}
+                                    fitBounds={routeMap.data.bounds}
+                                    fitRevision={routeMap.fitRevision}
+                                    label="경로 지도"
+                                    onRegionChange={routeMap.onRegionChange}
+                                    onError={routeMap.onError}
+                                />
+                            </View>
+                            {!routeMap.failed && <RouteMapLegend map={routeMap.data} />}
+                        </>
+                    ) : (
+                        <RouteMapPreview route={selected.route} />
+                    )}
 
                     <View style={styles.card}>
                         <Text style={styles.title} numberOfLines={1}>
@@ -189,6 +227,13 @@ const styles = StyleSheet.create({
     content: {
         padding: 20,
         gap: 12,
+    },
+
+    map: {
+        height: ROUTE_MAP_HEIGHT,
+        overflow: 'hidden',
+        borderRadius: 18,
+        backgroundColor: '#eef1f5',
     },
 
     notice: {

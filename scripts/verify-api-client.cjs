@@ -6348,3 +6348,381 @@ test('125 mock 모드 화면은 #125 이전과 같은 트리·스타일·동작�
         ].join('\n'));
     }
 });
+
+/* ---------- #129 경로 안내 화면 카카오맵 ---------- */
+
+const CONGESTION_COLOR129 = { COMFORTABLE: '#19b36b', RELAXED: '#8cc63f', NORMAL: '#e5a800', CROWDED: '#f07a1f', VERY_CROWDED: '#e5484d' };
+const congestion129 = (level, kind = 'PREDICTED') => level
+    ? { supported: true, kind, pct: 80, level, levelLabel: '서버 라벨' }
+    : { supported: false, kind: null, pct: null, level: null, levelLabel: null };
+const station129 = (id, congestion) => ({ id, name: `역${id}`, slotStart: '08:00', slotDate: null, firstTrain: false, congestion });
+function step129(type, overrides = {}) {
+    return {
+        type, guidance: '안내', durationSec: 60, distanceM: 100, direction: null, directionCode: null, stops: [], path: null, stations: [],
+        line: type === 'SUBWAY' ? { id: 2, name: '2호선', color: '#00a84d' } : null, ...overrides,
+    };
+}
+/** 도보 → 2호선(혼잡도 있음) → 4호선(혼잡도 없음, 노선 색) → 4호선 다시(연달아 같은 노선) → 7호선(노선 색 없음) */
+function route129() {
+    return {
+        routeId: 'route-129', routeType: null,
+        summary: { noService: false, serviceNotice: null, arrivesAfterAppointment: false, totalTimeSec: 1800, arrivalAt: '2026-11-13T09:00:00+09:00',
+            fare: 1500, fareSource: 'KAKAO', transferCount: 3, walkingMinutes: 2, congestion: congestion129('CROWDED') },
+        steps: [
+            step129('WALKING', { path: [[126.99, 37.49], [127.0, 37.5]] }),
+            step129('SUBWAY', { path: [[127.0, 37.5], [127.01, 37.51], [127.02, 37.52]],
+                stops: [{ id: 1, name: '출발역', order: 0 }, { id: 2, name: '환승1', order: 1 }],
+                stations: [station129(1, congestion129('NORMAL', 'ESTIMATED')), station129(2, congestion129('CROWDED', 'ESTIMATED')), station129(3, congestion129(null))] }),
+            step129('SUBWAY', { line: { id: 4, name: '4호선', color: '#00a5de' }, path: [[127.02, 37.52], [127.03, 37.53]],
+                stations: [station129(4, congestion129(null)), station129(5, { ...congestion129('VERY_CROWDED'), supported: false })] }),
+            step129('SUBWAY', { line: { id: 4, name: '4호선', color: '#00a5de' }, path: [[127.03, 37.53], [127.04, 37.54]] }),
+            step129('SUBWAY', { line: { id: 7, name: '7호선', color: null }, path: [[127.04, 37.54], [127.05, 37.55]] }),
+        ],
+    };
+}
+const routeMap129 = () => createRuntime().load('src/utils/route-map.ts');
+
+test('129 경로 → 지도: [경도, 위도] 변환, 환승 여러 개 마커, 구간 색, 도보 점선, 노선 목록', () => {
+    const { buildRouteMap, ROUTE_MARKER_COLOR, WALK_LINE_COLOR, NO_DATA_LINE_COLOR } = routeMap129();
+    const map = plain(buildRouteMap(route129()));
+    assert.deepEqual(map.lines.map(l => [l.id, l.color, l.dashed ?? false]), [
+        [0, WALK_LINE_COLOR, true], [1, CONGESTION_COLOR129.CROWDED, false], [2, '#00a5de', false], [3, '#00a5de', false], [4, NO_DATA_LINE_COLOR, false]]);
+    assert.deepEqual(map.lines[1].points[0], { latitude: 37.5, longitude: 127.0 });
+    assert.deepEqual(map.markers.map(m => [m.kind, m.latitude, m.longitude, m.color]), [
+        ['origin', 37.5, 127.0, ROUTE_MARKER_COLOR.origin], ['transfer', 37.52, 127.02, ROUTE_MARKER_COLOR.transfer],
+        ['transfer', 37.53, 127.03, ROUTE_MARKER_COLOR.transfer], ['transfer', 37.54, 127.04, ROUTE_MARKER_COLOR.transfer],
+        ['destination', 37.55, 127.05, ROUTE_MARKER_COLOR.destination]]);
+    assert.equal(new Set(Object.values(ROUTE_MARKER_COLOR)).size, 3);
+    assert.deepEqual(map.markers.map(m => m.id), [0, 1, 2, 3, 4]); assert.ok(map.markers.every(m => m.isSupported === true));
+    assert.deepEqual(map.routeLines, [{ id: 2, name: '2호선', color: '#00a84d' }, { id: 4, name: '4호선', color: '#00a5de' }, { id: 7, name: '7호선', color: null }]);
+    assert.deepEqual(map.bounds, { minLng: 126.99, minLat: 37.49, maxLng: 127.05, maxLat: 37.55 });
+    assert.equal(map.usesCongestion, true); assert.equal(map.usesLineColor, true); assert.equal(map.estimated, true); assert.equal(map.mock, false);
+});
+
+test('129 경로 → 지도: path 없음·점 1개·구간 1개·노선 하나·잘못된 좌표', () => {
+    const { buildRouteMap, toCoordinates } = routeMap129();
+    const { DEFAULT_MAP_CENTER } = createRuntime().load('src/utils/home-map.ts');
+    // path 가 모두 없으면 선·마커·범위 없이 기본 중심
+    const none = route129(); none.steps.forEach(step => { step.path = null; });
+    const empty = plain(buildRouteMap(none));
+    assert.deepEqual([empty.lines, empty.markers, empty.bounds, empty.center], [[], [], null, plain(DEFAULT_MAP_CENTER)]);
+    assert.equal(empty.routeLines.length, 3); assert.equal(empty.usesCongestion, false); assert.equal(empty.estimated, false);
+    // 환승 구간 path 가 없으면 그 마커와 선만 생략
+    const partial = route129(); partial.steps[2].path = null; partial.steps[4].path = [[127.04, 37.54]];
+    const p = plain(buildRouteMap(partial));
+    assert.deepEqual(p.lines.map(l => l.id), [0, 1, 3]);
+    assert.deepEqual(p.markers.map(m => m.kind), ['origin', 'transfer', 'transfer', 'destination']);
+    assert.deepEqual([p.markers[3].latitude, p.markers[3].longitude], [37.54, 127.04]);
+    // 구간 1개, 노선 하나
+    const single = { ...route129(), steps: [step129('SUBWAY', { path: [[127.0, 37.5], [127.01, 37.51]] })] };
+    const s = plain(buildRouteMap(single));
+    assert.deepEqual(s.markers.map(m => m.kind), ['origin', 'destination']); assert.deepEqual(s.routeLines, [{ id: 2, name: '2호선', color: '#00a84d' }]);
+    assert.deepEqual(s.lines.map(l => l.color), ['#00a84d']); assert.equal(s.usesLineColor, true);
+    // [경도, 위도] 순서와 범위 밖·형식 틀린 점 버리기
+    assert.deepEqual(plain(toCoordinates([[127, 37.5], [37.5, 127], [181, 37], [127, -91], [NaN, 1], ['127', '37'], [127], null, [126.9, 37.4, 9]])),
+        [{ latitude: 37.5, longitude: 127 }, { latitude: 37.4, longitude: 126.9 }]);
+    assert.deepEqual(plain(toCoordinates(null)), []); assert.deepEqual(plain(toCoordinates('x')), []);
+    const bad = { ...route129(), steps: [step129('SUBWAY', { path: [[127, 37.5], [200, 37.5], [127.01, 37.51], [127, 95]] })] };
+    assert.deepEqual(plain(buildRouteMap(bad).lines[0].points), [{ latitude: 37.5, longitude: 127 }, { latitude: 37.51, longitude: 127.01 }]);
+    const onlyBad = { ...route129(), steps: [step129('SUBWAY', { path: [[200, 37.5], [127, 95]] })] };
+    assert.equal(buildRouteMap(onlyBad).lines.length, 0); assert.equal(buildRouteMap(onlyBad).markers.length, 0);
+});
+
+test('129 긴 path 는 처음과 끝을 지키며 상한 안으로 고르게 줄여요', () => {
+    const { buildRouteMap, thinPoints } = routeMap129();
+    const { MAP_LIMITS, isValidMapLines } = createRuntime().load('src/components/map/map-html.ts');
+    assert.deepEqual(plain(thinPoints([1, 2, 3, 4, 5, 6, 7, 8, 9], 3)), [1, 5, 9]);
+    assert.deepEqual(plain(thinPoints([1, 2, 3], 5)), [1, 2, 3]); assert.deepEqual(plain(thinPoints([1, 2, 3], 1)), [1, 3]);
+    const long = Array.from({ length: 4000 }, (_, i) => [127 + i / 100000, 37.5 + i / 100000]);
+    const one = buildRouteMap({ ...route129(), steps: [step129('SUBWAY', { path: long })] });
+    assert.equal(one.lines[0].points.length, MAP_LIMITS.linePoints);
+    assert.deepEqual(plain(one.lines[0].points[0]), { latitude: 37.5, longitude: 127 });
+    assert.deepEqual(plain(one.lines[0].points.at(-1)), { latitude: 37.5 + 3999 / 100000, longitude: 127 + 3999 / 100000 });
+    assert.deepEqual(plain(one.markers.at(-1)), { id: 1, latitude: 37.5 + 3999 / 100000, longitude: 127 + 3999 / 100000, isSupported: true, kind: 'destination', color: one.markers.at(-1).color });
+    const many = buildRouteMap({ ...route129(), steps: Array.from({ length: 12 }, () => step129('SUBWAY', { path: long })) });
+    const total = many.lines.reduce((sum, line) => sum + line.points.length, 0);
+    assert.ok(total <= MAP_LIMITS.totalPoints); assert.equal(isValidMapLines(plain(many.lines)), true);
+    const tooMany = buildRouteMap({ ...route129(), steps: Array.from({ length: 80 }, () => step129('WALKING', { path: [[127, 37.5], [127.01, 37.51]] })) });
+    assert.equal(tooMany.lines.length, MAP_LIMITS.lines); assert.equal(isValidMapLines(plain(tooMany.lines)), true);
+});
+
+test('129 범위: 점 하나·폭 0은 넓히고, 그릴 것이 없으면 null', () => {
+    const { coordinateBounds, buildRouteMap } = routeMap129();
+    const { isMapBounds } = createRuntime().load('src/utils/home-map.ts');
+    assert.equal(coordinateBounds([]), null);
+    const one = coordinateBounds([{ latitude: 37.5, longitude: 127 }]);
+    assert.equal(isMapBounds(one), true); assert.ok(one.minLat < 37.5 && one.maxLat > 37.5 && one.minLng < 127 && one.maxLng > 127);
+    const flat = coordinateBounds([{ latitude: 37.5, longitude: 127 }, { latitude: 37.5, longitude: 127.1 }]);
+    assert.equal(isMapBounds(flat), true); assert.deepEqual([flat.minLng, flat.maxLng], [127, 127.1]); assert.ok(flat.maxLat > flat.minLat);
+    for (const edge of [{ latitude: 90, longitude: 180 }, { latitude: -90, longitude: -180 }]) assert.equal(isMapBounds(coordinateBounds([edge])), true);
+    const point = buildRouteMap({ ...route129(), steps: [step129('SUBWAY', { path: [[127, 37.5]] })] });
+    assert.equal(point.lines.length, 0); assert.deepEqual(plain(point.markers.map(m => m.kind)), ['origin', 'destination']);
+    assert.equal(isMapBounds(point.bounds), true); assert.deepEqual(plain(point.center), { latitude: 37.5, longitude: 127 });
+});
+
+test('129 혼잡도 → 선 색: 5단계, 가장 높은 단계, 정보 없음은 노선 색, 노선 색 없음은 회색', () => {
+    const { stepLineColor, stepCongestion, NO_DATA_LINE_COLOR, WALK_LINE_COLOR, CONGESTION_LEVELS, CONGESTION_LEVEL_LABEL } = routeMap129();
+    const { CONGESTION_STYLE, UNSUPPORTED_COLOR } = createRuntime().load('src/components/route/Congestion.tsx');
+    assert.deepEqual(plain(CONGESTION_LEVELS), Object.keys(CONGESTION_COLOR129));
+    assert.deepEqual(plain(CONGESTION_LEVEL_LABEL), { COMFORTABLE: '쾌적', RELAXED: '여유', NORMAL: '보통', CROWDED: '혼잡', VERY_CROWDED: '매우 혼잡' });
+    for (const level of CONGESTION_LEVELS) {
+        assert.equal(stepLineColor(step129('SUBWAY', { stations: [station129(1, congestion129(level))] })), CONGESTION_STYLE[level].color);
+        assert.equal(CONGESTION_STYLE[level].color, CONGESTION_COLOR129[level]);
+    }
+    const mixed = step129('SUBWAY', { stations: [station129(1, congestion129('VERY_CROWDED', 'MOCK')), station129(2, congestion129('RELAXED')), station129(3, congestion129(null))] });
+    assert.equal(stepLineColor(mixed), CONGESTION_COLOR129.VERY_CROWDED); assert.equal(stepCongestion(mixed).kind, 'MOCK');
+    for (const stations of [[], undefined, [station129(1, congestion129(null))], [station129(1, null)], [station129(1, { ...congestion129('NORMAL'), supported: false })]]) {
+        assert.equal(stepLineColor(step129('SUBWAY', { stations })), '#00a84d');
+    }
+    for (const color of [null, '', 'red', '#00a84', '00a84d']) assert.equal(stepLineColor(step129('SUBWAY', { line: { id: 2, name: '2호선', color } })), NO_DATA_LINE_COLOR);
+    assert.equal(stepLineColor(step129('SUBWAY', { line: null })), NO_DATA_LINE_COLOR);
+    assert.equal(NO_DATA_LINE_COLOR, UNSUPPORTED_COLOR);
+    assert.equal(stepLineColor(step129('WALKING', { stations: [station129(1, congestion129('CROWDED'))] })), WALK_LINE_COLOR);
+    // 혼잡도 데이터는 바꾸지 않아요.
+    const route = route129(); const before = JSON.stringify(route); routeMap129().buildRouteMap(route); assert.equal(JSON.stringify(route), before);
+    // 칠한 혼잡도의 kind 만 범례에 반영해요(MOCK 은 임시).
+    const mock = route129(); mock.steps[1].stations = [station129(1, congestion129('NORMAL', 'MOCK'))];
+    const built = routeMap129().buildRouteMap(mock); assert.equal(built.mock, true); assert.equal(built.estimated, false);
+    mock.steps[1].path = null; assert.equal(routeMap129().buildRouteMap(mock).mock, false);
+});
+
+test('129 노선 목록: 타는 순서, 연달아 같은 노선은 한 번, 다시 타면 다시, 이름·색 없으면 있는 값만', () => {
+    const { buildRouteMap } = routeMap129();
+    const line = (id, name, color) => step129('SUBWAY', { line: { id, name, color } });
+    const route = { ...route129(), steps: [line(2, '2호선', '#00a84d'), step129('WALKING'), line(2, '2호선', '#00a84d'), line(3, '3호선', '#ef7c1c'), line(2, '2호선', '#00a84d'),
+        line(null, '신분당선', null), line(null, ' ', '#d4003b'), step129('SUBWAY', { line: null }), line(null, '', null)] };
+    assert.deepEqual(plain(buildRouteMap(route).routeLines), [
+        { id: 2, name: '2호선', color: '#00a84d' }, { id: 3, name: '3호선', color: '#ef7c1c' }, { id: 2, name: '2호선', color: '#00a84d' },
+        { id: null, name: '신분당선', color: null }, { id: null, name: null, color: '#d4003b' }]);
+    assert.deepEqual(plain(buildRouteMap({ ...route129(), steps: [step129('WALKING')] }).routeLines), []);
+});
+
+/** 웹뷰 HTML 안의 스크립트를 가짜 카카오 SDK 로 실행해요. */
+function html129() {
+    const html = createRuntime().load('src/components/map/map-html.ts').buildMapHtml('test');
+    const listeners = {}; const dots = []; const polylines = []; const fits = []; let script;
+    class LatLng { constructor(latitude, longitude) { this.latitude = latitude; this.longitude = longitude; } getLat() { return this.latitude; } getLng() { return this.longitude; } }
+    const sandbox = {
+        window: { ReactNativeWebView: { postMessage() {} }, addEventListener: (name, fn) => { listeners[name] = fn; } },
+        document: { addEventListener() {}, getElementById: () => ({}), createElement: () => ({ style: {} }), head: { appendChild: el => { script = el; } } },
+        kakao: { maps: { LatLng, load: fn => fn(), event: { addListener() {} },
+            LatLngBounds: class { constructor(sw, ne) { this.sw = sw; this.ne = ne; } },
+            Map: class { setCenter() {} setBounds(bounds, ...padding) { fits.push({ bounds, padding }); } getBounds() { return { getSouthWest: () => new LatLng(37.4, 126.9), getNorthEast: () => new LatLng(37.7, 127.2) }; } },
+            CustomOverlay: class { constructor(options) { this.color = options.content.style.backgroundColor; dots.push(this); } setMap(v) { this.detached = v === null; } },
+            Polyline: class { constructor(options) { this.options = options; polylines.push(this); } setMap(v) { this.detached = v === null; } },
+        } },
+    };
+    vm.runInNewContext(html.split('<script>')[1].split('</script>')[0], sandbox); script.onload();
+    const point = { latitude: 37.5, longitude: 127 };
+    const base = { type: 'state', center: point, myLocation: null, revision: 0, markers: [] };
+    return { html, dots, polylines, fits, base, point, send: value => listeners.message({ data: JSON.stringify(value) }) };
+}
+const line129 = (id = 1, color = '#00a84d', points = [{ latitude: 37.5, longitude: 127 }, { latitude: 37.51, longitude: 127.01 }]) => ({ id, color, points });
+const fit129 = (revision = 1) => ({ bounds: { minLng: 126.99, minLat: 37.49, maxLng: 127.05, maxLat: 37.55 }, revision });
+
+test('129 WebView: 선·색 마커·범위 맞춤은 번호가 바뀔 때만, 갱신 때 이전 선 지우기', () => {
+    const h = html129();
+    h.send({ ...h.base, markers: [{ ...h.point, id: 1, isSupported: true, color: '#2879ef' }, { ...h.point, id: 2, isSupported: false }],
+        lines: [line129(1), { ...line129(2, '#8c93a3'), dashed: true }], fit: fit129(1) });
+    assert.deepEqual(h.dots.map(d => d.color), ['#2879ef', '#8c93a3']);
+    assert.deepEqual(h.polylines.map(p => [p.options.strokeColor, p.options.strokeStyle, p.options.path.length]), [['#00a84d', 'solid', 2], ['#8c93a3', 'shortdash', 2]]);
+    assert.equal(h.fits.length, 1); assert.equal(h.fits[0].bounds.sw.latitude, 37.49); assert.equal(h.fits[0].bounds.ne.longitude, 127.05);
+    // 같은 번호는 다시 맞추지 않고(사용자가 움직인 지도 유지), 선은 새로 그려요.
+    h.send({ ...h.base, lines: [line129(3, '#e5484d')], fit: fit129(1) });
+    assert.equal(h.fits.length, 1); assert.ok(h.polylines.slice(0, 2).every(p => p.detached)); assert.equal(h.polylines.length, 3);
+    assert.ok(h.dots.slice(0, 2).every(d => d.detached));
+    h.send({ ...h.base, lines: [line129(3, '#e5484d')], fit: fit129(2) }); assert.equal(h.fits.length, 2);
+    h.send({ ...h.base }); assert.ok(h.polylines.every(p => p.detached)); assert.equal(h.fits.length, 2);
+});
+
+test('129 WebView: 형식이 틀린 color·상한 초과·좌표 범위 밖 메시지는 통째로 무시', () => {
+    const h = html129();
+    const { MAP_LIMITS } = createRuntime().load('src/components/map/map-html.ts');
+    const points = n => Array.from({ length: n }, (_, i) => ({ latitude: 37.5, longitude: 127 + i / 1e5 }));
+    const bad = [
+        { markers: [{ ...h.point, id: 1, isSupported: true, color: 'red' }] },
+        { markers: [{ ...h.point, id: 1, isSupported: true, color: '#12345' }] },
+        { markers: [{ ...h.point, id: 1, isSupported: true, color: 'url(x)' }] },
+        { lines: [line129(1, '#00a84dff')] }, { lines: [line129(1, 'rgb(0,0,0)')] }, { lines: [line129(1, '#00a84d;x')] },
+        { lines: [line129(1.5)] }, { lines: [line129('1')] }, { lines: [{ ...line129(), dashed: 'yes' }] },
+        { lines: [line129(1, '#00a84d', [{ latitude: 91, longitude: 127 }, h.point])] },
+        { lines: [line129(1, '#00a84d', [{ latitude: 37.5, longitude: 181 }, h.point])] },
+        { lines: [line129(1, '#00a84d', [h.point])] }, { lines: {} },
+        { lines: Array.from({ length: MAP_LIMITS.lines + 1 }, (_, i) => line129(i)) },
+        { lines: [line129(1, '#00a84d', points(MAP_LIMITS.linePoints + 1))] },
+        { lines: Array.from({ length: 6 }, (_, i) => line129(i, '#00a84d', points(MAP_LIMITS.totalPoints / 5))) },
+        { fit: { bounds: { minLng: 127, minLat: 37.5, maxLng: 127, maxLat: 37.6 }, revision: 1 } },
+        { fit: { bounds: { minLng: 127, minLat: 37.5, maxLng: 181, maxLat: 37.6 }, revision: 1 } },
+        { fit: { ...fit129(), revision: 1.5 } }, { fit: null },
+    ];
+    for (const change of bad) h.send({ ...h.base, markers: [{ ...h.point, id: 9, isSupported: true }], lines: [line129()], ...change });
+    assert.deepEqual([h.dots.length, h.polylines.length, h.fits.length], [0, 0, 0]);
+    // 상한에 딱 맞는 메시지는 그려요.
+    h.send({ ...h.base, lines: Array.from({ length: 5 }, (_, i) => line129(i, '#00a84d', points(MAP_LIMITS.totalPoints / 5))) });
+    assert.equal(h.polylines.length, 5);
+});
+
+test('129 HTML 에 경로·역 데이터가 들어가지 않고 CSP·이동 차단이 그대로예요', () => {
+    const { buildMapHtml, isAllowedMapNavigation } = createRuntime().load('src/components/map/map-html.ts');
+    const html = buildMapHtml('test');
+    assert.equal(buildMapHtml.length, 1);
+    for (const value of ['127.01', '37.51', '2호선', '#00a84d', '#00a5de', 'route-129']) assert.ok(!html.includes(value), value);
+    assert.ok(html.includes(`content="default-src 'none'; form-action 'none'; base-uri 'none'; script-src 'unsafe-inline' 'unsafe-eval' https://*.kakao.com https://*.daum.net https://*.daumcdn.net; style-src 'unsafe-inline'; img-src data: https://*.kakao.com https://*.daumcdn.net https://*.daum.net; connect-src https://*.kakao.com https://*.daum.net https://*.daumcdn.net"`));
+    for (const url of ['https://kakao.com.evil.test', 'http://dapi.kakao.com', 'https://localhost:9999']) assert.equal(isAllowedMapNavigation(url), false);
+});
+
+/** 네이티브 KakaoMap 을 렌더해 WebView 로 보내는 메시지를 모아요. */
+function nativeMap129(props) {
+    const r = createScreenRuntime({ EXPO_PUBLIC_KAKAO_MAP_JS_KEY: 'test' }, 'src/components/KakaoMap.tsx');
+    const posted = [];
+    const point = { latitude: 37.5, longitude: 127 };
+    const all = { center: point, myLocation: point, markers: [{ ...point, id: 1, isSupported: true }], onRegionChange() {}, ...props };
+    const render = (next = all) => r.renderComponent({ type: r.screen.default, props: next });
+    let view = render();
+    const webView = findElement(view, e => e.type === 'WebView');
+    webView.props.ref.current = { postMessage: message => posted.push(JSON.parse(message)) };
+    webView.props.onMessage({ nativeEvent: { data: '{"type":"ready"}' } });
+    view = render();
+    return { r, posted, render, all, view };
+}
+
+test('129 네이티브 KakaoMap: 선택 값이 없으면 홈 지도 메시지 그대로, 있으면 lines·fit·color 를 보내요', () => {
+    const home = nativeMap129({});
+    assert.deepEqual(home.posted.map(m => Object.keys(m)), [['type', 'center', 'myLocation', 'markers', 'revision']]);
+    const lines = [line129()]; const bounds = fit129().bounds;
+    const route = nativeMap129({ myLocation: null, lines, fitBounds: bounds, fitRevision: 1, markers: [{ latitude: 37.5, longitude: 127, id: 0, isSupported: true, color: '#2879ef' }] });
+    assert.deepEqual(route.posted.at(-1), { type: 'state', center: { latitude: 37.5, longitude: 127 }, myLocation: null,
+        markers: [{ latitude: 37.5, longitude: 127, id: 0, isSupported: true, color: '#2879ef' }], revision: 0, lines, fit: { bounds, revision: 1 } });
+    const count = route.posted.length; route.render(); assert.equal(route.posted.length, count);
+    assert.equal(findElement(nativeMap129({ fitBounds: null }).view, e => e.type === 'WebView') !== null, true);
+    assert.equal('fit' in nativeMap129({ fitBounds: null }).posted.at(-1), false);
+});
+
+test('129 웹 지도: 선과 색 마커, 갱신 때 이전 것 지우기, 범위 맞춤은 번호가 바뀔 때만, Polyline 없는 SDK 의 홈 지도', () => {
+    const r = createRuntime(); const { validMapState, createWebMap } = r.load('src/components/map/map-web.ts');
+    const f = webMap126Fixture(); const polylines = []; const fits = [];
+    // 선이 없는 홈 지도는 Polyline·LatLngBounds 가 없어도 그대로 동작해요.
+    const home = createWebMap(f.container, f.sdk, f.state, { onRegionChange() {}, onReady() {}, onError() { assert.fail(); } });
+    home.update({ ...f.state, lines: [] }); home.dispose();
+    const g = webMap126Fixture();
+    g.sdk.Polyline = class { constructor(options) { this.options = options; polylines.push(this); } setMap(v) { this.detached = v === null; } };
+    g.sdk.LatLngBounds = class { constructor(sw, ne) { this.sw = sw; this.ne = ne; } };
+    g.sdk.Map.prototype.setBounds = function (bounds, ...padding) { fits.push({ bounds, padding }); };
+    const bounds = fit129().bounds;
+    const state = { center: g.state.center, myLocation: null, centerRevision: 0, fitBounds: bounds, fitRevision: 1,
+        markers: [{ ...g.state.center, id: 0, isSupported: true, color: '#6a5ae0' }, { ...g.state.center, id: 1, isSupported: false }],
+        lines: [line129(0, '#f07a1f'), { ...line129(1, '#8c93a3'), dashed: true }] };
+    assert.equal(validMapState(state), true);
+    for (const change of [{ lines: [line129(0, 'red')] }, { markers: [{ ...g.state.center, id: 0, isSupported: true, color: '#fff' }] },
+        { lines: [line129(0, '#00a84d', [{ latitude: 37.5, longitude: 999 }, g.state.center])] }, { fitBounds: { ...bounds, minLat: 40 } }, { fitRevision: 0.5 }]) {
+        assert.equal(validMapState({ ...state, ...change }), false);
+    }
+    const controller = createWebMap(g.container, g.sdk, state, { onRegionChange() {}, onReady() {}, onError() { assert.fail(); } });
+    assert.deepEqual(polylines.map(p => [p.options.strokeColor, p.options.strokeStyle, p.options.path.length]), [['#f07a1f', 'solid', 2], ['#8c93a3', 'shortdash', 2]]);
+    assert.deepEqual(g.overlays.map(o => /background-color:([^;]+)/.exec(o.options.content.style.cssText)[1]), ['#6a5ae0', '#8c93a3']);
+    assert.equal(fits.length, 1); assert.equal(fits[0].bounds.sw.getLat(), bounds.minLat); assert.equal(fits[0].bounds.ne.getLng(), bounds.maxLng);
+    controller.update({ ...state, lines: [line129(5, '#e5484d')] });
+    assert.ok(polylines.slice(0, 2).every(p => p.detached)); assert.equal(polylines.length, 3); assert.ok(g.overlays.slice(0, 2).every(o => o.detached));
+    assert.equal(fits.length, 1);
+    controller.update({ ...state, lines: [line129(5, 'bad')] }); assert.equal(polylines.length, 3); assert.equal(polylines[2].detached, undefined);
+    controller.update({ ...state, fitRevision: 2 }); assert.equal(fits.length, 2);
+    controller.update({ ...state, fitRevision: 2 }); assert.equal(fits.length, 2);
+    controller.dispose(); assert.ok(polylines.every(p => p.detached));
+});
+
+/** 경로 안내 화면. mock=true 면 mock 모드예요. */
+function guide129({ mock = false, route = route129() } = {}) {
+    const r = createScreenRuntime(mock ? {} : serverEnv, 'src/app/route-guide.tsx', runtime => {
+        let focus; let blur;
+        runtime.external['expo-router'].useFocusEffect = callback => { if (focus !== callback) { blur?.(); focus = callback; blur = callback(); } };
+        runtime.blur = () => { blur?.(); blur = undefined; };
+        runtime.focus = () => { blur = focus(); };
+        runtime.native.ScrollView = 'ScrollView';
+    });
+    r.load('src/stores/route-store.ts').setSelectedRoute({ route, routeSource: 'KAKAO', origin: { id: 1, name: '출발역', lines: [2], isSupported: true }, destination: { id: 9, name: '도착역', lines: [7], isSupported: true } });
+    r.auth = r.load('src/stores/auth-store.ts');
+    if (!mock) r.auth.signIn({ userId: 'user-129', nickname: '나' });
+    r.external['expo-router'].useLocalSearchParams = () => ({ routeId: route.routeId });
+    r.KakaoMap = r.load('src/components/KakaoMap.tsx').default;
+    r.Preview = r.load('src/components/route/RouteMapPreview.tsx').default;
+    r.Legend = r.load('src/components/route/RouteMapLegend.tsx').default;
+    r.Timeline = r.load('src/components/route/RouteTimeline.tsx').default;
+    r.map = view => findElement(view, e => e.type === r.KakaoMap);
+    r.legend = view => findElement(view, e => e.type === r.Legend);
+    return r;
+}
+const legendTexts129 = element => findAll125(deep125(element), e => e.type === 'Text').map(textOf);
+
+test('129 서버 모드 경로 화면: KakaoMap(경로선·마커·범위)과 범례(혼잡도·도보·노선·마커), 경로 정보 그대로', () => {
+    const r = guide129(); const view = r.render();
+    const map = r.map(view);
+    assert.ok(map); assert.equal(findElement(view, e => e.type === r.Preview), null);
+    const expected = plain(r.load('src/utils/route-map.ts').buildRouteMap(route129()));
+    assert.deepEqual(plain(map.props.lines), expected.lines); assert.deepEqual(plain(map.props.markers), expected.markers);
+    assert.deepEqual(plain(map.props.fitBounds), expected.bounds); assert.equal(map.props.fitRevision, 1);
+    assert.equal(map.props.myLocation, null); assert.equal(map.props.label, '경로 지도'); assert.equal(map.key, `${r.load('src/services/auth.ts').getSessionGeneration()}:user-129:route-129`);
+    const wrapper = findElement(view, e => e.props?.children === map || (Array.isArray(e.props?.children) && e.props.children.includes(map)));
+    assert.equal(wrapper.props.style.height, 220);
+    const texts = legendTexts129(r.legend(view));
+    for (const text of ['혼잡도', '쾌적', '여유', '보통', '혼잡', '매우 혼잡', '추정', '도보', '출발', '환승', '도착', '노선', '2호선', '4호선', '7호선', '혼잡도 정보가 없는 구간은 노선 색으로 그려요.']) assert.ok(texts.includes(text), text);
+    assert.equal(texts.includes('임시'), false);
+    // 노선은 타는 순서대로, 노선 색과 이름이 같이 보여요(LineBadge 재사용).
+    const legend = deep125(r.legend(view));
+    assert.ok(texts.indexOf('2호선') < texts.indexOf('4호선') && texts.indexOf('4호선') < texts.indexOf('7호선'));
+    assert.equal(texts.filter(t => t === '4호선').length, 1);
+    const badges = findAll125(legend, e => e.props?.style?.[1]?.backgroundColor && e.props.style[0]?.alignItems === 'center').map(e => e.props.style[1].backgroundColor);
+    assert.deepEqual(badges, ['#00a84d', '#00a5de']);
+    const rows = findAll125(legend, e => e.type === 'View' && e.props.style?.flexWrap === 'wrap'); assert.ok(rows.length >= 3);
+    // 경로 정보 카드와 목록은 그대로예요.
+    assert.ok(findElement(view, e => e.type === r.Timeline));
+    assert.ok(findElement(view, e => e.type === 'Text' && textOf(e).includes('출발역 → 도착역')));
+});
+
+test('129 지도 실패: 경로 정보는 그대로, 범례만 숨기고 다시 불러오면 다시 보여요. 화면을 떠난 뒤·계정 전환 뒤 메시지는 무시', () => {
+    const r = guide129(); let view = r.render();
+    r.map(view).props.onError(); view = r.render();
+    assert.equal(r.legend(view), null); assert.ok(r.map(view)); assert.ok(findElement(view, e => e.type === r.Timeline));
+    assert.ok(findElement(view, e => e.type === 'Text' && textOf(e).includes('출발역 → 도착역')));
+    r.map(view).props.onRegionChange({ minLng: 126.9, minLat: 37.4, maxLng: 127.2, maxLat: 37.7 }); view = r.render();
+    assert.ok(r.legend(view));
+    // 화면을 떠난 뒤에는 처리하지 않아요.
+    const onError = r.map(view).props.onError; r.blur(); onError(); view = r.render(); assert.ok(r.legend(view));
+    r.focus(); view = r.render();
+    // 계정이 바뀐 뒤 이전 지도에서 온 메시지는 처리하지 않고, 새 계정은 지도를 새로 만들어요.
+    const before = r.map(view); const oldKey = before.key;
+    r.auth.signIn({ userId: 'user-other', nickname: '다른 사람' }); before.props.onError(); view = r.render();
+    assert.ok(r.legend(view)); assert.notEqual(r.map(view).key, oldKey);
+});
+
+test('129 그릴 것이 없는 서버 경로는 기본 중심 지도만(안내 문구 없음), mock 모드는 RouteMapPreview 그대로', () => {
+    const route = route129(); route.steps.forEach(step => { step.path = null; });
+    const r = guide129({ route }); const view = r.render(); const map = r.map(view);
+    const { DEFAULT_MAP_CENTER } = r.load('src/utils/home-map.ts');
+    assert.deepEqual(plain(map.props.center), plain(DEFAULT_MAP_CENTER)); assert.deepEqual(plain(map.props.lines), []);
+    assert.deepEqual(plain(map.props.markers), []); assert.equal(map.props.fitBounds, null);
+    const m = guide129({ mock: true }); const mockView = m.render();
+    assert.equal(m.map(mockView), null); assert.equal(m.legend(mockView), null);
+    const preview = findElement(mockView, e => e.type === m.Preview);
+    assert.ok(preview); assert.equal(preview.props.route.routeId, 'route-129'); assert.deepEqual(Object.keys(preview.props), ['route']);
+});
+
+/** 함수 컴포넌트를 펼치지 않은 화면 트리(이름·key·props·자식)예요. */
+function shallow129(node) {
+    if (node == null || typeof node === 'boolean') return null;
+    if (Array.isArray(node)) return node.map(shallow129).flat().filter(value => value !== null);
+    if (typeof node !== 'object') return String(node);
+    const { children, ...rest } = node.props ?? {};
+    const props = {};
+    for (const [key, value] of Object.entries(rest).sort(([a], [b]) => a.localeCompare(b))) {
+        if (value === undefined) continue;
+        props[key] = typeof value === 'function' ? '[fn]' : value && typeof value === 'object' && value.$$typeof ? shallow129(value) : JSON.parse(JSON.stringify(value));
+    }
+    return { t: typeof node.type === 'function' ? node.type.name : String(node.type), k: node.key, p: props, c: shallow129(children) };
+}
+/** #129 이전(dev e970115) route-guide.tsx 의 mock 모드 트리 sha256 이에요. */
+const MOCK_GUIDE_SHA129 = 'b96b2ecb22153e475a783a02f6e1e08552c118446ec3e8764218114d4239d13e';
+test('129 mock 모드 경로 화면 트리는 #129 이전과 같아요', () => {
+    const r = guide129({ mock: true });
+    const sha = require('node:crypto').createHash('sha256').update(JSON.stringify(shallow129(r.render()))).digest('hex');
+    assert.equal(sha, MOCK_GUIDE_SHA129);
+});

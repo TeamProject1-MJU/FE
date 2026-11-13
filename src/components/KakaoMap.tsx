@@ -4,7 +4,10 @@ import { WebView } from 'react-native-webview';
 import type { Coordinate, MapBounds } from '@/utils/home-map';
 import { buildMapHtml, isAllowedMapNavigation, parseMapMessage } from '@/components/map/map-html';
 
-export type MapMarker = Coordinate & { id: number; isSupported: boolean };
+/** color(#RRGGBB)가 있으면 그 색, 없으면 isSupported 로 색을 정해요. */
+export type MapMarker = Coordinate & { id: number; isSupported: boolean; color?: string };
+/** points 는 { latitude, longitude } 순서예요. dashed 는 점선(도보)이에요. */
+export type MapLine = { id: number; color: string; points: Coordinate[]; dashed?: boolean };
 export type KakaoMapProps = {
     center: Coordinate;
     myLocation: Coordinate | null;
@@ -13,9 +16,16 @@ export type KakaoMapProps = {
     bottomInset?: number;
     onRegionChange: (bounds: MapBounds) => void;
     onError?: () => void;
+    /** 선택 값: 폴리라인. 넘기지 않으면 홈 지도처럼 선을 그리지 않아요. */
+    lines?: MapLine[];
+    /** 선택 값: 이 범위가 다 보이게 맞춰요. fitRevision 이 바뀔 때만 맞추고, 같은 번호로는 다시 맞추지 않아요. */
+    fitBounds?: MapBounds | null;
+    fitRevision?: number;
+    /** 선택 값: 웹 지도 영역의 접근성 이름 */
+    label?: string;
 };
 
-export default function KakaoMap({ center, myLocation, markers, centerRevision = 0, bottomInset = 0, onRegionChange, onError }: KakaoMapProps) {
+export default function KakaoMap({ center, myLocation, markers, centerRevision = 0, bottomInset = 0, onRegionChange, onError, lines, fitBounds, fitRevision = 0 }: KakaoMapProps) {
     const key = process.env.EXPO_PUBLIC_KAKAO_MAP_JS_KEY?.trim() ?? '';
     const source = useMemo(() => ({ html: buildMapHtml(key), baseUrl: 'https://localhost' }), [key]);
     const web = useRef<WebView>(null);
@@ -32,8 +42,11 @@ export default function KakaoMap({ center, myLocation, markers, centerRevision =
         return () => clearTimeout(timer);
     }, [attempt, key, ready, failed]);
     useEffect(() => {
-        if (ready && !failed) web.current?.postMessage(JSON.stringify({ type: 'state', center, myLocation, markers, revision: centerRevision }));
-    }, [ready, failed, center, myLocation, markers, centerRevision]);
+        if (!ready || failed) return;
+        // 선택 값은 넘겼을 때만 메시지에 넣어요. 홈 지도의 메시지는 이전과 같아요.
+        const fit = fitBounds ? { bounds: fitBounds, revision: fitRevision } : undefined;
+        web.current?.postMessage(JSON.stringify({ type: 'state', center, myLocation, markers, revision: centerRevision, lines, fit }));
+    }, [ready, failed, center, myLocation, markers, centerRevision, lines, fitBounds, fitRevision]);
 
     return <View style={[styles.container, { marginBottom: bottomInset }]}>
         {!!key && !failed && <WebView

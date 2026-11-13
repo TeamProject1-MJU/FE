@@ -16,9 +16,9 @@ type Point = { x: number; y: number; name: string; color: string };
 /**
  * 경로 지도 미리보기 (#35)
  *
- * 실제 지도 SDK 연동 전까지 쓰는 정적 그림입니다.
+ * mock 모드 경로 안내 화면에서 쓰는 정적 그림입니다(실제 좌표를 쓰지 않아요).
  * 승차역·환승역·도착역만 점으로 찍고, 구간을 노선 색으로 잇습니다.
- * TODO: 카카오맵 SDK 연동 시 steps[].path 좌표로 경로 선을 그립니다 (명세 6.1).
+ * 서버 모드는 카카오맵(KakaoMap)에 steps[].path 경로선을 그려요(#129, src/utils/route-map.ts).
  */
 export default function RouteMapPreview({ route }: { route: Route }) {
     const [size, setSize] = useState({ width: 0, height: 0 });
