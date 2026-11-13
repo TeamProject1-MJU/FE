@@ -121,6 +121,8 @@ export type RouteErrorCode =
     | 'STATION_NOT_FOUND'
     | 'STATION_UNSUPPORTED'
     | 'ROUTE_NOT_FOUND'
+    | 'NOT_ROOM_MEMBER'
+    | 'ROOM_NOT_FOUND'
     | 'EXTERNAL_API_ERROR'
     | 'NETWORK_ERROR';
 
