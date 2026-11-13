@@ -25,7 +25,7 @@ import { MOCK_STATIONS } from '@/mocks/stations';
 import { useMock as isMockMode } from '@/services/api/config';
 import { fetchStation } from '@/services/station';
 import { getSession } from '@/stores/auth-store';
-import { createServerRoom, joinServerRoom, fetchServerInviteCode, leaveServerRoom, setServerSelectedStation, updateServerDeparture, updateServerRoom, fetchServerRoomDetail, fetchServerRoomMembers, fetchServerRooms } from '@/services/room-query';
+import { createServerRoom, isRoomCreateOutcomeUnknown, joinServerRoom, fetchServerInviteCode, leaveServerRoom, setServerSelectedStation, updateServerDeparture, updateServerRoom, fetchServerRoomDetail, fetchServerRoomMembers, fetchServerRooms } from '@/services/room-query';
 import { createServerProposal, deleteServerProposal, fetchServerProposals, voteServerProposal } from '@/services/room-proposals';
 import { assertRoomCacheScope, getRoomCacheScope, readCachedMembers, readCachedRoom, subscribeRoomCacheReset } from '@/services/room-cache';
 import { forgetRoom } from '@/services/realtime';
@@ -51,6 +51,9 @@ const MOCK_DELAY_MS = 600;
 const MAX_MEMBERS = 4;
 /** 방 이름 길이 (명세 부록 A ck_room_name: char_length(btrim(name)) BETWEEN 1 AND 30) */
 export const ROOM_NAME_MAX = 30;
+export { isRoomCreateOutcomeUnknown };
+/** 방 생성 결과를 알 수 없을 때 생성 화면의 안내 (#144) */
+export const ROOM_CREATE_UNKNOWN_NOTICE = '방이 만들어졌을 수 있어요. 다시 만들기 전에 방 목록을 먼저 확인해 주세요.';
 
 /** 방 이름 글자 수: 앞뒤 공백을 빼고 글자 단위로 셉니다(서버와 같은 기준) */
 export function roomNameLength(value: string) {

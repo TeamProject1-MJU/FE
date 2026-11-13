@@ -7787,3 +7787,155 @@ test('143 생성·수정 화면: 수정 화면 maxLength 없음, 이모지 30자
         create.unmount(); edit.unmount();
     }
 });
+
+/* ---------- #144 방 생성 결과를 모를 때 중복 생성 방지 안내 ---------- */
+
+const ROOM_CREATE_UNKNOWN144 = '방이 만들어졌을 수 있어요. 다시 만들기 전에 방 목록을 먼저 확인해 주세요.';
+/** 생성 응답 시나리오. stored 면 서버는 방을 저장했어요. */
+const create144 = {
+    lost: { stored: true, respond: () => Promise.reject(new TypeError('Network request failed')) },
+    timeout: { stored: true, respond: options => new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new Error('aborted')))) },
+    badBody: { stored: true, respond: () => Promise.resolve(jsonResponse({ success: true, data: { id: 'not-a-uuid' } }, 201)) },
+    notJson: { stored: true, respond: () => Promise.resolve({ ok: true, status: 201, text: async () => '<html>ok</html>' }) },
+    server500: { stored: false, respond: () => Promise.resolve(jsonResponse({ success: false, error: { code: 'INTERNAL_SERVER_ERROR' } }, 500)) },
+    gateway504: { stored: true, respond: () => Promise.resolve({ ok: false, status: 504, text: async () => '<html>Gateway Timeout</html>' }) },
+    validation: { stored: false, respond: () => Promise.resolve(jsonResponse({ success: false, error: { code: 'VALIDATION_ERROR' } }, 400)) },
+    busy: { stored: false, respond: () => Promise.resolve(jsonResponse({ success: false, error: { code: 'ROOM_BUSY' } }, 409)) },
+    proxy413: { stored: false, respond: () => Promise.resolve({ ok: false, status: 413, text: async () => 'too large' }) },
+};
+const UNKNOWN144 = ['lost', 'timeout', 'badBody', 'notJson', 'server500', 'gateway504'];
+
+test('144 결과 불명 분류: 응답 유실·시간 초과·2xx 파싱 실패·5xx 는 결과 불명, 4xx·보내기 전 검사·인증 오류는 아님', async () => {
+    for (const [kind, scenario] of Object.entries(create144)) {
+        const r = roomQueryRuntime(); let posts = 0;
+        r.respond((url, options) => { if (options.method === 'POST') { posts++; return scenario.respond(options); } return Promise.resolve(jsonResponse({ success: true, data: [] })); });
+        const pending = r.room.createRoom({ name: '모임', appointmentAt: null }).catch(error => error);
+        for (let i = 0; i < 5; i++) { await settle(); r.advance(5000); }
+        const error = await pending;
+        assert.equal(error instanceof r.load('src/types/room.ts').RoomError, true, kind);
+        assert.equal(r.room.isRoomCreateOutcomeUnknown(error), UNKNOWN144.includes(kind), kind);
+        assert.equal(posts, 1, kind); // 자동 재전송 없음
+    }
+    const r = roomQueryRuntime(); r.respond(() => { throw Error('보내면 안 돼요'); });
+    const local = await r.room.createRoom({ name: ' ', appointmentAt: null }).catch(error => error);
+    assert.equal(local.code, 'VALIDATION_ERROR'); assert.equal(r.room.isRoomCreateOutcomeUnknown(local), false);
+    const { ApiError } = r.load('src/services/api/errors.ts');
+    for (const [error, expected] of [[new ApiError('TOKEN_EXPIRED', null, null, 401), false], [new ApiError('AUTH_REQUIRED'), false], [new ApiError('NETWORK_ERROR'), true],
+        [new ApiError('UNKNOWN_ERROR', null, null, 201), true], [new ApiError('UNKNOWN_ERROR', null, null, 502), true], [new ApiError('ROOM_FULL', null, null, 409), false]]) {
+        assert.equal(r.room.isRoomCreateOutcomeUnknown(error), expected, `${error.code} ${error.status}`);
+    }
+    // 인증 오류는 RoomError 로 바꾸지 않고 그대로 던져요(기존 처리).
+    const auth = roomQueryRuntime(); auth.respond((_url, options) => Promise.resolve(options.method === 'POST' ? jsonResponse({ success: false, error: { code: 'TOKEN_INVALID' } }, 401) : jsonResponse({ success: true, data: [] })));
+    const authError = await auth.room.createRoom({ name: '모임', appointmentAt: null }).catch(error => error);
+    assert.equal(authError.code, 'TOKEN_INVALID'); assert.equal(auth.room.isRoomCreateOutcomeUnknown(authError), false);
+});
+
+test('144 결과 불명 뒤 목록은 생성 전에 시작한 조회를 함께 쓰지 않고 서버에서 새로 조회해요', async () => {
+    const r = roomQueryRuntime(); let gets = 0; let first; const created = roomQuerySummary({ id: ROOM_QUERY_ID, name: '모임' });
+    r.respond((url, options) => {
+        if (options.method === 'POST') return create144.lost.respond();
+        gets++;
+        if (gets === 1) return new Promise(resolve => { first = resolve; });
+        return Promise.resolve(jsonResponse({ success: true, data: [created] }));
+    });
+    const before = r.room.fetchMyRooms(); await settle();
+    const error = await r.room.createRoom({ name: '모임', appointmentAt: null }).catch(value => value);
+    assert.equal(r.room.isRoomCreateOutcomeUnknown(error), true);
+    const after = r.room.fetchMyRooms(); await settle();
+    assert.equal(gets, 2);
+    first(jsonResponse({ success: true, data: [] })); assert.deepEqual(plain(await before), []);
+    assert.deepEqual(plain(await after).map(room => room.id), [ROOM_QUERY_ID]);
+});
+
+function createScreen144() {
+    const r = roomQueryScreen('src/app/rooms/new.tsx'); r.posts = 0; r.moves = [];
+    r.external['expo-router'].router.dismissTo = href => r.moves.push(['dismissTo', href]);
+    r.external['expo-router'].router.replace = href => r.moves.push(['replace', href]);
+    r.scenario = create144.lost;
+    r.context.fetch = async (_url, options) => {
+        if (options.method === 'POST') { r.posts++; return r.scenario.respond(options); }
+        return jsonResponse({ success: true, data: [] });
+    };
+    r.type = name => { findElement(r.render(), element => element.type === 'TextInput').props.onChangeText(name); return r.render(); };
+    r.press = async label => {
+        const pending = roomWriteButton(r.render(), label).props.onPress();
+        for (let i = 0; i < 5; i++) { await settle(); r.advance(5000); }
+        await pending; return r.render();
+    };
+    return r;
+}
+
+test('144 생성 화면: 응답 유실·시간 초과·파싱 실패는 결과 불명 안내와 "방 목록 확인", 요청은 한 번만, 확인 누르면 목록으로', async () => {
+    for (const kind of UNKNOWN144) {
+        const r = createScreen144(); r.scenario = create144[kind];
+        r.type('금요 모임'); let view = await r.press('약속방 만들기');
+        assert.ok(findText(view, ROOM_CREATE_UNKNOWN144), kind);
+        assert.ok(findElement(view, element => element.props?.accessibilityRole === 'alert'), kind);
+        assert.equal(findTextIncluding(view, '서버에 연결하지 못했어요'), null, kind);
+        assert.equal(findTextIncluding(view, '서버의 방 정보를 확인하지 못했어요'), null, kind);
+        assert.equal(findElement(view, element => element.type === 'TextInput').props.value, '금요 모임', kind);
+        r.advance(60000); await settle(); assert.equal(r.posts, 1, kind); // 자동 재전송 없음
+        roomWriteButton(view, '방 목록 확인').props.onPress();
+        assert.deepEqual(r.moves, [['dismissTo', '/rooms']], kind);
+        // 다시 만들기는 막지 않지만 버튼 문구로 한 번 더 확인해요.
+        assert.equal(roomWriteButton(view, '약속방 만들기'), null); assert.ok(roomWriteButton(view, '그래도 새로 만들기'));
+        r.scenario = { respond: () => Promise.resolve(jsonResponse({ success: true, data: createdRoomData({ name: '금요 모임' }) }, 201)) };
+        view = await r.press('그래도 새로 만들기'); assert.equal(r.posts, 2, kind);
+        assert.equal(view.props.room.roomCode, 'A3K9PZ', kind);
+        r.unmount();
+    }
+});
+
+test('144 "방 목록 확인" 뒤 목록 화면은 서버 목록을 다시 조회해 새 방을 보여줘요', async () => {
+    const list = roomQueryScreen('src/app/rooms/index.tsx'); const gets = [];
+    list.context.fetch = async (url, options) => { gets.push([options.method ?? 'GET', url]); return jsonResponse({ success: true, data: [roomQuerySummary({ name: '금요 모임' })] }); };
+    list.render(); await settle(); const view = list.render();
+    assert.deepEqual(gets.filter(([, url]) => url.endsWith('/rooms')).length, 1);
+    assert.ok(findElement(view, element => element.props?.room?.id === ROOM_QUERY_ID && element.props.room.name === '금요 모임'));
+    list.unmount();
+});
+
+test('144 4xx(VALIDATION_ERROR·ROOM_BUSY·본문 없는 413)는 기존 실패 안내 그대로, 결과 불명 안내 없음', async () => {
+    for (const [kind, message] of [['validation', '요청한 방 정보를 확인해 주세요.'], ['busy', '다른 요청을 처리하고 있어요. 잠시 후 다시 시도해 주세요.'], ['proxy413', '서버의 방 정보를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.']]) {
+        const r = createScreen144(); r.scenario = create144[kind];
+        r.type('모임'); const view = await r.press('약속방 만들기');
+        assert.ok(findText(view, message), kind);
+        assert.equal(findText(view, ROOM_CREATE_UNKNOWN144), null, kind);
+        assert.equal(roomWriteButton(view, '방 목록 확인'), null, kind); assert.ok(roomWriteButton(view, '약속방 만들기'), kind);
+        assert.equal(r.posts, 1, kind); r.unmount();
+    }
+});
+
+test('144 같은 이름의 방을 연속으로 만들 수 있어요(이름으로 막거나 단정하지 않음)', async () => {
+    const r = roomQueryRuntime(); const bodies = []; let id = 0;
+    r.respond((_url, options) => {
+        if (options.method !== 'POST') return Promise.resolve(jsonResponse({ success: true, data: [] }));
+        bodies.push(JSON.parse(options.body)); id++;
+        return Promise.resolve(jsonResponse({ success: true, data: createdRoomData({ id: `${ROOM_QUERY_ID.slice(0, -1)}${id}`, name: '같은 이름', roomCode: `A3K9P${id}` }) }, 201));
+    });
+    const first = await r.room.createRoom({ name: '같은 이름', appointmentAt: null });
+    const second = await r.room.createRoom({ name: '같은 이름', appointmentAt: null });
+    assert.equal(bodies.length, 2); assert.notEqual(first.id, second.id); assert.equal(first.name, second.name);
+    // 화면에서도: 결과 불명 뒤 같은 이름으로 다시 만들면 그대로 보내요.
+    const s = createScreen144(); s.type('같은 이름'); await s.press('약속방 만들기');
+    s.scenario = { respond: options => { bodies.push(JSON.parse(options.body)); return Promise.resolve(jsonResponse({ success: true, data: createdRoomData({ name: '같은 이름' }) }, 201)); } };
+    await s.press('그래도 새로 만들기');
+    assert.deepEqual(bodies.slice(2).map(body => body.name), ['같은 이름']); s.unmount();
+});
+
+test('144 mock 모드 생성 실패는 이전과 같은 안내이고 결과 불명 안내가 없어요', async () => {
+    let calls = 0;
+    const m = createScreenRuntime({}, 'src/app/rooms/new.tsx', runtime => {
+        runtime.external['expo-clipboard'] = { setStringAsync: async () => {} }; runtime.native.ScrollView = 'ScrollView';
+        runtime.external['expo-router'].useLocalSearchParams = () => ({ mock: 'error' });
+    });
+    m.context.fetch = async () => { calls++; throw Error(); };
+    findElement(m.render(), element => element.type === 'TextInput').props.onChangeText('모임');
+    const pending = roomWriteButton(m.render(), '약속방 만들기').props.onPress(); m.advance(1000); await pending; await settle();
+    let view = m.render();
+    assert.ok(findText(view, '약속방을 만들지 못했어요. 잠시 후 다시 시도해 주세요.'));
+    assert.equal(findText(view, ROOM_CREATE_UNKNOWN144), null); assert.equal(roomWriteButton(view, '방 목록 확인'), null);
+    assert.ok(roomWriteButton(view, '약속방 만들기'));
+    const retry = roomWriteButton(view, '약속방 만들기').props.onPress(); m.advance(1000); await retry; await settle(); view = m.render();
+    assert.ok(view.props.room); assert.equal(calls, 0); m.unmount();
+});

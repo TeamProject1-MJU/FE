@@ -137,6 +137,8 @@ export type RoomErrorCode =
 
 export class RoomError extends Error {
     code: RoomErrorCode;
+    /** 방 생성(7.1) 요청을 보낸 뒤 결과를 알 수 없음: 서버가 방을 만들었을 수 있어요(#144, isRoomCreateOutcomeUnknown). */
+    outcomeUnknown?: boolean;
 
     constructor(code: RoomErrorCode, message: string, readonly roomId?: string) {
         super(message);
