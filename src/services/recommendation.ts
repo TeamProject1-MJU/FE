@@ -10,7 +10,7 @@
  * - recommendedStation.lines 는 응답에 없어서 역 상세(5.3)로 채우고, 실패하면 배지만 숨겨요.
  * - 서버에 이전 실행 목록 API 가 없어서 listRecommendationRuns 는 이 앱 세션에서 본 실행(8.1 성공·8.2 결과)만 돌려줘요.
  * - 인증 오류(TOKEN_*·401)는 A-1 공통 처리에 맡기고 ApiError 그대로 던져요.
- * - TODO(범위 밖): WS RECOMMENDATION_CREATED / MEMBER_JOINED / MEMBER_LEFT / DEPARTURE_UPDATED / ROOM_UPDATED 수신 시 8.2 재조회 (11장, BE #43 이후)
+ * - 추천 화면은 WS RECOMMENDATION_CREATED / MEMBER_JOINED / MEMBER_LEFT / DEPARTURE_UPDATED / ROOM_UPDATED 수신 시 8.2를 다시 조회해요(#117, #136).
  *
  * mock 모드 (기본)
  * - 방 mock(services/room.ts)의 멤버·출발역·약속 시각을 읽어 메모리에서 추천을 흉내 내요.
