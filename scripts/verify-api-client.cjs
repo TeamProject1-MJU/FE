@@ -8215,3 +8215,56 @@ test('138 표시: 내 질문 여러 개가 대기여도 숫자가 아니라 "답
     assert.ok(!status.some(text => /\d/.test(text)));
     r.unmount();
 });
+
+/* #138 보완: 60초 시간 창 — 답이 오지 않은 옛 질문이 이후 답변을 가로채지 않아요 */
+
+/** 초 단위 + 밀리초까지 정할 수 있는 시각 */
+const ai138WindowAt = ms => new Date(Date.UTC(2026, 10, 12, 10, 0, 0) + ms).toISOString();
+const ai138WindowQuestion = (n, ms, mine = true) => ({ ...ai138Question(n, 0, mine), createdAt: ai138WindowAt(ms) });
+const ai138WindowReply = (n, ms) => ({ ...ai138Reply(n, 0), createdAt: ai138WindowAt(ms) });
+
+test('138 시간 창: 60초 넘게 답이 없던 옛 질문 + 새 질문 + 답변 1개 → 새 질문만 해제, 옛 질문은 미답', () => {
+    const wait = createRuntime().load('src/services/chat-ai-wait.ts');
+    assert.equal(wait.AI_REPLY_WINDOW_MS, 60_000);
+    const old = ai138WindowQuestion(1, 0, false); const fresh = ai138WindowQuestion(2, 120_000); const reply = ai138WindowReply(11, 125_000);
+    assert.deepEqual([...wait.matchAiReplies([old, fresh], [reply])], [fresh.id]);
+    const tracker = wait.createAiReplyTracker();
+    tracker.observe([old, fresh, reply]);
+    assert.deepEqual([tracker.isAnswered(old.id), tracker.isAnswered(fresh.id)], [false, true]);
+    // 창 안의 질문이 여럿이면 기존대로 가장 오래된 하나만, 다른 사람 질문도 소비해요.
+    const other = ai138WindowQuestion(3, 110_000, false);
+    assert.deepEqual([...wait.matchAiReplies([old, other, fresh], [reply])], [other.id]);
+});
+
+test('138 시간 창 경계: 질문 60초 뒤 정각 답변은 짝지어지고 60.001초 뒤는 짝지어지지 않아요', () => {
+    const wait = createRuntime().load('src/services/chat-ai-wait.ts');
+    const question = ai138WindowQuestion(1, 0);
+    assert.deepEqual([...wait.matchAiReplies([question], [ai138WindowReply(11, 60_000)])], [question.id]);
+    assert.deepEqual([...wait.matchAiReplies([question], [ai138WindowReply(11, 60_001)])], []);
+    // 질문보다 먼저 쓴 답변은 여전히 짝짓지 않아요.
+    assert.deepEqual([...wait.matchAiReplies([ai138WindowQuestion(1, 5_000)], [ai138WindowReply(11, 4_999)])], []);
+});
+
+test('138 시간 창: 방 기록(옛 질문들)을 먼저 받은 뒤 새 질문·답변이 와도, 순서를 섞어도 같은 결과', () => {
+    const wait = createRuntime().load('src/services/chat-ai-wait.ts');
+    const history = [ai138WindowQuestion(1, 0, false), ai138WindowQuestion(2, 10_000), ai138WindowQuestion(3, 20_000, false)];
+    const fresh = ai138WindowQuestion(4, 300_000); const reply = ai138WindowReply(11, 305_000);
+    const expected = { [history[0].id]: false, [history[1].id]: false, [history[2].id]: false, [fresh.id]: true };
+    const orders = [
+        tracker => { tracker.observe(history); tracker.addQuestion(fresh); tracker.observe([reply]); }, // 기록 → 새 질문 → 답변
+        tracker => { tracker.observe([reply]); tracker.observe(history.slice().reverse()); tracker.addQuestion(fresh); }, // 답변 먼저, 질문 나중
+        tracker => { tracker.observe([fresh, reply, ...history]); tracker.observe([reply]); tracker.observe(history); }, // 섞어서·중복
+    ];
+    for (const order of orders) {
+        const tracker = wait.createAiReplyTracker(); order(tracker);
+        assert.deepEqual(Object.fromEntries(Object.keys(expected).map(id => [id, tracker.isAnswered(id)])), expected);
+    }
+});
+
+test('138 시간 창: 화면에서도 옛 미답 질문이 답변을 가로채지 않아 내 대기가 바로 해제돼요', async () => {
+    const r = await ai138Hook([ai138WindowQuestion(2, 120_000)]);
+    r.event(ai138WindowQuestion(1, 0)); // 답이 오지 않은 옛 질문(기록)
+    await r.ask(); assert.equal(r.render().aiPending, 1);
+    r.event(ai138WindowReply(11, 125_000)); assert.equal(r.render().aiPending, 0); assert.equal(r.timers.size, 0);
+    r.unmount();
+});

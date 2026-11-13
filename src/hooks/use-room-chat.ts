@@ -15,7 +15,7 @@ import type {
     ChatMockScenario,
     PendingChatMessage,
 } from '@/types/chat';
-import { createAiReplyTracker } from '@/services/chat-ai-wait';
+import { AI_REPLY_WINDOW_MS, createAiReplyTracker } from '@/services/chat-ai-wait';
 import { getRealtimeState, subscribeRealtimeState, subscribeRoomEvents } from '@/services/realtime';
 import { RoomError } from '@/types/room';
 import { useMock as isMockMode } from '@/services/api/config';
@@ -454,7 +454,7 @@ export function useRoomChat(roomId: string, mock?: string) {
         ctx.waitForAi = question => {
             if (isMockMode() || !ctx.valid() || ctx.blocked) return;
             replies.addQuestion(question);
-            if (!waiting.has(question.id)) waiting.set(question.id, { question, deadline: Date.now() + 60_000, expiry: undefined });
+            if (!waiting.has(question.id)) waiting.set(question.id, { question, deadline: Date.now() + AI_REPLY_WINDOW_MS, expiry: undefined });
             resolveWaiting([]); // POST 응답보다 먼저 온 답변도 짝짓기 규칙으로 바로 소비돼요.
             if (ctx.focused) ctx.resumePolling();
         };

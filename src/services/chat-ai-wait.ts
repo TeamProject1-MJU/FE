@@ -9,6 +9,9 @@ import type { ChatMessage } from '@/types/chat';
  * 판단은 이 파일에만 모아 두고, 나중에 BE 가 연결 식별자를 주면 pickAnsweredQuestion 에서 그 값을 먼저 써요.
  */
 
+/** 답변이 짝지을 수 있는 질문의 시간 창이자 질문별 대기 마감(60초). 서버 createdAt 끼리만 비교해요. */
+export const AI_REPLY_WINDOW_MS = 60_000;
+
 /** AI 호출 실패로 서버가 보내는 SYSTEM 안내의 시작 문구. 입장·퇴장·약속역 같은 다른 SYSTEM 메시지는 답변이 아니에요. */
 const AI_FAILURE_PREFIXES = ['AI 사용 한도를 초과해', 'AI가 답변을 만들지 못했어요'];
 
@@ -30,10 +33,14 @@ export function compareChatOrder(a: ChatMessage, b: ChatMessage) {
 
 /**
  * 답변 하나가 해제할 질문. unanswered 는 아직 답이 없는 질문(오래된 순)이에요.
+ * 답변보다 먼저 썼고(compareChatOrder) 답변과의 간격이 AI_REPLY_WINDOW_MS 이하인 질문 중 가장 오래된 하나예요.
+ * 시간 창이 없으면 답이 영영 오지 않은 옛 질문이 이후 답변을 가로채서 새 질문의 대기가 60초 만료까지 남아요.
  * TODO(BE 연결 식별자): 답변에 질문 id(예: meta.questionId)가 생기면 그 질문만 돌려주고, 없을 때만 아래 순서 규칙을 써요.
  */
 export function pickAnsweredQuestion(reply: ChatMessage, unanswered: readonly ChatMessage[]): ChatMessage | null {
-    return unanswered.find(question => compareChatOrder(question, reply) < 0) ?? null;
+    const replyAt = Date.parse(reply.createdAt);
+    return unanswered.find(question => compareChatOrder(question, reply) < 0
+        && replyAt - Date.parse(question.createdAt) <= AI_REPLY_WINDOW_MS) ?? null;
 }
 
 /** 지금까지 본 질문·답변 전체로 답변된 질문 id 를 계산해요. 받은 순서와 상관없이 같은 결과예요. */
