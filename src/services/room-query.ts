@@ -159,6 +159,24 @@ function parseCreated(value: unknown): CreatedRoom {
     };
 }
 
+/**
+ * 방 생성 결과를 알 수 없는지 (#144). 화면과 서비스가 이 함수 하나로 판단해요.
+ * - RoomError: 생성 서비스가 요청을 보낸 뒤 결과 불명으로 표시한 경우만 true
+ * - 인증 오류(TOKEN_*·401·AUTH_*): false. 기존 인증 처리에 맡겨요.
+ * - 4xx(오류 코드 응답·본문 없는 4xx): false. 서버가 요청을 거절했어요(실패 확정).
+ * - NETWORK_ERROR(연결 실패·시간 초과·응답 유실, status 없음), 2xx 인데 응답 형식·파싱 실패, 5xx: true.
+ *   5xx 는 앱 오류인지 게이트웨이 시간 초과(502·504)인지 클라이언트가 구분할 수 없고, 저장 뒤 실패했을 수 있어서 결과 불명이에요.
+ * - 그 밖의 예외(요청을 보낸 뒤에만 이 함수로 판단해요): true
+ */
+export function isRoomCreateOutcomeUnknown(error: unknown): boolean {
+    if (error instanceof RoomError) return error.outcomeUnknown === true;
+    if (error instanceof ApiError) {
+        if (error.code.startsWith('TOKEN_') || isAuthError(error)) return false;
+        return !(error.status !== null && error.status >= 400 && error.status < 500);
+    }
+    return true;
+}
+
 async function postRoom(path: string, body: unknown, scope: string): Promise<unknown> {
     try { return await post<unknown>(path, body); }
     catch (error) {
@@ -169,19 +187,31 @@ async function postRoom(path: string, body: unknown, scope: string): Promise<unk
 }
 
 export async function createServerRoom(request: CreateRoomRequest): Promise<CreatedRoom> {
+    // 요청을 보낸 뒤의 실패만 결과 불명이 될 수 있어요. 보내기 전 검사·사용자 확인 실패는 실패 확정이에요.
+    let sent = false;
     try {
         const appointmentAt = request.appointmentAt ?? null;
         if (appointmentAt !== null && !isZonedDate(appointmentAt)) {
             throw new RoomError('VALIDATION_ERROR', '약속 시각은 시간대가 포함된 날짜와 시간으로 입력해 주세요.');
         }
         const scope = await ensureUser();
+        sent = true;
         const raw = await postRoom('/rooms', { name: request.name, appointmentAt }, scope);
         assertRoomCacheScope(scope);
         const room = parseCreated(raw);
         writeVersion++;
         cacheCreatedRoom(room, scope);
         return room;
-    } catch (error) { return mapRoomError(error); }
+    } catch (error) {
+        if (!sent || !isRoomCreateOutcomeUnknown(error)) return mapRoomError(error);
+        // 생성 전에 시작한 목록 조회를 다음 목록 화면이 함께 쓰지 않도록 버전을 올려요(서버 목록을 새로 조회).
+        writeVersion++;
+        try { return mapRoomError(error); }
+        catch (mapped) {
+            if (mapped instanceof RoomError) mapped.outcomeUnknown = true;
+            throw mapped;
+        }
+    }
 }
 
 export async function joinServerRoom(roomCode: string): Promise<{ roomId: string }> {

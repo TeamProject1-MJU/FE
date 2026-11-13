@@ -9,7 +9,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { CalendarModal, TimeWheelModal } from '@/components/rooms/appointment-picker';
 import { formatAppointmentParam, formatMonthDay, formatTime } from '@/constants/home-mock';
 import { ApiError, isAuthError } from '@/services/api/errors';
-import { createRoom, ROOM_NAME_MAX, roomNameLength, validateRoomName } from '@/services/room';
+import { createRoom, isRoomCreateOutcomeUnknown, ROOM_CREATE_UNKNOWN_NOTICE, ROOM_NAME_MAX, roomNameLength, validateRoomName } from '@/services/room';
 import { RoomError, type CreatedRoom } from '@/types/room';
 
 const NAVY = '#0f1c3f';
@@ -29,6 +29,11 @@ const MINT_SOFT = '#e8f8f1';
  * 만든 사람이 방장(OWNER)이고 처음 인원은 1명입니다. 결과는 약속방 목록에도 반영됩니다.
  * 생성 후에는 초대 코드를 확인·복사하고 약속방으로 들어갑니다(초대 코드는 방장에게만, 그림 28 ❻).
  * 테스트용: /rooms/new?mock=error → 첫 생성 실패
+ *
+ * 생성 결과를 알 수 없을 때(#144, isRoomCreateOutcomeUnknown: 응답 유실·시간 초과·2xx 파싱 실패·5xx)는
+ * 서버가 방을 만들었을 수 있어서 실패 안내 대신 "방 목록 확인"을 안내해요. 자동으로 다시 보내지 않고,
+ * 사용자가 다시 만들 때는 버튼 문구를 "그래도 새로 만들기"로 바꿔 한 번 더 생각하게 해요.
+ * 이름만으로 방금 만든 방이라고 단정하지 않고, 같은 이름의 방을 여러 개 만드는 것도 막지 않아요.
  */
 export default function NewRoomScreen() {
     const insets = useSafeAreaInsets();
@@ -41,6 +46,8 @@ export default function NewRoomScreen() {
     const [calendarOpen, setCalendarOpen] = useState(false);
     const [timeOpen, setTimeOpen] = useState(false);
     const [notice, setNotice] = useState('');
+    /** 마지막 생성 요청의 결과를 알 수 없음 (#144) */
+    const [outcomeUnknown, setOutcomeUnknown] = useState(false);
     const [saving, setSaving] = useState(false);
     const submitting = useRef(false);
     const mounted = useRef(true);
@@ -71,6 +78,7 @@ export default function NewRoomScreen() {
         submitting.current = true;
         let succeeded = false;
         setNotice('');
+        setOutcomeUnknown(false);
         setSaving(true);
         try {
             const fail = failNext;
@@ -81,6 +89,7 @@ export default function NewRoomScreen() {
         } catch (error) {
             if (!mounted.current || error instanceof ApiError && (isAuthError(error) || error.code.startsWith('TOKEN_'))) return;
             // 실패해도 입력값은 그대로 둡니다.
+            if (isRoomCreateOutcomeUnknown(error)) { setOutcomeUnknown(true); return; }
             setNotice(error instanceof RoomError ? error.message : '약속방을 만들지 못했어요. 다시 시도해 주세요.');
         } finally {
             if (!succeeded) submitting.current = false;
@@ -160,13 +169,28 @@ export default function NewRoomScreen() {
 
                     {!!notice && <Text style={styles.notice}>{notice}</Text>}
 
+                    {outcomeUnknown && (
+                        <View style={styles.unknownBox} accessibilityRole="alert">
+                            <Text style={styles.unknownText}>{ROOM_CREATE_UNKNOWN_NOTICE}</Text>
+                            <Pressable
+                                style={({ pressed }) => [styles.unknownButton, pressed && styles.pressed]}
+                                // 목록 화면은 들어올 때마다 서버 목록을 다시 조회해요.
+                                onPress={() => router.dismissTo('/rooms')}
+                                disabled={saving}
+                                accessibilityRole="button"
+                            >
+                                <Text style={styles.unknownButtonText}>방 목록 확인</Text>
+                            </Pressable>
+                        </View>
+                    )}
+
                     <Pressable
                         style={({ pressed }) => [styles.primaryButton, saving && styles.disabled, pressed && styles.pressed]}
                         onPress={submit}
                         disabled={saving}
                         accessibilityRole="button"
                     >
-                        {saving ? <ActivityIndicator color={WHITE} /> : <Text style={styles.primaryText}>약속방 만들기</Text>}
+                        {saving ? <ActivityIndicator color={WHITE} /> : <Text style={styles.primaryText}>{outcomeUnknown ? '그래도 새로 만들기' : '약속방 만들기'}</Text>}
                     </Pressable>
                 </View>
             </ScrollView>
@@ -320,6 +344,10 @@ const styles = StyleSheet.create({
     infoRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 16 },
     infoText: { flex: 1, color: SECONDARY, fontSize: 12.5, fontWeight: '600' },
     notice: { color: RED, fontSize: 12.5, fontWeight: '600', marginBottom: 12 },
+    unknownBox: { backgroundColor: '#fff6e0', borderRadius: 12, padding: 12, marginBottom: 12, gap: 10 },
+    unknownText: { color: '#7a5600', fontSize: 13, fontWeight: '600', lineHeight: 18 },
+    unknownButton: { alignSelf: 'flex-start', backgroundColor: WHITE, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 9, borderWidth: 1, borderColor: BORDER },
+    unknownButtonText: { color: NAVY, fontSize: 13.5, fontWeight: '800' },
     primaryButton: { backgroundColor: NAVY, height: 53, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
     primaryText: { color: WHITE, fontSize: 15, fontWeight: '800' },
     disabled: { opacity: 0.6 },
