@@ -3,6 +3,7 @@ import { useFocusEffect } from 'expo-router';
 
 import {
     chatContentLength,
+    createChatClientId,
     fetchChatMessages,
     getPendingChatAiCount,
     parseChatMessage,
@@ -61,6 +62,8 @@ type Context = {
     cursor: string | null;
     /** REST 로 받아 빈 구간 없이 이어진 메시지 id (처음 로드·이전 메시지·복구). WS·전송 결과는 넣지 않아요(#137). */
     syncedIds: Set<string>;
+    /** 이미 어떤 전송에 짝지어진 내 메시지 id (정상 저장 응답·재시도 확인·WS 확인). 다른 전송의 후보가 될 수 없어요(#139). */
+    claimedIds: Set<string>;
     sending: Set<string>;
     sendBaseline: Map<string, Set<string>>;
 };
@@ -166,6 +169,41 @@ function needsRecovery(ctx: Context, page: ChatMessagePage) {
     return !isMockMode() && ctx.loaded && page.hasMore && !page.items.some(message => ctx.syncedIds.has(message.id));
 }
 
+export const CHAT_SEND_UNCONFIRMED_TEXT = '저장됐는지 확인하지 못했어요. 다시 보내면 같은 메시지가 두 번 저장될 수 있어요.';
+
+/** items 는 확인하며 받은 메시지, wholeRoom 은 방의 처음까지 받았는지(그러면 목록과 빈 구간 없이 이어져요)예요. */
+export type ChatSendCheck = { items: ChatMessage[]; wholeRoom: boolean } & (
+    | { status: 'saved'; message: ChatMessage }
+    | { status: 'notSaved' }
+    | { status: 'unknown' });
+
+/**
+ * 응답이 유실된 전송을 다시 보내기 전에 서버에 이미 저장됐는지 확인해요 (#139).
+ * 최신 페이지부터 nextCursor 로 과거로 넘기면서 첫 전송 전 기준(baseline)의 메시지를 만나거나 방의 처음까지 받아요(recoverChatGap 재사용).
+ * 원본이 저장됐다면 반드시 그 범위(기준보다 새것) 안에 있어요.
+ * - saved: 후보(기준에 없음·USER·나·본문 일치·다른 전송에 안 짝지어짐) 중 가장 오래된 하나
+ * - notSaved: 범위를 다 봤는데 후보가 없어요. 다시 보내도 돼요.
+ * - unknown: 기준을 모르거나(baseline 없음) 페이지 상한까지 기준을 못 만났어요. 자동으로 보내지 않아요.
+ * 확인 중 오류는 그대로 던지고, 더 진행하면 안 되면(valid false) null 이에요.
+ */
+export async function checkChatSend(
+    fetchPage: (cursor: string | null) => Promise<ChatMessagePage>,
+    baseline: ReadonlySet<string> | undefined,
+    isCandidate: (message: ChatMessage) => boolean,
+    valid: () => boolean,
+    maxPages = CHAT_RECOVERY_MAX_PAGES,
+): Promise<ChatSendCheck | null> {
+    if (!baseline) return { status: 'unknown', items: [], wholeRoom: false };
+    const range = await recoverChatGap(fetchPage, baseline, valid, maxPages);
+    if (!range) return null;
+    const checked = range.mode === 'overlap' || range.mode === 'complete';
+    const candidates = range.items.filter(message => !baseline.has(message.id) && isCandidate(message));
+    const saved = [...candidates].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || (a.id < b.id ? -1 : 1))[0];
+    const wholeRoom = range.mode === 'complete';
+    if (saved) return { status: 'saved', message: saved, items: range.items, wholeRoom };
+    return { status: checked ? 'notSaved' : 'unknown', items: range.items, wholeRoom };
+}
+
 const errorText = (error: unknown) =>
     error instanceof RoomError
         ? error.message
@@ -175,7 +213,6 @@ const denied = (error: unknown) =>
     error instanceof RoomError &&
     (error.code === 'NOT_ROOM_MEMBER' || error.code === 'ROOM_NOT_FOUND');
 
-let clientSequence = 1;
 
 export function useRoomChat(roomId: string, mock?: string) {
     useAuthStatus();
@@ -348,6 +385,7 @@ export function useRoomChat(roomId: string, mock?: string) {
             hasMore: false,
             cursor: null,
             syncedIds: new Set(),
+            claimedIds: new Set(),
             sending: new Set(),
             sendBaseline: new Map(),
         };
@@ -473,12 +511,14 @@ export function useRoomChat(roomId: string, mock?: string) {
                     const duplicate = received.has(message.id);
                     received.add(message.id);
                     ctx.knownIds.add(message.id);
-                    if (!duplicate && message.senderType === 'USER' && message.senderId === getSession()?.userId) {
+                    if (!duplicate && !ctx.claimedIds.has(message.id) && message.senderType === 'USER' && message.senderId === getSession()?.userId) {
+                        // 늦게 온 내 메시지: 재시도 확인과 같은 기준(기준에 없음·본문 일치·가장 오래된 전송 하나)으로 저장을 확인해요(#139).
                         const entry = [...ctx.queued.values()]
                             .filter(item => item.content === message.content && ctx.sendBaseline.has(item.clientId)
                                 && !ctx.sendBaseline.get(item.clientId)!.has(message.id))
                             .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0];
                         if (entry) {
+                            ctx.claimedIds.add(message.id);
                             ctx.queued.delete(entry.clientId);
                             ctx.sendBaseline.delete(entry.clientId);
                             update(ctx, previous => ({ ...previous, pending: previous.pending.filter(item => item.clientId !== entry.clientId) }));
@@ -644,25 +684,37 @@ export function useRoomChat(roomId: string, mock?: string) {
         }));
 
         try {
-            // 최초 POST 전 기준을 유지해 새로고침으로 합쳐진 메시지도 저장된 것으로 확인해요.
-            if (!isMockMode() && entry.status === 'failed') {
-                // 기준이 유실됐다면 최신 목록의 동일 메시지를 우선 확인해 중복 전송을 피합니다.
-                const knownIds = ctx.sendBaseline.get(entry.clientId) ?? new Set<string>();
-                const latest = await fetchChatMessages(roomId);
-                if (!ctx.valid() || actionId !== ctx.actionId) return;
-                update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, latest.items) }));
-                if (needsRecovery(ctx, latest)) void refresh();
-                const saved = latest.items.find(message => !knownIds.has(message.id) && message.senderType === 'USER'
-                    && message.senderId === getSession()?.userId && message.content === entry.content);
-                latest.items.forEach(message => ctx.knownIds.add(message.id));
-                ctx.receiveReplies(latest.items);
-                if (!ctx.queued.has(entry.clientId)) return;
-                if (saved) {
-                    ctx.confirmedIds.add(saved.id);
+            // 응답이 유실된 전송은 다시 보내기 전에 기준점까지 넘겨서 저장 여부를 확인해요(#139).
+            // 저장 여부 불명(unconfirmed) 안내를 본 뒤 다시 누른 경우만 확인 없이 보내요.
+            if (!isMockMode() && entry.status === 'failed' && !entry.unconfirmed) {
+                const myId = getSession()?.userId;
+                const check = await checkChatSend(
+                    cursor => fetchChatMessages(roomId, { cursor }),
+                    ctx.sendBaseline.get(entry.clientId),
+                    message => message.senderType === 'USER' && message.senderId === myId
+                        && message.content === entry.content && !ctx.claimedIds.has(message.id),
+                    () => ctx.valid() && actionId === ctx.actionId,
+                );
+                if (!check || !ctx.valid() || actionId !== ctx.actionId) return;
+                // 받은 범위를 #137 과 같은 방식으로 합쳐요. 이어진 목록과 겹치지 않으면 refresh 로 빈 구간을 채워요.
+                check.items.forEach(message => ctx.knownIds.add(message.id));
+                update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, check.items) }));
+                if (check.wholeRoom || check.items.some(message => ctx.syncedIds.has(message.id))) check.items.forEach(message => ctx.syncedIds.add(message.id));
+                else if (check.items.length) void refresh();
+                ctx.receiveReplies(check.items);
+                if (!ctx.queued.has(entry.clientId)) return; // 그사이 WS 로 저장이 확인됐어요.
+                if (check.status === 'saved') {
+                    ctx.claimedIds.add(check.message.id);
+                    ctx.confirmedIds.add(check.message.id);
                     ctx.queued.delete(entry.clientId);
                     ctx.sendBaseline.delete(entry.clientId);
                     update(ctx, previous => ({ ...previous, pending: previous.pending.filter(item => item.clientId !== entry.clientId) }));
-                    if (saved.content.includes('@링크로')) ctx.waitForAi(saved);
+                    if (check.message.content.includes('@링크로')) ctx.waitForAi(check.message);
+                    return;
+                }
+                if (check.status === 'unknown') {
+                    update(ctx, previous => ({ ...previous, pending: previous.pending.map(item => item.clientId === entry.clientId
+                        ? { ...item, status: 'failed', unconfirmed: true, errorMessage: CHAT_SEND_UNCONFIRMED_TEXT } : item) }));
                     return;
                 }
             }
@@ -680,6 +732,7 @@ export function useRoomChat(roomId: string, mock?: string) {
             ctx.queued.delete(entry.clientId);
             ctx.knownIds.add(result.message.id);
             ctx.confirmedIds.add(result.message.id);
+            ctx.claimedIds.add(result.message.id);
             if (result.aiPending) ctx.waitForAi(result.message);
 
             update(ctx, previous => ({
@@ -715,6 +768,8 @@ export function useRoomChat(roomId: string, mock?: string) {
                                 ? {
                                     ...item,
                                     status: 'failed',
+                                    // 새로 보낸 요청의 결과도 모르니 다음 재시도는 다시 기준점까지 확인해요.
+                                    unconfirmed: undefined,
                                     errorMessage: errorText(error),
                                 }
                                 : item,
@@ -771,7 +826,7 @@ export function useRoomChat(roomId: string, mock?: string) {
         }));
 
         void deliver({
-            clientId: `chat-client-${Date.now()}-${clientSequence++}`,
+            clientId: createChatClientId(),
             content,
             createdAt: new Date().toISOString(),
             status: 'sending',
