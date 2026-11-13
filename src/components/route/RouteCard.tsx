@@ -1,4 +1,5 @@
 import RouteNotices from '@/components/route/RouteNotices';
+import { formatArrivalSlack, formatRouteDateTime } from '@/utils/route-time';
 import { formatClock, formatDirection, formatTotalTime, formatWait, formatWalkBeforeRide } from '@/components/route/format';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -37,13 +38,14 @@ function stepCongestion(step: RouteStep): CongestionData | null {
 type Props = {
     route: Route;
     expanded: boolean;
+    showDates?: boolean;
     /** 펼친 카드 왼쪽 위 배지 (현재 탭 이름). 탭 기준 1등 경로에만 넘깁니다. */
     badgeLabel?: string;
     onPress: () => void;
     onStart: () => void;
 };
 
-export default function RouteCard({ route, expanded, badgeLabel, onPress, onStart }: Props) {
+export default function RouteCard({ route, expanded, badgeLabel, onPress, onStart, showDates = false }: Props) {
     const { summary } = route;
     const estimated = summary.fareSource === 'ESTIMATED';
 
@@ -71,7 +73,7 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
     const firstLine = subwaySteps[0]?.line ?? null;
     const lastLine = subwaySteps.length > 1 ? subwaySteps[subwaySteps.length - 1].line : null;
     const lastStop = subwaySteps[subwaySteps.length - 1]?.stops.at(-1)?.name ?? '';
-    const arrival = formatClock(summary.arrivalAt);
+    const arrival = showDates ? formatRouteDateTime(summary.arrivalAt) : formatClock(summary.arrivalAt);
 
     return (
         <View style={styles.card}>
@@ -92,7 +94,7 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
                     <Text style={styles.minutes}>
                         {formatTotalTime(summary)}
                     </Text>
-                    {summary.departureAt && <Text style={styles.arrival}>{formatClock(summary.departureAt)} 출발</Text>}
+                    {summary.departureAt && <Text style={styles.arrival}>{showDates ? formatRouteDateTime(summary.departureAt) : formatClock(summary.departureAt)} 출발</Text>}
                     {!!arrival && <Text style={styles.arrival}>{arrival} 도착</Text>}
                 </View>
 
@@ -116,6 +118,7 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
             </View>
 
             <RouteNotices summary={summary} />
+            {showDates && summary.slackSeconds != null && <Text style={styles.arrival}>{formatArrivalSlack(summary.slackSeconds)}</Text>}
 
             <View style={styles.divider} />
 

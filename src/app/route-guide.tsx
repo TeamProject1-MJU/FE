@@ -1,4 +1,6 @@
 import RouteNotices from '@/components/route/RouteNotices';
+import RouteTimeNotice from '@/components/route/RouteTimeNotice';
+import { formatArrivalSlack, formatRouteDateTime } from '@/utils/route-time';
 import { formatStationName } from '@/utils/station-name';
 import { formatClock, formatTotalTime } from '@/components/route/format';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -96,6 +98,7 @@ export default function RouteGuideScreen() {
                 </View>
             ) : selected.origin.id === selected.destination.id ? (
                 <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}>
+                    {selected.searchTime && <RouteTimeNotice selection={selected.searchTime} routes={selected.origin.id === selected.destination.id ? [] : [selected.route]} mock={isMockMode()} />}
                     {selected.appointmentPassed && !!selected.notice && (
                         <View style={styles.notice}>
                             <Ionicons name="alert-circle-outline" size={17} color="#c58a00" />
@@ -119,6 +122,7 @@ export default function RouteGuideScreen() {
                 </ScrollView>
             ) : (
                 <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}>
+                    {selected.searchTime && <RouteTimeNotice selection={selected.searchTime} routes={selected.origin.id === selected.destination.id ? [] : [selected.route]} mock={isMockMode()} />}
                     {selected.appointmentPassed && !!selected.notice && (
                         <View style={styles.notice}>
                             <Ionicons name="alert-circle-outline" size={17} color="#c58a00" />
@@ -166,7 +170,7 @@ export default function RouteGuideScreen() {
                             </Text>
                             {!!formatClock(selected.route.summary.arrivalAt) && (
                                 <Text style={styles.arrival}>
-                                    {formatClock(selected.route.summary.arrivalAt)} 도착 예정
+                                    {selected.searchTime ? formatRouteDateTime(selected.route.summary.arrivalAt) : formatClock(selected.route.summary.arrivalAt)} 도착 예정
                                 </Text>
                             )}
                             <View style={styles.flex} />
@@ -177,8 +181,9 @@ export default function RouteGuideScreen() {
                             />
                         </View>
 
-                        {selected.route.summary.departureAt && <Text style={styles.arrival}>{formatClock(selected.route.summary.departureAt)} 출발 예정</Text>}
+                        {selected.route.summary.departureAt && <Text style={styles.arrival}>{selected.searchTime ? formatRouteDateTime(selected.route.summary.departureAt) : formatClock(selected.route.summary.departureAt)} 출발 예정</Text>}
                         <RouteNotices summary={selected.route.summary} />
+                        {selected.searchTime && selected.route.summary.slackSeconds != null && <Text style={styles.meta}>{formatArrivalSlack(selected.route.summary.slackSeconds)}</Text>}
 
                         <View style={styles.metaRow}>
                             {selected.route.summary.fareSource === 'ESTIMATED' && (
@@ -210,7 +215,8 @@ export default function RouteGuideScreen() {
                     <RouteTimeline
                         route={selected.route}
                         onSignCheck={openSignCheck}
-                        nextTrains={firstSubway && <NextTrains step={firstSubway} mock={arrivals === 'none' || arrivals === 'fail' ? arrivals : undefined} />}
+                        {...(selected.searchTime ? { showDates: true } : {})}
+                        nextTrains={(!selected.searchTime || selected.searchTime.mode === 'now') && firstSubway && <NextTrains step={firstSubway} mock={arrivals === 'none' || arrivals === 'fail' ? arrivals : undefined} />}
                     />
                 </ScrollView>
             )}

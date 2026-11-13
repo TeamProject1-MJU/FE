@@ -85,6 +85,8 @@ export type RouteSummary = {
     waitKind?: WaitKind | null;
     transferWaitSec?: number;
     totalWithWaitSec?: number | null;
+    /** 도착 시각 지정 결과의 여유 시간(초). 서버 값을 그대로 표시해요. */
+    slackSeconds?: number | null;
     totalTimeSec: number;
     /** ISO-8601 */
     arrivalAt: string;
@@ -103,11 +105,18 @@ export type Route = {
     steps: RouteStep[];
 };
 
+export type RouteTimeSelection = { mode: 'now' } | { mode: 'departure' | 'arrival'; at: string };
+
+export type RouteSearchOptions = {
+    roomId?: string;
+    departAt?: string;
+    arriveAt?: string;
+};
+
 export type RouteSearchRequest = {
     originStationId: number;
     destinationStationId: number;
-    roomId?: string;
-};
+} & RouteSearchOptions;
 
 export type RouteSearchResponse = {
     appointmentPassed: boolean;
@@ -123,6 +132,9 @@ export type RouteErrorCode =
     | 'ROUTE_NOT_FOUND'
     | 'NOT_ROOM_MEMBER'
     | 'ROOM_NOT_FOUND'
+    | 'VALIDATION_ERROR'
+    | 'NO_SERVICE_TIME'
+    | 'ARRIVAL_UNREACHABLE'
     | 'EXTERNAL_API_ERROR'
     | 'NETWORK_ERROR';
 
