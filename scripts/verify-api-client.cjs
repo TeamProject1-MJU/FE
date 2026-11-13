@@ -8094,3 +8094,177 @@ test('137 AI 답변 대기 폴링의 최신 페이지가 목록과 이어지지 
     assert.deepEqual(chat137Numbers(r.render()), range137(31, 130));
     r.unmount();
 });
+
+/* ---------- #138 AI 답변 하나는 질문 하나만 해제 ---------- */
+
+const ai138Id = n => `01900000-0000-7000-8000-${String(900000 + n).padStart(12, '0')}`;
+const ai138At = second => new Date(Date.UTC(2026, 10, 12, 10, 0, second)).toISOString();
+const ai138Question = (n, second, mine = true) => chat118Message({ id: ai138Id(n), senderId: mine ? ROOM_QUERY_ME : ROOM_QUERY_OTHER,
+    nickname: mine ? '서버 나' : '상대', content: `@링크로 질문 ${n}`, createdAt: ai138At(second) });
+const ai138Reply = (n, second, content = `답변 ${n}`, senderType = 'AI') => chat118Message({ id: ai138Id(n), senderType, senderId: null, nickname: null, content, createdAt: ai138At(second) });
+/** 질문을 보내면 POST 응답으로 questions 를 차례로 돌려주는 채팅 훅. GET 은 items 를 돌려줘요. */
+async function ai138Hook(questions, realtime = 'open') {
+    const r = chat118Hook(realtime); r.items = []; let sent = 0; r.gets = 0;
+    r.context.fetch = async (_url, options) => {
+        if (options.method === 'POST') { const question = questions[sent++]; return ok({ message: question, aiPending: true }); }
+        r.gets++;
+        return ok({ items: [...r.items].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)), hasMore: false, nextCursor: null });
+    };
+    r.render(); await settle();
+    r.ask = async () => { r.render().setDraft('@링크로 질문'); r.render().send(); await settle(); };
+    return r;
+}
+
+test('138 짝짓기 규칙: 답변 하나는 그보다 먼저 쓴 가장 오래된 미답 질문 하나만, 같은 id 는 한 번만, 순서와 무관', () => {
+    const wait = createRuntime().load('src/services/chat-ai-wait.ts');
+    const q1 = ai138Question(1, 1); const q2 = ai138Question(2, 2); const other = ai138Question(3, 0, false); // 다른 사람 질문이 가장 먼저
+    const r1 = ai138Reply(11, 5); const r2 = ai138Reply(12, 6);
+    assert.deepEqual([...wait.matchAiReplies([q1, q2], [r1])], [q1.id]);
+    assert.deepEqual([...wait.matchAiReplies([q2, q1], [r2, r1])].sort(), [q1.id, q2.id].sort());
+    // 답변보다 나중에 쓴 질문은 해제하지 않아요.
+    assert.deepEqual([...wait.matchAiReplies([ai138Question(4, 9)], [r1])], []);
+    // 같은 시각이면 id 순서
+    const sameTime = ai138Question(5, 5);
+    assert.deepEqual([...wait.matchAiReplies([sameTime], [ai138Reply(4, 5)])], []);
+    assert.deepEqual([...wait.matchAiReplies([sameTime], [ai138Reply(6, 5)])], [sameTime.id]);
+    // 추적기: 같은 답변을 여러 번 받아도 한 번, 받은 순서와 상관없이 같은 결과
+    const tracker = wait.createAiReplyTracker();
+    tracker.observe([r1]); tracker.observe([r1, r1]); tracker.addQuestion(q2); tracker.observe([other]); tracker.addQuestion(q1);
+    assert.deepEqual([q1, q2, other].map(q => tracker.isAnswered(q.id)), [false, false, true]);
+    // 답변·질문 판단
+    assert.equal(wait.isAiQuestion(chat118Message({ content: '@LinkRo 안녕' })), true);
+    assert.equal(wait.isAiQuestion(chat118Message({ content: '안녕' })), false);
+    assert.equal(wait.isAiQuestion(ai138Reply(1, 0, '@링크로')), false);
+    for (const [content, type, expected] of [['답변', 'AI', true], ['AI 사용 한도를 초과해 답변하지 못했어요.', 'SYSTEM', true], ['AI가 답변을 만들지 못했어요.', 'SYSTEM', true],
+        ['AI링크로님이 참여했어요.', 'SYSTEM', false], ['상대님이 나갔어요.', 'SYSTEM', false], ['약속역이 강남역으로 정해졌어요.', 'SYSTEM', false]]) {
+        assert.equal(wait.isAiReply(ai138Reply(1, 0, content, type)), expected, content);
+    }
+});
+
+test('138 내 질문 2개 → 답변 1개: 대기 남음 → 두 번째 답변: 해제', async () => {
+    const r = await ai138Hook([ai138Question(1, 0), ai138Question(2, 1)]);
+    await r.ask(); await r.ask();
+    assert.equal(r.render().aiPending, 1);
+    r.event(ai138Reply(11, 5)); assert.equal(r.render().aiPending, 1);
+    r.event(ai138Reply(12, 6)); assert.equal(r.render().aiPending, 0); assert.equal(r.timers.size, 0);
+    r.unmount();
+});
+
+test('138 다른 사람 질문 + 내 질문 → 답변 1개: 다른 사람 질문이 먼저 소비돼 내 대기는 남아요', async () => {
+    const r = await ai138Hook([ai138Question(2, 1)]);
+    r.event(ai138Question(1, 0, false));
+    await r.ask(); assert.equal(r.render().aiPending, 1);
+    r.event(ai138Reply(11, 5)); assert.equal(r.render().aiPending, 1);
+    r.event(ai138Reply(12, 6)); assert.equal(r.render().aiPending, 0);
+    r.unmount();
+});
+
+test('138 답변이 질문 POST 응답보다 먼저 오면 질문 등록 즉시 해제', async () => {
+    const r = chat118Hook('open'); let resolve;
+    r.context.fetch = async (_url, options) => options.method === 'POST' ? await new Promise(done => { resolve = done; }) : ok({ items: [], hasMore: false, nextCursor: null });
+    r.render(); await settle(); r.render().setDraft('@링크로 질문'); r.render().send(); await settle();
+    r.event(ai138Reply(11, 5));
+    resolve(ok({ message: ai138Question(1, 0), aiPending: true })); await settle();
+    assert.equal(r.render().aiPending, 0); assert.equal(r.timers.size, 0); r.unmount();
+});
+
+test('138 같은 답변을 WS·REST(reload)·재연결 복구로 여러 번 받아도 한 번만 소비', async () => {
+    const q1 = ai138Question(1, 0); const q2 = ai138Question(2, 1); const reply = ai138Reply(11, 5);
+    const r = await ai138Hook([q1, q2]);
+    await r.ask(); await r.ask(); r.items = [q1, q2, reply];
+    r.event(reply); r.event(reply);
+    await r.render().reload(); await settle();
+    r.reconnect(); await settle(); await settle();
+    assert.ok(r.gets >= 2);
+    assert.equal(r.render().messages.filter(message => message.id === reply.id).length, 1);
+    assert.equal(r.render().aiPending, 1);
+    r.event(ai138Reply(12, 6)); assert.equal(r.render().aiPending, 0);
+    r.unmount();
+});
+
+test('138 AI 실패 SYSTEM 안내도 답변으로 소비하고, 입장·퇴장·약속역 SYSTEM 은 소비하지 않아요', async () => {
+    const r = await ai138Hook([ai138Question(1, 0), ai138Question(2, 1)]);
+    await r.ask(); await r.ask();
+    for (const [n, content] of [[21, 'AI링크로님이 참여했어요.'], [22, '상대님이 나갔어요.'], [23, '약속역이 강남역으로 정해졌어요.']]) r.event(ai138Reply(n, 4, content, 'SYSTEM'));
+    assert.equal(r.render().aiPending, 1);
+    r.event(ai138Reply(24, 5, 'AI 사용 한도를 초과해 답변하지 못했어요.', 'SYSTEM')); assert.equal(r.render().aiPending, 1);
+    r.event(ai138Reply(25, 6, 'AI가 답변을 만들지 못했어요.', 'SYSTEM')); assert.equal(r.render().aiPending, 0);
+    r.unmount();
+});
+
+test('138 답변이 오지 않으면 60초 뒤 대기가 해제돼요(질문마다)', async () => {
+    const r = await ai138Hook([ai138Question(1, 0), ai138Question(2, 1)]);
+    await r.ask(); r.advance(30000); await settle(); await r.ask();
+    r.event(ai138Reply(11, 5)); // 첫 질문만 소비
+    assert.equal(r.render().aiPending, 1);
+    r.advance(30000); await settle(); await settle(); assert.equal(r.render().aiPending, 1); // 첫 질문 기한이지만 이미 답변됨
+    r.advance(30000); await settle(); await settle(); assert.equal(r.render().aiPending, 0); // 두 번째 질문 60초
+    assert.equal(r.timers.size, 0); r.unmount();
+});
+
+test('138 표시: 내 질문 여러 개가 대기여도 숫자가 아니라 "답변 작성 중" 한 줄', async () => {
+    const r = await ai138Hook([ai138Question(1, 0), ai138Question(2, 1), ai138Question(3, 2)]);
+    await r.ask(); await r.ask(); await r.ask();
+    const controller = r.render(); assert.equal(controller.aiPending, 1);
+    const panel = createScreenRuntime(serverEnv, 'src/components/rooms/chat-panel.tsx', runtime => {
+        Object.assign(runtime.native, { ScrollView: 'ScrollView', Platform: { OS: 'ios', select: value => value.ios }, Keyboard: { dismiss() {}, addListener: () => ({ remove() {} }) } });
+    });
+    const view = panel.renderComponent({ type: panel.screen.default, props: { controller, myUserId: ROOM_QUERY_ME, members: [] } });
+    const status = findAll125(view, element => element.type === 'Text').map(textOf).filter(text => text.includes('답변'));
+    assert.deepEqual(status, ['링크로가 답변 중...']);
+    assert.ok(!status.some(text => /\d/.test(text)));
+    r.unmount();
+});
+
+/* #138 보완: 60초 시간 창 — 답이 오지 않은 옛 질문이 이후 답변을 가로채지 않아요 */
+
+/** 초 단위 + 밀리초까지 정할 수 있는 시각 */
+const ai138WindowAt = ms => new Date(Date.UTC(2026, 10, 12, 10, 0, 0) + ms).toISOString();
+const ai138WindowQuestion = (n, ms, mine = true) => ({ ...ai138Question(n, 0, mine), createdAt: ai138WindowAt(ms) });
+const ai138WindowReply = (n, ms) => ({ ...ai138Reply(n, 0), createdAt: ai138WindowAt(ms) });
+
+test('138 시간 창: 60초 넘게 답이 없던 옛 질문 + 새 질문 + 답변 1개 → 새 질문만 해제, 옛 질문은 미답', () => {
+    const wait = createRuntime().load('src/services/chat-ai-wait.ts');
+    assert.equal(wait.AI_REPLY_WINDOW_MS, 60_000);
+    const old = ai138WindowQuestion(1, 0, false); const fresh = ai138WindowQuestion(2, 120_000); const reply = ai138WindowReply(11, 125_000);
+    assert.deepEqual([...wait.matchAiReplies([old, fresh], [reply])], [fresh.id]);
+    const tracker = wait.createAiReplyTracker();
+    tracker.observe([old, fresh, reply]);
+    assert.deepEqual([tracker.isAnswered(old.id), tracker.isAnswered(fresh.id)], [false, true]);
+    // 창 안의 질문이 여럿이면 기존대로 가장 오래된 하나만, 다른 사람 질문도 소비해요.
+    const other = ai138WindowQuestion(3, 110_000, false);
+    assert.deepEqual([...wait.matchAiReplies([old, other, fresh], [reply])], [other.id]);
+});
+
+test('138 시간 창 경계: 질문 60초 뒤 정각 답변은 짝지어지고 60.001초 뒤는 짝지어지지 않아요', () => {
+    const wait = createRuntime().load('src/services/chat-ai-wait.ts');
+    const question = ai138WindowQuestion(1, 0);
+    assert.deepEqual([...wait.matchAiReplies([question], [ai138WindowReply(11, 60_000)])], [question.id]);
+    assert.deepEqual([...wait.matchAiReplies([question], [ai138WindowReply(11, 60_001)])], []);
+    // 질문보다 먼저 쓴 답변은 여전히 짝짓지 않아요.
+    assert.deepEqual([...wait.matchAiReplies([ai138WindowQuestion(1, 5_000)], [ai138WindowReply(11, 4_999)])], []);
+});
+
+test('138 시간 창: 방 기록(옛 질문들)을 먼저 받은 뒤 새 질문·답변이 와도, 순서를 섞어도 같은 결과', () => {
+    const wait = createRuntime().load('src/services/chat-ai-wait.ts');
+    const history = [ai138WindowQuestion(1, 0, false), ai138WindowQuestion(2, 10_000), ai138WindowQuestion(3, 20_000, false)];
+    const fresh = ai138WindowQuestion(4, 300_000); const reply = ai138WindowReply(11, 305_000);
+    const expected = { [history[0].id]: false, [history[1].id]: false, [history[2].id]: false, [fresh.id]: true };
+    const orders = [
+        tracker => { tracker.observe(history); tracker.addQuestion(fresh); tracker.observe([reply]); }, // 기록 → 새 질문 → 답변
+        tracker => { tracker.observe([reply]); tracker.observe(history.slice().reverse()); tracker.addQuestion(fresh); }, // 답변 먼저, 질문 나중
+        tracker => { tracker.observe([fresh, reply, ...history]); tracker.observe([reply]); tracker.observe(history); }, // 섞어서·중복
+    ];
+    for (const order of orders) {
+        const tracker = wait.createAiReplyTracker(); order(tracker);
+        assert.deepEqual(Object.fromEntries(Object.keys(expected).map(id => [id, tracker.isAnswered(id)])), expected);
+    }
+});
+
+test('138 시간 창: 화면에서도 옛 미답 질문이 답변을 가로채지 않아 내 대기가 바로 해제돼요', async () => {
+    const r = await ai138Hook([ai138WindowQuestion(2, 120_000)]);
+    r.event(ai138WindowQuestion(1, 0)); // 답이 오지 않은 옛 질문(기록)
+    await r.ask(); assert.equal(r.render().aiPending, 1);
+    r.event(ai138WindowReply(11, 125_000)); assert.equal(r.render().aiPending, 0); assert.equal(r.timers.size, 0);
+    r.unmount();
+});

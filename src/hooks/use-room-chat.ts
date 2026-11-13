@@ -15,6 +15,7 @@ import type {
     ChatMockScenario,
     PendingChatMessage,
 } from '@/types/chat';
+import { AI_REPLY_WINDOW_MS, createAiReplyTracker } from '@/services/chat-ai-wait';
 import { getRealtimeState, subscribeRealtimeState, subscribeRoomEvents } from '@/services/realtime';
 import { RoomError } from '@/types/room';
 import { useMock as isMockMode } from '@/services/api/config';
@@ -360,20 +361,19 @@ export function useRoomChat(roomId: string, mock?: string) {
         let fetching = false;
         let latestPage: ReturnType<typeof fetchChatMessages> | undefined;
         const waiting = new Map<string, { question: ChatMessage; deadline: number; expiry: ReturnType<typeof setTimeout> | undefined }>();
-        let latestReplyAt = -Infinity;
+        // 방에서 보이는 질문·답변으로 "답변 하나 = 질문 하나"를 짝지어요(#138, services/chat-ai-wait.ts).
+        const replies = createAiReplyTracker();
         const received = ctx.confirmedIds;
-        const isReply = (message: ChatMessage) => message.senderType === 'AI'
-            || message.senderType === 'SYSTEM' && (message.content.startsWith('AI 사용 한도를 초과해')
-                || message.content.startsWith('AI가 답변을 만들지 못했어요'));
         const publishWaiting = () => {
-            ctx.aiPending = waiting.size;
+            // 짝짓기가 순서 추측이라 개수는 정확하지 않을 수 있어요. 화면에는 대기 여부(0·1)만 알려요.
+            ctx.aiPending = waiting.size > 0 ? 1 : 0;
             update(ctx, previous => ({ ...previous, aiPending: ctx.aiPending }));
             if (!waiting.size) { clearTimeout(timer); timer = undefined; }
         };
         const resolveWaiting = (messages: ChatMessage[]) => {
-            for (const reply of messages.filter(isReply)) latestReplyAt = Math.max(latestReplyAt, Date.parse(reply.createdAt));
+            replies.observe(messages);
             for (const [id, entry] of waiting) {
-                if (latestReplyAt > Date.parse(entry.question.createdAt)) {
+                if (replies.isAnswered(id)) {
                     clearTimeout(entry.expiry);
                     waiting.delete(id);
                 }
@@ -453,8 +453,9 @@ export function useRoomChat(roomId: string, mock?: string) {
         };
         ctx.waitForAi = question => {
             if (isMockMode() || !ctx.valid() || ctx.blocked) return;
-            if (!waiting.has(question.id)) waiting.set(question.id, { question, deadline: Date.now() + 60_000, expiry: undefined });
-            resolveWaiting([]); // A reply may have arrived before the POST response.
+            replies.addQuestion(question);
+            if (!waiting.has(question.id)) waiting.set(question.id, { question, deadline: Date.now() + AI_REPLY_WINDOW_MS, expiry: undefined });
+            resolveWaiting([]); // POST 응답보다 먼저 온 답변도 짝짓기 규칙으로 바로 소비돼요.
             if (ctx.focused) ctx.resumePolling();
         };
         const offState = isMockMode() ? () => {} : subscribeRealtimeState(schedule);
