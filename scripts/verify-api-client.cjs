@@ -7059,3 +7059,87 @@ test('129 mock 모드 경로 화면 트리는 #129 이전과 같아요', () => {
     const sha = require('node:crypto').createHash('sha256').update(JSON.stringify(shallow129(r.render()))).digest('hex');
     assert.equal(sha, MOCK_GUIDE_SHA129);
 });
+
+/* ---------- INTERNAL 경로 안내 문구 (#147) ---------- */
+async function route147Search(data, roomId) {
+    const r = routeScreenRuntime({ departure: '강남', destination: '사당', ...(roomId ? { roomId } : {}) });
+    r.route147Data = data;
+    r.context.fetch = async url => jsonResponse({ success: true, data: url.endsWith('/routes/search') ? r.route147Data
+        : stationSearchData([url.includes(encodeURIComponent('강남')) ? serverRouteStation(88001, '강남') : serverRouteStation(99002, '사당')]) });
+    for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+    r.view147 = () => r.render();
+    r.card147 = () => findElement(r.view147(), element => element.type === r.load('src/components/route/RouteCard.tsx').default);
+    return r;
+}
+
+function route147Guide(selected) {
+    const r = guide129({ route: selected.route });
+    r.load('src/stores/route-store.ts').setSelectedRoute(selected);
+    return r;
+}
+
+test('147 KAKAO·정상 약속방 INTERNAL·대체 INTERNAL은 계산 원인을 단정하지 않고 검색·안내 문구가 같아요', async () => {
+    // 정상 시각표/장애 대체를 나타내는 서버 필드는 없어요. 같은 INTERNAL 계약을 각각의 사용 맥락에서 확인해요.
+    const cases = [
+        { label: '개인 KAKAO', source: 'KAKAO' },
+        { label: '약속방 KAKAO', source: 'KAKAO', roomId: 'room-147' },
+        { label: '정상 약속방 INTERNAL', source: 'INTERNAL', roomId: 'room-147' },
+        { label: '개인 대체 INTERNAL', source: 'INTERNAL' },
+        { label: '약속방 대체 INTERNAL', source: 'INTERNAL', roomId: 'room-147' },
+    ];
+    for (const scenario of cases) for (const fareSource of ['KAKAO', 'ESTIMATED']) {
+        const data = routeData(); data.routeSource = scenario.source; data.routes[0].summary.fareSource = fareSource;
+        const search = await route147Search(data, scenario.roomId); const view = search.view147(); const card = search.card147();
+        assert.ok(card, scenario.label); card.props.onStart();
+        const selected = search.load('src/stores/route-store.ts').getSelectedRoute();
+        const guide = route147Guide(selected); const guided = guide.render();
+        for (const screen of [view, guided]) {
+            assert.equal(!!findText(screen, '자체 계산한 경로예요.'), scenario.source === 'INTERNAL', scenario.label);
+            assert.doesNotMatch(textOf(screen), /실시간 경로를 불러오지 못해|예상 경로를 보여|요금은 예상 금액이에요|시각표로 계산|카카오.*실패/, scenario.label);
+        }
+        const Card = search.load('src/components/route/RouteCard.tsx').default;
+        assert.equal(!!findText(Card({ ...card.props, expanded: true }), '예상'), fareSource === 'ESTIMATED');
+        assert.equal(!!findTextIncluding(Card({ ...card.props, expanded: false }), '예상 '), fareSource === 'ESTIMATED');
+        assert.equal(!!findText(guided, '예상'), fareSource === 'ESTIMATED');
+        assert.equal(selected.routeSource, scenario.source);
+        search.unmount(); guide.unmount();
+    }
+});
+
+test('147 INTERNAL의 중립 문구를 표시해도 기존 지난 약속·첫차·지각 안내는 유지돼요', async () => {
+    const data = routeData(); data.routeSource = 'INTERNAL';
+    Object.assign(data, { appointmentPassed: true, notice: '약속 시각이 지나 지금 출발 기준으로 안내해요.' });
+    Object.assign(data.routes[0].summary, { noService: true, serviceNotice: '첫차 운행 시각부터 안내해요.', arrivesAfterAppointment: true });
+    const search = await route147Search(data, 'room-147'); const view = search.view147(); const card = search.card147();
+    assert.ok(findText(view, data.notice)); assert.ok(findText(view, '자체 계산한 경로예요.'));
+    const Notices = search.load('src/components/route/RouteNotices.tsx').default;
+    const Card = search.load('src/components/route/RouteCard.tsx').default;
+    for (const expanded of [false, true]) {
+        const notices = findElement(Card({ ...card.props, expanded }), element => element.type === Notices);
+        assert.ok(notices); const rendered = Notices(notices.props);
+        assert.ok(findText(rendered, data.routes[0].summary.serviceNotice)); assert.ok(findText(rendered, '약속 시각보다 늦게 도착해요'));
+    }
+    card.props.onStart(); const guide = route147Guide(search.load('src/stores/route-store.ts').getSelectedRoute()); const guided = guide.render();
+    assert.ok(findText(guided, '자체 계산한 경로예요.'));
+    const guideNotices = findElement(guided, element => element.type === guide.load('src/components/route/RouteNotices.tsx').default);
+    const rendered = guideNotices.type(guideNotices.props);
+    assert.ok(findText(rendered, data.routes[0].summary.serviceNotice)); assert.ok(findText(rendered, '약속 시각보다 늦게 도착해요'));
+    // 응답 최상위 appointmentPassed·notice를 안내 화면으로 전달하는 변경은 #148에서 별도로 진행해요.
+    search.unmount(); guide.unmount();
+});
+
+test('147 INTERNAL 다음 KAKAO를 검색·선택하면 이전 자체 계산 안내가 남지 않아요', async () => {
+    const data = routeData(); data.routeSource = 'INTERNAL';
+    const search = await route147Search(data, 'room-147'); assert.ok(findText(search.view147(), '자체 계산한 경로예요.'));
+    search.card147().props.onStart(); const guide = route147Guide(search.load('src/stores/route-store.ts').getSelectedRoute());
+    assert.ok(findText(guide.render(), '자체 계산한 경로예요.'));
+    search.route147Data = routeData(); search.route147Data.routes[0].routeId = 'server-route-147-next';
+    findElement(search.view147(), element => element.props?.accessibilityLabel === '출발역과 도착역 바꾸기').props.onPress();
+    for (let i = 0; i < 5; i++) { search.render(); await settle(); }
+    assert.equal(findText(search.view147(), '자체 계산한 경로예요.'), null);
+    search.card147().props.onStart(); const selected = search.load('src/stores/route-store.ts').getSelectedRoute();
+    guide.load('src/stores/route-store.ts').setSelectedRoute(selected);
+    guide.external['expo-router'].useLocalSearchParams = () => ({ routeId: selected.route.routeId });
+    assert.equal(findText(guide.render(), '자체 계산한 경로예요.'), null);
+    search.unmount(); guide.unmount();
+});

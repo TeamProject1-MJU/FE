@@ -298,14 +298,11 @@ export default function RouteSearchScreen() {
                     </View>
                 )}
 
-                {/* 대체 경로 안내 (routeSource: INTERNAL) */}
+                {/* INTERNAL은 계산 출처이며 조회 실패 여부를 뜻하지 않아요. */}
                 {search.status === 'success' && search.data.routeSource === 'INTERNAL' && (
                     <View style={styles.notice}>
-                        <Ionicons name="alert-circle-outline" size={17} color="#c58a00" />
-                        <Text style={styles.noticeText}>
-                            실시간 경로를 불러오지 못해 예상 경로를 보여드려요.{'\n'}
-                            소요 시간과 요금은 실제와 다를 수 있어요.
-                        </Text>
+                        <Ionicons name="information-circle-outline" size={17} color="#c58a00" />
+                        <Text style={styles.noticeText}>자체 계산한 경로예요.</Text>
                     </View>
                 )}
 
