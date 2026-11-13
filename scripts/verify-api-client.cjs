@@ -7143,3 +7143,87 @@ test('147 INTERNAL 다음 KAKAO를 검색·선택하면 이전 자체 계산 안
     assert.equal(findText(guide.render(), '자체 계산한 경로예요.'), null);
     search.unmount(); guide.unmount();
 });
+
+/* ---------- 지난 약속 안내의 경로 안내 전달 (#148) ---------- */
+test('148 검색 응답의 지난 약속 여부·안내를 선택 경로에 그대로 저장하고 안내에서도 같은 조건으로 표시해요', async () => {
+    const message = '약속 시각이 이미 지나 지금 출발 기준으로 안내해요.';
+    for (const routeSource of ['KAKAO', 'INTERNAL']) for (const [appointmentPassed, notice] of [
+        [true, message], [false, message], [true, null], [false, null], [true, ''],
+    ]) {
+        const data = { ...routeData(), routeSource, appointmentPassed, notice };
+        const search = await route147Search(data, 'room-148'); const card = search.card147(); assert.ok(card);
+        card.props.onStart(); const selected = search.load('src/stores/route-store.ts').getSelectedRoute();
+        assert.equal(selected.appointmentPassed, appointmentPassed);
+        assert.equal(selected.notice, notice, '서버 문구를 새로 만들거나 변경하지 않아요');
+        assert.equal(selected.route, card.props.route);
+        const guide = route147Guide(selected); const view = guide.render();
+        assert.equal(!!findText(view, message), appointmentPassed && notice === message);
+        assert.equal(!!findText(view, '자체 계산한 경로예요.'), routeSource === 'INTERNAL');
+        search.unmount(); guide.unmount();
+    }
+});
+
+test('148 다음 방·일반 경로의 새 응답을 선택하면 같은 routeId여도 이전 지난 약속 안내가 남지 않아요', async () => {
+    const message = '지난 방의 지금 출발 안내예요.';
+    for (const nextRoom of ['future-room-148', undefined]) for (const sameRouteId of [true, false]) {
+        const past = { ...routeData(), appointmentPassed: true, notice: message };
+        const search = await route147Search(past, 'past-room-148'); search.card147().props.onStart();
+        const guide = route147Guide(search.load('src/stores/route-store.ts').getSelectedRoute());
+        assert.ok(findText(guide.render(), message));
+        search.route147Data = { ...routeData(), appointmentPassed: false, notice: null };
+        if (!sameRouteId) search.route147Data.routes[0].routeId = 'route-148-next';
+        search.external['expo-router'].useLocalSearchParams = () => ({ departure: '강남', destination: '사당', ...(nextRoom ? { roomId: nextRoom } : {}) });
+        for (let i = 0; i < 5; i++) { search.render(); await settle(); }
+        search.card147().props.onStart(); const selected = search.load('src/stores/route-store.ts').getSelectedRoute();
+        assert.equal(selected.appointmentPassed, false); assert.equal(selected.notice, null);
+        guide.load('src/stores/route-store.ts').setSelectedRoute(selected);
+        guide.external['expo-router'].useLocalSearchParams = () => ({ routeId: selected.route.routeId });
+        assert.equal(findText(guide.render(), message), null);
+        search.unmount(); guide.unmount();
+    }
+});
+
+test('148 지난 약속·첫차·지각·자체 계산 안내가 함께 있어도 경로 안내에서 모두 유지돼요', async () => {
+    const data = { ...routeData(), routeSource: 'INTERNAL', appointmentPassed: true, notice: '약속 시각이 지나 지금 출발 기준으로 안내해요.' };
+    Object.assign(data.routes[0].summary, { noService: true, serviceNotice: '첫차부터 이용할 수 있는 경로예요.', arrivesAfterAppointment: true });
+    const search = await route147Search(data, 'room-148'); search.card147().props.onStart();
+    const selected = search.load('src/stores/route-store.ts').getSelectedRoute(); const guide = route147Guide(selected); const view = guide.render();
+    assert.ok(findText(view, data.notice)); assert.ok(findText(view, '자체 계산한 경로예요.'));
+    const notices = findElement(view, element => element.type === guide.load('src/components/route/RouteNotices.tsx').default);
+    assert.ok(notices); const rendered = notices.type(notices.props);
+    assert.ok(findText(rendered, data.routes[0].summary.serviceNotice)); assert.ok(findText(rendered, '약속 시각보다 늦게 도착해요'));
+    assert.equal(selected.route.summary.noService, true); assert.equal(selected.route.summary.arrivesAfterAppointment, true);
+    search.unmount(); guide.unmount();
+});
+
+test('148 같은 응답의 다른 경로를 고르면 새 경로와 응답 최상위 지난 약속 안내가 함께 전달돼요', async () => {
+    const data = { ...routeData(), appointmentPassed: true, notice: '이 검색은 지금 출발 기준이에요.' };
+    data.routes.push({ ...data.routes[0], routeId: 'route-148-alternative', summary: { ...data.routes[0].summary, totalTimeSec: 1200 } });
+    const search = await route147Search(data, 'room-148');
+    const Card = search.load('src/components/route/RouteCard.tsx').default;
+    const first = findElement(search.view147(), element => element.type === Card && element.props.route.routeId === 'server-route-1');
+    first.props.onStart();
+    const second = findElement(search.view147(), element => element.type === Card && element.props.route.routeId === 'route-148-alternative');
+    second.props.onStart(); const selected = search.load('src/stores/route-store.ts').getSelectedRoute();
+    assert.equal(selected.route.routeId, 'route-148-alternative'); assert.equal(selected.notice, data.notice); assert.equal(selected.appointmentPassed, true);
+    const guide = route147Guide(selected); assert.ok(findText(guide.render(), data.notice));
+    guide.external['expo-router'].useLocalSearchParams = () => ({ routeId: 'unrelated-route-148' });
+    const empty = guide.render(); assert.ok(findText(empty, '선택한 경로가 없어요')); assert.equal(findText(empty, data.notice), null);
+    search.unmount(); guide.unmount();
+});
+
+test('148 실제 사용자 서비스의 로그아웃은 지난 약속 안내가 포함된 선택 경로 전체를 지워요', async () => {
+    for (const mock of [false, true]) {
+        const r = guide129({ mock }); const store = r.load('src/stores/route-store.ts'); let calls = 0;
+        r.context.fetch = () => { calls++; throw Error('로그아웃 검사에서 서버를 호출하지 않아요'); };
+        const notice = '이전 사용자의 지난 약속 안내예요.';
+        store.setSelectedRoute({ ...store.getSelectedRoute(), appointmentPassed: true, notice });
+        assert.ok(findText(r.render(), notice));
+        const pending = r.load('src/services/user.ts').logout();
+        if (mock) await finishRoomMock(r, pending); else await pending;
+        assert.equal(store.getSelectedRoute(), null);
+        assert.ok(findText(r.render(), '선택한 경로가 없어요')); assert.equal(findText(r.render(), notice), null);
+        r.load('src/stores/auth-store.ts').signIn({ userId: 'next-user-148', nickname: '다음 사용자' });
+        assert.equal(store.getSelectedRoute(), null); assert.equal(calls, 0); r.unmount();
+    }
+});
