@@ -179,12 +179,12 @@ export default function RoomRecommendationsScreen() {
         receive: event => {
             if (event.type === 'ROOM_UPDATED' || event.type === 'SELECTED_STATION_CHANGED') {
                 const previous = detailRef.current;
-                if (!previous) return ['detail'];
+                if (!previous) return event.type === 'ROOM_UPDATED' ? ['detail', 'recommendation'] : ['detail'];
                 const includeStation = Date.parse(event.at) >= stationAt.current;
                 const selected = event.type === 'SELECTED_STATION_CHANGED' ? parseSelectedStationEvent(event.payload) : null;
                 const next = event.type === 'ROOM_UPDATED' ? mergeRoomUpdated(previous, event.payload, includeStation)
                     : selected ? { ...previous, ...(includeStation ? selected : {}) } : null;
-                if (!next) return ['detail'];
+                if (!next) return event.type === 'ROOM_UPDATED' ? ['detail', 'recommendation'] : ['detail'];
                 if (includeStation) stationAt.current = Date.parse(event.at);
                 realtimeRequest.current.detail++;
                 detailRef.current = next; setDetail(next);

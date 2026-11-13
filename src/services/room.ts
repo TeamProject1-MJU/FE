@@ -647,8 +647,8 @@ const updateFailOnce = new Map<string, 'error' | 'busy'>();
  * - 이름은 앞뒤 공백 제거 후 1~30자 (명세 부록 A ck_room_name), 아니면 VALIDATION_ERROR(400)
  * - 방장이 아니면 NOT_ROOM_OWNER(403), 없는 방 ROOM_NOT_FOUND(404), 락 대기 초과 ROOM_BUSY(409, 7.12)
  * - 약속 시각을 바꿔도 추천을 새로 만들지 않고 기존 추천·후보·확정 약속역은 그대로 둡니다 (명세 7.5).
- *   ROOM_UPDATED 실시간 수신은 #117 에서 구현했어요(방 상세·추천 화면이 방 정보만 바꿔요).
- *   TODO: ROOM_UPDATED 를 받았을 때 8.2 재조회로 isStale 갱신하는 처리는 아직 없어요 (이슈 미정)
+ *   ROOM_UPDATED 실시간 수신으로 방 상세·추천 화면의 방 정보를 바꿔요(#117).
+ *   추천 화면은 8.2를 다시 조회해 서버의 isStale·staleReasons도 갱신해요(#136).
  * mock: 'error' 면 한 번 NETWORK_ERROR, 'busy' 면 한 번 ROOM_BUSY (다시 시도하면 성공)
  */
 export async function updateRoom(

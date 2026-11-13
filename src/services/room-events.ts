@@ -8,7 +8,7 @@ export function roomEventTargets(type: RoomEvent['type']): RefreshTarget[] {
         case 'MEMBER_JOINED': case 'DEPARTURE_UPDATED': return ['detail', 'recommendation'];
         case 'MEMBER_LEFT': return ['detail', 'proposals', 'recommendation'];
         case 'OWNER_CHANGED': return ['detail'];
-        case 'RECOMMENDATION_CREATED': return ['recommendation'];
+        case 'ROOM_UPDATED': case 'RECOMMENDATION_CREATED': return ['recommendation'];
         case 'STATION_PROPOSAL_CREATED': case 'STATION_PROPOSAL_DELETED': case 'STATION_PROPOSAL_VOTE_CHANGED': return ['proposals'];
         default: return [];
     }
