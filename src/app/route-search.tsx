@@ -216,6 +216,8 @@ export default function RouteSearchScreen() {
         setSelectedRoute({
             route,
             routeSource: search.data.routeSource,
+            appointmentPassed: search.data.appointmentPassed,
+            notice: search.data.notice,
             origin: departure,
             destination,
         });
