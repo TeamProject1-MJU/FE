@@ -8,6 +8,7 @@ import { getAccessToken, subscribeTokenStorage } from '@/services/token-storage'
 import { getRoomCacheScope, removeCachedRoom, subscribeRoomCacheReset } from '@/services/room-cache';
 
 export type RealtimeState = 'idle' | 'connecting' | 'open' | 'closed';
+export const SUBSCRIBE_SETTLE_MS = 500;
 const eventTypes = [
     'MESSAGE_CREATED', 'MEMBER_JOINED', 'MEMBER_LEFT', 'OWNER_CHANGED', 'DEPARTURE_UPDATED',
     'ROOM_UPDATED', 'RECOMMENDATION_CREATED', 'STATION_PROPOSAL_CREATED', 'STATION_PROPOSAL_DELETED',
@@ -15,12 +16,15 @@ const eventTypes = [
 ] as const;
 export type RoomEvent = { type: typeof eventTypes[number]; roomId: string; payload: Record<string, unknown>; at: string };
 export type RoomEventOptions = {
+    /** 최초 구독이 준비되면 호출해요. 준비된 방에 붙을 때는 호출하지 않아요. */
+    onSubscribed?: () => void;
+    /** 이전에 준비된 구독이 다시 준비되면 receipt 없이도 호출해요. */
     onReconnected?: () => void;
     /** NOT_ROOM_MEMBER / ROOM_NOT_FOUND는 접근 불가, 그 외 코드는 반복 실패로 구독을 포기한 경우예요. */
     onRejected?: (code: string) => void;
 };
 type Registration = { listener: (event: RoomEvent) => void; options: RoomEventOptions; connected: boolean };
-type Room = { listeners: Set<Registration>; unsubscribe?: () => void; failures: number };
+type Room = { listeners: Set<Registration>; unsubscribe?: () => void; ready?: boolean; cancelReady?: () => void; failures: number };
 type Frame = { headers: Record<string, string>; body: string };
 
 // Only this adapter knows STOMP. The service cannot publish/SEND.
@@ -120,7 +124,7 @@ export function createRealtimeService(dependencies: {
         clearTimeout(retryTimer); retryTimer = undefined;
         const previous = transport; transport = undefined;
         pending.clear();
-        rooms.forEach(room => { room.unsubscribe = undefined; });
+        rooms.forEach(room => { room.cancelReady?.(); room.unsubscribe = undefined; room.ready = false; });
         previous?.close();
         setState('closed');
     }
@@ -179,20 +183,39 @@ export function createRealtimeService(dependencies: {
         const id = `sub-${++serial}`;
         const receipt = `receipt-${serial}`;
         pending.set(receipt, roomId);
-        room.unsubscribe = transport.subscribe(roomId, id, receipt, body => deliver(roomId, room, body, connection), () => {
-            if (current(connection) && rooms.get(roomId) === room) {
-                pending.delete(receipt); authRetried = false; room.failures = 0;
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const cancel = () => {
+            settled = true; clearTimeout(timer); timer = undefined;
+            if (room.cancelReady === cancel) room.cancelReady = undefined;
+        };
+        room.cancelReady = cancel;
+        const prepared = () => {
+            if (settled) return;
+            cancel();
+            if (!current(connection) || rooms.get(roomId) !== room || !room.listeners.size) return;
+            room.ready = true;
+            for (const registration of [...room.listeners]) {
+                if (!current(connection) || rooms.get(roomId) !== room) break;
+                if (!room.listeners.has(registration)) continue;
+                const reconnect = registration.connected;
+                registration.connected = true;
+                safely(() => reconnect ? registration.options.onReconnected?.() : registration.options.onSubscribed?.());
             }
+        };
+        room.unsubscribe = transport.subscribe(roomId, id, receipt, body => deliver(roomId, room, body, connection), () => {
+            if (!current(connection) || rooms.get(roomId) !== room || !pending.has(receipt)) return;
+            pending.delete(receipt); authRetried = false; room.failures = 0;
+            prepared();
         });
-        for (const registration of [...room.listeners]) {
-            const reconnect = registration.connected;
-            registration.connected = true;
-            if (reconnect && current(connection) && room.listeners.has(registration)) safely(() => registration.options.onReconnected?.());
-        }
+        // 서버(simple broker)가 receipt를 보내지 않아 SUBSCRIBE 직후 짧은 대기로 구독 등록을 추정해요.
+        // 정확한 신호는 BE 확인 이슈로 따로 요청해요.
+        if (!settled) timer = setTimeout(prepared, SUBSCRIBE_SETTLE_MS);
     }
     function forgetRoom(roomId: string) {
         if (isMockMode()) return;
         const id = roomId.toLowerCase(); const room = rooms.get(id);
+        room?.cancelReady?.();
         rooms.delete(id);
         for (const [receipt, pendingRoom] of pending) if (pendingRoom === id) pending.delete(receipt);
         safely(() => room?.unsubscribe?.());
@@ -314,7 +337,7 @@ export function createRealtimeService(dependencies: {
             const id = roomId.toLowerCase();
             let room = rooms.get(id);
             if (!room) { room = { listeners: new Set(), failures: 0 }; rooms.set(id, room); }
-            const registration: Registration = { listener, options, connected: !!room.unsubscribe };
+            const registration: Registration = { listener, options, connected: !!room.ready };
             room.listeners.add(registration);
             if (state === 'open') subscribe(id, room, epoch); else if (retryTimer === undefined) void connect();
             const original = room;
