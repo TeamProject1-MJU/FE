@@ -51,7 +51,7 @@ export type RouteStationCongestion = {
     congestion: Congestion;
 };
 
-export type WaitKind = 'REALTIME' | 'ESTIMATED' | 'NONE';
+export type WaitKind = 'REALTIME' | 'ESTIMATED' | 'NONE' | 'TIMETABLE';
 
 /**
  * 경로 단계 (명세 6.1)
@@ -62,7 +62,7 @@ export type WaitKind = 'REALTIME' | 'ESTIMATED' | 'NONE';
  */
 export type RouteStep = {
     waitSec?: number | null;
-    waitKind?: WaitKind;
+    waitKind?: WaitKind | null;
     nextTrains?: { destinationLabel: string; secondsUntil: number; message: string | null; receivedAt: string }[];
     type: 'WALKING' | 'SUBWAY';
     guidance: string;
@@ -82,9 +82,9 @@ export type RouteSummary = {
     serviceNotice: string | null;
     arrivesAfterAppointment: boolean;
     waitSec?: number | null;
-    waitKind?: WaitKind;
+    waitKind?: WaitKind | null;
     transferWaitSec?: number;
-    totalWithWaitSec?: number;
+    totalWithWaitSec?: number | null;
     totalTimeSec: number;
     /** ISO-8601 */
     arrivalAt: string;
@@ -121,6 +121,8 @@ export type RouteErrorCode =
     | 'STATION_NOT_FOUND'
     | 'STATION_UNSUPPORTED'
     | 'ROUTE_NOT_FOUND'
+    | 'NOT_ROOM_MEMBER'
+    | 'ROOM_NOT_FOUND'
     | 'EXTERNAL_API_ERROR'
     | 'NETWORK_ERROR';
 

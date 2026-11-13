@@ -2391,7 +2391,8 @@ test('경로 오류 매핑 422·404·403·400·5xx와 TOKEN 계열 원본 보존
     const { ApiError } = r.load('src/services/api/errors.ts');
     for (const [code, status, expected] of [
         ['STATION_UNSUPPORTED', 422, 'STATION_UNSUPPORTED'], ['ROUTE_NOT_FOUND', 404, 'ROUTE_NOT_FOUND'],
-        ['STATION_NOT_FOUND', 404, 'STATION_NOT_FOUND'], ['NOT_ROOM_MEMBER', 403, 'EXTERNAL_API_ERROR'],
+        ['STATION_NOT_FOUND', 404, 'STATION_NOT_FOUND'], ['NOT_ROOM_MEMBER', 403, 'NOT_ROOM_MEMBER'],
+        ['ROOM_NOT_FOUND', 404, 'ROOM_NOT_FOUND'],
         ['VALIDATION_ERROR', 400, 'EXTERNAL_API_ERROR'], ['EXTERNAL_API_ERROR', 502, 'EXTERNAL_API_ERROR'],
         ['UNKNOWN_ERROR', 500, 'EXTERNAL_API_ERROR'], ['TOKEN_EXPIRED', 401, 'TOKEN_EXPIRED'],
         ['TOKEN_INVALID', 401, 'TOKEN_INVALID'], ['TOKEN_FUTURE', 401, 'TOKEN_FUTURE'], ['AUTH_REQUIRED', 401, 'AUTH_REQUIRED'],
@@ -2584,6 +2585,11 @@ test('늦은 경로 응답은 최신 검색·동일역·미선택·닫힌 화면
         pending[0].resolve(routeData()); await settle(); view = r.render();
         assert.equal(findElement(view, element => element.props?.route?.routeId === 'server-route-1'), null);
         if (outcome === 'newer') assert.ok(findElement(view, element => element.props?.route?.routeId === 'newest'));
+        if (outcome === 'same') {
+            assert.equal(pending.length, 2, '같은 역도 새 서버 응답을 기다려요');
+            pending[1].resolve(route141Data(true)); await settle();
+            assert.ok(sameMessage141(r.render()));
+        }
         assert.ok(types.RouteSearchError); r.unmount();
     }
 });
@@ -7565,8 +7571,8 @@ async function roomUpdated136(screen = 'src/app/rooms/[roomId]/recommendations.t
     events.mergeRoomUpdated = (...args) => { const next = mergeRoomUpdated(...args); r.merged136 = next; return next; };
     const hooks = r.load('src/hooks/use-room-events.ts'); const useRoomEvents = hooks.useRoomEvents;
     hooks.useRoomEvents = (roomId, callbacks) => useRoomEvents(roomId, { ...callbacks, receive: event => {
-        const targets = callbacks.receive?.(event); r.targets136 = targets; return targets;
-    } });
+            const targets = callbacks.receive?.(event); r.targets136 = targets; return targets;
+        } });
     r.load('src/services/realtime.ts').subscribeRoomEvents = (_id, receive) => { listener ??= receive; return () => {}; };
     r.latest136 = recoRun({ results: [] });
     r.context.fetch = async (url, options = {}) => {
@@ -7940,6 +7946,210 @@ test('144 mock 모드 생성 실패는 이전과 같은 안내이고 결과 불�
     assert.ok(view.props.room); assert.equal(calls, 0); m.unmount();
 });
 
+/* ---------- 동일 역의 정상 경로 안내 (#141) ---------- */
+function route141Data(empty = false) {
+    const data = { ...routeData(), routeSource: 'INTERNAL' };
+    data.routes = empty ? [] : [{ ...data.routes[0], steps: [], summary: { ...data.routes[0].summary,
+            totalTimeSec: 0, transferCount: 0, walkingMinutes: 0, fare: 1550, congestion: null,
+            departureAt: '2026-11-11T23:41:17+09:00', noService: false, serviceNotice: null, arrivesAfterAppointment: false,
+            waitSec: null, waitKind: null, totalWithWaitSec: null, slackSeconds: null } }];
+    return data;
+}
+const sameMessage141 = view => findElement(view, element => element.props?.title === '지하철 이동이 필요 없어요');
+async function screen141(params = { departure: '강남', destination: '강남역' }, response = () => jsonResponse({ success: true, data: route141Data() })) {
+    const r = routeScreenRuntime(params); r.calls141 = [];
+    r.context.fetch = async (url, options) => {
+        r.calls141.push({ url, options });
+        if (url.endsWith('/routes/search')) return response(JSON.parse(options.body));
+        return jsonResponse({ success: true, data: stationSearchData([url.includes(encodeURIComponent('사당')) ? serverRouteStation(99002, '사당') : serverRouteStation(88001, '강남')]) });
+    };
+    for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+    return r;
+}
+
+test('141 동일 역의 서버 요청은 방·서버 역 ID를 그대로 보내고 0초·빈 단계·서버 요금을 보존해요', async () => {
+    for (const roomId of [undefined, 'room-141']) {
+        const r = createRuntime(serverEnv); const calls = [];
+        r.context.fetch = async (url, options) => { calls.push({ url, options }); return jsonResponse({ success: true, data: route141Data() }); };
+        const station = { id: 88001, name: '강남', lines: [2], isSupported: true };
+        const data = await r.load('src/services/route.ts').searchRoute(station, station, roomId ? { roomId } : {});
+        assert.deepEqual(JSON.parse(calls[0].options.body), { originStationId: 88001, destinationStationId: 88001, ...(roomId ? { roomId } : {}) });
+        assert.equal(calls.length, 1); assert.equal(data.routes[0].summary.totalTimeSec, 0); assert.equal(data.routes[0].summary.fare, 1550);
+        assert.equal(data.routes[0].summary.waitKind, null); assert.equal(data.routes[0].summary.totalWithWaitSec, null);
+        assert.deepEqual(plain(data.routes[0].steps), []);
+    }
+});
+
+test('141 직접 검색·약속방 동일 역은 서버의 빈 목록·빈 단계 결과를 이동 불필요 정상 상태로 표시해요', async () => {
+    for (const roomId of [undefined, 'room-141']) for (const empty of [false, true]) {
+        const r = await screen141({ departure: '강남', destination: '강남역', ...(roomId ? { roomId } : {}) }, () => jsonResponse({ success: true, data: route141Data(empty) }));
+        const view = r.render(); const message = sameMessage141(view); assert.ok(message);
+        assert.match(message.props.description, /선택한 출발역과 도착역이 같아요/);
+        assert.doesNotMatch(message.props.title + message.props.description, /도착했|현재 위치|GPS/);
+        assert.equal(findElement(view, element => element.props?.code), null);
+        assert.equal(findElement(view, element => element.type === 'ActivityIndicator'), null);
+        assert.equal(findElement(view, element => element.props?.route), null, '같은 역을 이동 경로 카드로 표시하지 않아요');
+        const calls = r.calls141.filter(call => call.options.method === 'POST'); assert.equal(calls.length, 1);
+        assert.deepEqual(JSON.parse(calls[0].options.body), { originStationId: 88001, destinationStationId: 88001, ...(roomId ? { roomId } : {}) });
+        r.unmount();
+    }
+});
+
+test('141 같은 역이어도 서버의 권한·지원 역 검사를 우회하거나 실패를 성공으로 바꾸지 않아요', async () => {
+    for (const [code, status] of [['NOT_ROOM_MEMBER', 403], ['STATION_UNSUPPORTED', 422], ['STATION_NOT_FOUND', 404]]) {
+        const r = await screen141({ departure: '강남', destination: '강남역', roomId: 'room-141' }, () => jsonResponse({ success: false, error: { code } }, status));
+        const view = r.render(); assert.equal(sameMessage141(view), null);
+        assert.ok(findElement(view, element => element.props?.code), code);
+        assert.equal(r.calls141.filter(call => call.options.method === 'POST').length, 1); r.unmount();
+    }
+});
+
+test('141 동일 역에서 출발·도착역을 다시 바꾸면 일반 경로 검색과 안내 시작이 정상 동작해요', async () => {
+    const params = { departure: '강남', destination: '강남역' };
+    const r = await screen141(params, body => jsonResponse({ success: true, data: body.originStationId === body.destinationStationId ? route141Data() : routeData() }));
+    assert.ok(sameMessage141(r.render()));
+    params.destination = '사당';
+    for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+    let view = r.render(); assert.equal(sameMessage141(view), null);
+    const card = findElement(view, element => element.props?.route?.routeId === 'server-route-1'); assert.ok(card); card.props.onStart();
+    const selected = r.load('src/stores/route-store.ts').getSelectedRoute(); assert.equal(selected.origin.id, 88001); assert.equal(selected.destination.id, 99002);
+    params.departure = '사당';
+    for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+    view = r.render(); assert.ok(sameMessage141(view)); assert.equal(findElement(view, element => element.props?.route), null);
+    assert.equal(r.calls141.filter(call => call.options.method === 'POST').length, 3); r.unmount();
+});
+
+test('141 이전 일반 경로 응답은 나중에 선택한 동일 역의 정상 결과를 덮지 않아요', async () => {
+    const params = { departure: '강남', destination: '사당' }; let resolveOld;
+    const r = await screen141(params, body => body.originStationId !== body.destinationStationId
+        ? new Promise(done => { resolveOld = done; }) : jsonResponse({ success: true, data: route141Data(true) }));
+    params.destination = '강남역';
+    for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+    assert.ok(sameMessage141(r.render()));
+    resolveOld(jsonResponse({ success: true, data: routeData() })); await settle(); const view = r.render();
+    assert.ok(sameMessage141(view)); assert.equal(findElement(view, element => element.props?.route), null); r.unmount();
+});
+
+test('141 mock 동일 역도 지원 여부 검사 후 빈 정상 결과이며 서버를 호출하지 않아요', async () => {
+    const r = createRuntime(); let calls = 0;
+    r.context.fetch = () => { calls++; throw Error(); };
+    const service = r.load('src/services/route.ts'); const station = { id: 109, name: '사당', lines: [2, 4], isSupported: true };
+    const data = await finishRoomMock(r, service.searchRoute(station, station)); assert.deepEqual(plain(data.routes), []);
+    const unsupported = { ...station, isSupported: false };
+    await finishRoomMock(r, assert.rejects(service.searchRoute(unsupported, unsupported), { code: 'STATION_UNSUPPORTED' }));
+    assert.equal(calls, 0);
+    const screen = routeScreenRuntime({ departure: '사당', destination: '사당' }, true);
+    for (let i = 0; i < 5; i++) { screen.render(); await settle(); screen.advance(800); await settle(); }
+    assert.ok(sameMessage141(screen.render())); screen.unmount();
+});
+
+test('141 동일 역의 빈 단계 안내는 요금·도착 예정·지도·표지판 버튼 대신 정상 설명을 표시해요', () => {
+    const data = route141Data(); const route = { ...data.routes[0], summary: { ...data.routes[0].summary, congestion: { supported: false, kind: null, pct: null, level: null, levelLabel: null }, noService: false, serviceNotice: null, arrivesAfterAppointment: false } };
+    const r = guide129({ route }); const store = r.load('src/stores/route-store.ts'); const selected = store.getSelectedRoute();
+    store.setSelectedRoute({ ...selected, routeSource: 'INTERNAL', origin: { ...selected.origin, id: 88001, name: '강남' }, destination: { ...selected.destination, id: 88001, name: '강남' },
+        appointmentPassed: true, notice: '지난 약속은 지금 기준으로 안내해요.' });
+    const view = r.render(); assert.ok(findText(view, '지하철 이동이 필요 없어요')); assert.ok(findText(view, '선택한 출발역과 도착역이 같아요.'));
+    assert.ok(findText(view, '지난 약속은 지금 기준으로 안내해요.')); assert.ok(findText(view, '자체 계산한 경로예요.'));
+    assert.equal(r.map(view), null); assert.equal(findElement(view, element => element.type === r.Timeline), null);
+    assert.doesNotMatch(textOf(view), /1,550|도착 예정|도착했|현재 위치|GPS/);
+    assert.equal(store.getSelectedRoute().route.summary.fare, 1550, '서버 요금 자체는 보정하지 않아요'); r.unmount();
+});
+
+test('141 일반 검색의 빈 목록과 안내의 빈 단계·선택 없음도 오류나 무한 로딩 없이 표시해요', async () => {
+    const r = await screen141({ departure: '강남', destination: '사당' }, () => jsonResponse({ success: true, data: route141Data(true) }));
+    assert.ok(findElement(r.render(), element => element.props?.title === '이 조건으로 찾은 경로가 없어요'));
+    assert.equal(findElement(r.render(), element => element.type === 'ActivityIndicator'), null); r.unmount();
+    const g = guide129({ route: { ...route129(), steps: [] } }); let view = g.render();
+    const timeline = findElement(view, element => element.type === g.Timeline); assert.ok(timeline); assert.doesNotThrow(() => g.renderComponent(timeline));
+    g.load('src/stores/route-store.ts').clearSelectedRoute(); view = g.render(); assert.ok(findText(view, '선택한 경로가 없어요')); g.unmount();
+});
+
+test('141 정상 null 대기 필드는 허용하되 잘못된 문자열·객체·대기 출처는 계속 거절해요', async () => {
+    for (const [field, value] of [['waitKind', 'BROKEN'], ['waitKind', 1], ['totalWithWaitSec', '0'], ['totalWithWaitSec', {}], ['waitSec', '0']]) {
+        const r = createRuntime(serverEnv); const data = route141Data(); data.routes[0].summary[field] = value;
+        r.context.fetch = async () => jsonResponse({ success: true, data });
+        await assert.rejects(r.load('src/services/route.ts').searchRoute(routeOrigin, routeOrigin), { code: 'EXTERNAL_API_ERROR' });
+    }
+});
+
+/* ---------- 시각표 대기 출처 응답 호환 (PR #161) ---------- */
+function timetable161Data(waitSec = 180) {
+    const data = { ...routeData(), routeSource: 'INTERNAL', appointmentPassed: false, notice: null };
+    Object.assign(data.routes[0].summary, {
+        totalTimeSec: 1200, departureAt: '2026-11-13T14:03:00+09:00', arrivalAt: '2026-11-13T14:23:00+09:00',
+        noService: false, serviceNotice: null, arrivesAfterAppointment: false,
+        waitSec, waitKind: 'TIMETABLE', totalWithWaitSec: 1200 + waitSec, slackSeconds: null,
+    });
+    return data;
+}
+
+test('161 TIMETABLE 정상 응답은 대기 0초·양수를 그대로 파싱하고 원본 시각·총시간을 보존해요', async () => {
+    for (const waitSec of [0, 180]) {
+        const r = createRuntime(serverEnv); const raw = timetable161Data(waitSec); const calls = [];
+        r.context.fetch = async (url, options) => { calls.push({ url, options }); return jsonResponse({ success: true, data: raw }); };
+        const parsed = await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination);
+        assert.equal(parsed.routes[0].summary.waitKind, 'TIMETABLE');
+        for (const field of ['waitSec', 'totalTimeSec', 'totalWithWaitSec', 'departureAt', 'arrivalAt']) {
+            assert.equal(parsed.routes[0].summary[field], raw.routes[0].summary[field], field);
+        }
+        assert.equal(calls.length, 1); assert.equal(calls[0].url, 'https://example.test/api/v1/routes/search');
+        assert.deepEqual(JSON.parse(calls[0].options.body), { originStationId: routeOrigin.id, destinationStationId: routeDestination.id });
+    }
+});
+
+test('161 TIMETABLE 경로의 펼침·접힘·안내 화면은 서버의 대기 포함 총시간을 사용하고 약을 붙이지 않아요', async () => {
+    for (const waitSec of [0, 180]) {
+        const search = await route147Search(timetable161Data(waitSec)); const card = search.card147(); assert.ok(card);
+        const summary = card.props.route.summary; const expected = `대기 포함 ${waitSec === 0 ? 20 : 23}분`;
+        const format = search.load('src/components/route/format.ts');
+        assert.equal(format.formatTotalTime(summary), expected);
+        assert.equal(format.formatTotalTime({ ...summary, transferWaitSec: 300 }), expected, '이미 포함된 대기를 다시 합산하지 않아요');
+        const Card = search.load('src/components/route/RouteCard.tsx').default;
+        for (const expanded of [false, true]) assert.ok(findText(Card({ ...card.props, expanded }), expected));
+        card.props.onStart(); const selected = search.load('src/stores/route-store.ts').getSelectedRoute();
+        assert.equal(selected.route.summary.waitKind, 'TIMETABLE');
+        const guide = route147Guide(selected); assert.ok(findText(guide.render(), expected));
+        assert.equal(findElement(search.render(), element => element.props?.code), null);
+        search.unmount(); guide.unmount();
+    }
+});
+
+test('161 대기 포함 서버 값이 null·생략이면 이동 시간으로 표시하고 waitSec을 임의로 더하지 않아요', async () => {
+    for (const omit of [false, true]) {
+        const r = createRuntime(serverEnv); const raw = timetable161Data(180);
+        if (omit) delete raw.routes[0].summary.totalWithWaitSec; else raw.routes[0].summary.totalWithWaitSec = null;
+        r.context.fetch = async () => jsonResponse({ success: true, data: raw });
+        const parsed = await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination); const summary = parsed.routes[0].summary;
+        assert.equal(summary.waitKind, 'TIMETABLE'); assert.equal(summary.waitSec, 180);
+        assert.equal(Object.hasOwn(summary, 'totalWithWaitSec'), !omit);
+        if (!omit) assert.equal(summary.totalWithWaitSec, null);
+        assert.equal(r.load('src/components/route/format.ts').formatTotalTime(summary), '20분');
+    }
+});
+
+test('161 기존 생략·null·REALTIME·ESTIMATED·NONE의 파싱·시간 표시는 유지돼요', async () => {
+    for (const kind of [undefined, null, 'REALTIME', 'ESTIMATED', 'NONE']) {
+        const r = createRuntime(serverEnv); const raw = timetable161Data(kind === 'NONE' ? 0 : 180); const summary = raw.routes[0].summary;
+        if (kind === undefined) { delete summary.waitKind; delete summary.waitSec; delete summary.totalWithWaitSec; }
+        else if (kind === null) Object.assign(summary, { waitKind: null, waitSec: null, totalWithWaitSec: null });
+        else summary.waitKind = kind;
+        r.context.fetch = async () => jsonResponse({ success: true, data: raw });
+        const parsed = (await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination)).routes[0].summary;
+        assert.equal(Object.hasOwn(parsed, 'waitKind'), kind !== undefined); assert.equal(parsed.waitKind, kind);
+        const expected = kind == null ? '20분' : kind === 'ESTIMATED' ? '대기 포함 약 23분' : kind === 'NONE' ? '대기 포함 20분' : '대기 포함 23분';
+        assert.equal(r.load('src/components/route/format.ts').formatTotalTime(parsed), expected);
+    }
+});
+
+test('161 TIMETABLE 추가 후에도 미등록 출처·잘못된 대기 값은 계속 거절해요', async () => {
+    for (const [field, value] of [['waitKind', 'UNKNOWN'], ['waitKind', 'timetable'], ['waitKind', 'TIMETABLE '], ['waitKind', 1],
+        ['waitSec', '0'], ['waitSec', {}], ['totalWithWaitSec', '1380'], ['totalWithWaitSec', {}]]) {
+        const r = createRuntime(serverEnv); const raw = timetable161Data(); raw.routes[0].summary[field] = value;
+        r.context.fetch = async () => jsonResponse({ success: true, data: raw });
+        await assert.rejects(r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination), { code: 'EXTERNAL_API_ERROR' });
+    }
+});
+
 /* ---------- #137 채팅 재연결 뒤 끊긴 동안 쌓인 메시지 빠짐없이 복구 ---------- */
 
 const chat137Id = n => `01900000-0000-7000-8000-${String(n).padStart(12, '0')}`;
@@ -8267,6 +8477,111 @@ test('138 시간 창: 화면에서도 옛 미답 질문이 답변을 가로채�
     await r.ask(); assert.equal(r.render().aiPending, 1);
     r.event(ai138WindowReply(11, 125_000)); assert.equal(r.render().aiPending, 0); assert.equal(r.timers.size, 0);
     r.unmount();
+});
+
+/* ---------- 방 경로 검색의 권한·삭제 오류 구분 (#142) ---------- */
+const roomRoute142Cases = [
+    ['NOT_ROOM_MEMBER', 403, '이 약속방에 접근할 수 없어요', '참여 중인 약속방이 아니에요. 약속방 목록에서 확인해 주세요.'],
+    ['ROOM_NOT_FOUND', 404, '약속방을 찾을 수 없어요', '삭제됐거나 존재하지 않는 약속방이에요. 약속방 목록에서 확인해 주세요.'],
+];
+
+function route142Message(r) {
+    const error = findElement(r.render(), element => element.props?.code);
+    assert.ok(error);
+    return error.type(error.props);
+}
+
+test('142 방 경로의 403·404 코드를 보존하고 동일 역도 서버의 방 권한 검사를 거쳐요', async () => {
+    for (const [code, status] of roomRoute142Cases) for (const same of [false, true]) {
+        const r = createRuntime(serverEnv); const calls = [];
+        const service = r.load('src/services/route.ts'); const { RouteSearchError } = r.load('src/types/route.ts');
+        r.context.fetch = async (url, options) => { calls.push({ url, options }); return jsonResponse({ success: false, error: { code } }, status); };
+        const destination = same ? routeOrigin : routeDestination;
+        await assert.rejects(service.searchRoute(routeOrigin, destination, { roomId: 'room-142' }), error => error instanceof RouteSearchError && error.code === code);
+        assert.equal(calls.length, 1); assert.equal(calls[0].url, 'https://example.test/api/v1/routes/search');
+        assert.deepEqual(JSON.parse(calls[0].options.body), { originStationId: routeOrigin.id, destinationStationId: destination.id, roomId: 'room-142' });
+    }
+});
+
+test('142 비멤버·없는 방은 서로 다른 안내와 방 목록 버튼만 표시하고 경로를 재시도하지 않아요', async () => {
+    for (const [code, status, title, description] of roomRoute142Cases) for (const same of [false, true]) {
+        const r = await screen141({ departure: '강남', destination: same ? '강남역' : '사당', roomId: 'room-142' },
+            () => jsonResponse({ success: false, error: { code } }, status));
+        const moves = []; r.external['expo-router'].router.replace = href => moves.push(['replace', href]);
+        r.external['expo-router'].router.push = href => moves.push(['push', href]);
+        const message = route142Message(r);
+        assert.equal(message.props.title, title); assert.equal(message.props.description, description);
+        assert.equal(message.props.actionLabel, '약속방 목록으로');
+        const content = message.type(message.props);
+        assert.equal(findElement(content, element => element.type === 'Text' && element.props.children === '다시 시도'), null);
+        const button = findElement(content, element => element.type === 'Pressable'); assert.ok(button);
+        button.props.onPress(); assert.deepEqual(moves, [['replace', '/rooms']]);
+        r.advance(60000); await settle();
+        assert.equal(r.calls141.filter(call => call.options.method === 'POST').length, 1);
+        assert.equal(sameMessage141(r.render()), null); r.unmount();
+    }
+});
+
+test('142 네트워크·외부 경로 장애는 방·개인 경로 모두 기존 다시 시도로 정상 경로를 불러와요', async () => {
+    for (const roomId of [undefined, 'room-142']) for (const code of ['NETWORK_ERROR', 'EXTERNAL_API_ERROR']) {
+        let count = 0;
+        const r = await screen141({ departure: '강남', destination: '사당', ...(roomId ? { roomId } : {}) }, () => {
+            if (++count > 1) return jsonResponse({ success: true, data: routeData() });
+            if (code === 'NETWORK_ERROR') throw new TypeError('연결 실패');
+            return jsonResponse({ success: false, error: { code } }, 502);
+        });
+        const message = route142Message(r);
+        assert.equal(message.props.title, '경로를 불러오지 못했어요'); assert.equal(message.props.actionLabel, '다시 시도');
+        assert.equal(findElement(message.type(message.props), element => element.props?.children === '약속방 목록으로'), null);
+        await message.props.onAction(); await settle();
+        assert.equal(count, 2); assert.ok(findElement(r.render(), element => element.props?.route?.routeId === 'server-route-1'));
+        const body = JSON.parse(r.calls141.filter(call => call.options.method === 'POST')[0].options.body);
+        assert.equal(Object.hasOwn(body, 'roomId'), roomId !== undefined); r.unmount();
+    }
+});
+
+test('142 방 검색의 TOKEN 계열·인증 오류는 원본을 보존하고 방 접근 오류 안내나 목록 이동을 추가하지 않아요', async () => {
+    for (const code of ['TOKEN_EXPIRED', 'TOKEN_INVALID', 'TOKEN_FUTURE', 'AUTH_REQUIRED']) {
+        const r = createRuntime(serverEnv); const { ApiError } = r.load('src/services/api/errors.ts');
+        r.context.fetch = async () => jsonResponse({ success: false, error: { code, message: '인증 오류' } }, 401);
+        await assert.rejects(r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination, { roomId: 'room-142' }),
+            error => error instanceof ApiError && error.code === code && error.status === 401);
+        const screen = await screen141({ departure: '강남', destination: '사당', roomId: 'room-142' },
+            () => jsonResponse({ success: false, error: { code } }, 401));
+        const view = screen.render(); assert.equal(findElement(view, element => element.props?.code), null);
+        assert.equal(findElement(view, element => element.props?.actionLabel === '약속방 목록으로'), null);
+        assert.equal(screen.calls141.filter(call => call.options.method === 'POST').length, 1); screen.unmount();
+    }
+});
+
+test('142 이전 방의 늦은 권한 오류는 새 방의 정상 경로를 덮지 않아요', async () => {
+    for (const [code, status] of roomRoute142Cases) {
+        let resolveOld;
+        const params = { departure: '강남', destination: '사당', roomId: 'old-room-142' };
+        const r = await screen141(params, body => body.roomId === 'old-room-142'
+            ? new Promise(resolve => { resolveOld = resolve; }) : jsonResponse({ success: true, data: routeData() }));
+        assert.ok(resolveOld); params.roomId = 'new-room-142';
+        for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+        assert.ok(findElement(r.render(), element => element.props?.route?.routeId === 'server-route-1'));
+        resolveOld(jsonResponse({ success: false, error: { code } }, status)); await settle();
+        const view = r.render(); assert.equal(findElement(view, element => element.props?.code), null);
+        assert.ok(findElement(view, element => element.props?.route?.routeId === 'server-route-1')); r.unmount();
+    }
+});
+
+test('142 방에서 개인 검색으로 바꾸면 이전 방 오류를 지우고 roomId 없는 요청으로 정상 경로를 표시해요', async () => {
+    for (const [code, status] of roomRoute142Cases) {
+        const params = { departure: '강남', destination: '사당', roomId: 'room-142' };
+        const r = await screen141(params, body => Object.hasOwn(body, 'roomId')
+            ? jsonResponse({ success: false, error: { code } }, status) : jsonResponse({ success: true, data: routeData() }));
+        assert.equal(findElement(r.render(), element => element.props?.code)?.props.code, code);
+        delete params.roomId;
+        for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+        const view = r.render(); assert.equal(findElement(view, element => element.props?.code), null);
+        assert.ok(findElement(view, element => element.props?.route?.routeId === 'server-route-1'));
+        const calls = r.calls141.filter(call => call.options.method === 'POST'); assert.equal(calls.length, 2);
+        assert.equal(Object.hasOwn(JSON.parse(calls[1].options.body), 'roomId'), false); r.unmount();
+    }
 });
 
 /* ---------- #139 응답 유실 뒤 재시도의 중복 저장 방지 ---------- */
