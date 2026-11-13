@@ -10,7 +10,7 @@ import { createWebMap, loadMapSdk } from '@/components/map/map-web';
 export type { KakaoMapProps, MapMarker } from '@/components/KakaoMap';
 
 export default function KakaoMap(props: KakaoMapProps) {
-    const { center, myLocation, markers, centerRevision = 0, bottomInset = 0 } = props;
+    const { center, myLocation, markers, centerRevision = 0, bottomInset = 0, lines, fitBounds, fitRevision = 0, label = '주변 역 지도' } = props;
     const key = process.env.EXPO_PUBLIC_KAKAO_MAP_JS_KEY?.trim() ?? '';
     const container = useRef<HTMLDivElement>(null);
     const controller = useRef<ReturnType<typeof createWebMap> | null>(null);
@@ -62,12 +62,12 @@ export default function KakaoMap(props: KakaoMapProps) {
     }, [key, attempt]);
 
     useEffect(() => {
-        try { controller.current?.update({ center, myLocation, markers, centerRevision }); }
+        try { controller.current?.update({ center, myLocation, markers, centerRevision, lines, fitBounds, fitRevision }); }
         catch { failCurrent.current(); }
-    }, [center, myLocation, markers, centerRevision]);
+    }, [center, myLocation, markers, centerRevision, lines, fitBounds, fitRevision]);
 
     return <View style={[styles.container, { marginBottom: bottomInset }]}>
-        <div ref={container} aria-label="주변 역 지도" style={{ position: 'absolute', inset: 0 }} />
+        <div ref={container} aria-label={label} style={{ position: 'absolute', inset: 0 }} />
         {failed && <View style={styles.error}>
             <Text style={styles.text}>지도를 불러오지 못했어요. 연결과 지도 설정을 확인해 주세요.</Text>
             <Pressable accessibilityRole="button" onPress={() => { setFailed(false); setAttempt(value => value + 1); }} style={styles.retry}>
