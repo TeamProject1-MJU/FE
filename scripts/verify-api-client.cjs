@@ -3536,7 +3536,13 @@ function roomQueryRuntime() {
 }
 /* ---------- 중간역 추천 서버 연동 (#99) ---------- */
 
-const RECO_EXTRA = { boardingTrain: { trainNo: '2123', departAt: '2026-11-20T18:40:00+09:00' }, legs: [{ lineId: 2, minutes: 21 }], source: 'TIMETABLE', arriveAt: '2026-11-20T18:58:00+09:00', slackSeconds: 120 };
+// #153: v1.13 participantTimes 추가 필드의 정상 모양이에요. 이전에는 화면에 쓰지 않고 통과만 시키던 값이라 임의 모양이었어요.
+const RECO_EXTRA = {
+    boardingTrain: { lineId: 2, lineName: '2호선', stationId: 88001, stationName: '서버 역 88001', direction: 'INNER', departureAt: '2026-11-20T18:40:00+09:00', terminal: '성수', trainCode: '2123' },
+    legs: [{ lineId: 2, lineName: '2호선', trainCode: '2123', terminal: '성수', direction: 'INNER', fromStationName: '서버 역 88001', toStationName: '서버 추천역',
+        boardAt: '2026-11-20T18:40:00+09:00', alightAt: '2026-11-20T18:58:00+09:00', stationCount: 5, walkSec: 0, transferWaitSec: 0 }],
+    source: 'TIMETABLE', arriveAt: '2026-11-20T18:58:00+09:00', slackSeconds: 120,
+};
 function recoParticipant(overrides = {}) {
     return {
         userId: ROOM_QUERY_ME, nickname: '서버 나', departureStation: { id: 88001, name: '서버 역 88001' },
@@ -4638,7 +4644,9 @@ test('추천 화면(서버): 빈 기록은 입력 보기, 계산 버튼 연타�
     assert.ok(findTextIncluding(opened[0], '기준 혼잡도'));
     assert.equal(findText(opened[1], '보통'), null);
     assert.equal(findTextIncluding(opened[1], '혼잡도'), null);
-    assert.ok(findTextIncluding(opened[1], '다익스트라 추정치예요'));
+    // #153: 계산 근거 문구는 source 로 나눠요(이 참여자는 TIMETABLE). 이전의 '다익스트라 추정치예요'는 TIMETABLE 에 틀린 말이라 바꿨어요.
+    assert.ok(findTextIncluding(opened[1], '열차 시각표 기준이에요'));
+    assert.equal(findTextIncluding(opened[1], '다익스트라'), null);
     r.unmount();
 });
 
@@ -8477,4 +8485,163 @@ test('138 시간 창: 화면에서도 옛 미답 질문이 답변을 가로채�
     await r.ask(); assert.equal(r.render().aiPending, 1);
     r.event(ai138WindowReply(11, 125_000)); assert.equal(r.render().aiPending, 0); assert.equal(r.timers.size, 0);
     r.unmount();
+});
+
+/* ---------- #153 추천 결과의 참여자별 출발·도착·여유·탑승 열차 ---------- */
+
+/** 강남(18:38, 2호선 내선 성수행) → 교대 환승(도보 3분·대기 2분) → 3호선 → 고속터미널 18:52 도착, 약속 19:00 */
+function reco153Timetable(overrides = {}) {
+    return {
+        departureAt: '2026-11-20T18:33:00+09:00', arriveAt: '2026-11-20T18:52:00+09:00', slackSeconds: 480, source: 'TIMETABLE',
+        boardingTrain: { lineId: 2, lineName: '2호선', stationId: 88001, stationName: '강남', direction: 'INNER', departureAt: '2026-11-20T18:38:00+09:00', terminal: '성수', trainCode: '2314' },
+        legs: [
+            { lineId: 2, lineName: '2호선', trainCode: '2314', terminal: '성수', direction: 'INNER', fromStationName: '강남', toStationName: '교대',
+                boardAt: '2026-11-20T18:38:00+09:00', alightAt: '2026-11-20T18:42:00+09:00', stationCount: 2, walkSec: 0, transferWaitSec: 0 },
+            { lineId: 3, lineName: '3호선', trainCode: 'S3101', terminal: '대화', direction: 'DOWN', fromStationName: '교대', toStationName: '고속터미널',
+                boardAt: '2026-11-20T18:47:00+09:00', alightAt: '2026-11-20T18:52:00+09:00', stationCount: 1, walkSec: 180, transferWaitSec: 120 },
+        ],
+        ...overrides,
+    };
+}
+const reco153Estimate = (overrides = {}) => ({ departureAt: '2026-11-20T18:38:00+09:00', arriveAt: '2026-11-20T19:00:00+09:00', slackSeconds: 0, source: 'ESTIMATE', boardingTrain: null, legs: [], ...overrides });
+const reco153Past = { departureAt: '2026-11-20T18:38:00+09:00', arriveAt: null, slackSeconds: null, source: null, boardingTrain: null, legs: [] };
+/** 내 참여자만 바꾼 실행 */
+const reco153Run = (mine, runOverrides = {}) => recoRun({ results: ['TIME', 'FARE', 'DISTANCE'].map((criterion, i) => {
+    const result = recoResult(criterion, 77001 + (i === 1 ? 1 : 0));
+    result.participantTimes[0] = { ...result.participantTimes[0], ...mine };
+    return result;
+}), ...runOverrides });
+async function reco153Screen(run) {
+    const r = recoScreen(); r.recoRespond(() => ok(run));
+    const view = await pumpScreen(r);
+    const box = findElement(view, element => element.props?.accessibilityLabel === '내 이동');
+    const rows = []; findElement(view, element => { if (typeof element.type === 'function' && element.type.name === 'ParticipantRow') rows.push(element); return false; });
+    const mineRow = rows.find(row => row.props.mine);
+    const detail = mineRow ? findAll125(mineRow.type({ ...mineRow.props, opened: true }), element => element.type === 'Text').map(textOf) : [];
+    return { r, view, box: box ? findAll125(box, element => element.type === 'Text').map(textOf) : null, detail };
+}
+
+test('153 문구 함수: 여유(양수·0·음수·null), 탑승 열차, 열차 구간, 환승 도보·대기(0 생략), 계산 근거', () => {
+    const trip = createRuntime().load('src/utils/recommendation-trip.ts');
+    for (const [sec, text] of [[480, '약속 8분 전 도착'], [539, '약속 8분 전 도착'], [30, '약속 1분 전 도착'], [0, '약속 시각에 딱 맞춰 도착'],
+        [-60, '약속보다 1분 늦게 도착'], [-61, '약속보다 2분 늦게 도착'], [-20, '약속보다 1분 늦게 도착'], [null, null]]) {
+        assert.equal(trip.formatSlack(sec), text, String(sec));
+    }
+    const t = reco153Timetable();
+    assert.equal(trip.formatBoardingTrain(t.boardingTrain), '강남역 18:38 · 2호선 성수행(내선)');
+    assert.equal(trip.formatBoardingTrain(t.boardingTrain, true), '강남역 18:38 · 2호선 성수행(내선) · 열차 2314');
+    assert.equal(trip.formatBoardingTrain({ ...t.boardingTrain, terminal: null, direction: null }), '강남역 18:38 · 2호선');
+    assert.equal(trip.formatLeg(t.legs[0]), '강남역 18:38 → 교대역 18:42 (2개 역)');
+    assert.equal(trip.formatLegTrain(t.legs[1]), '3호선 대화행(하행) · 열차 S3101');
+    assert.equal(trip.formatLegTransfer(t.legs[1]), '환승 도보 3분 · 열차 대기 2분');
+    assert.equal(trip.formatLegTransfer({ ...t.legs[1], walkSec: 0 }), '열차 대기 2분');
+    assert.equal(trip.formatLegTransfer({ ...t.legs[1], transferWaitSec: 0 }), '환승 도보 3분');
+    assert.equal(trip.formatLegTransfer({ ...t.legs[1], walkSec: 20, transferWaitSec: 0 }), '환승 도보 1분'); // #146 최소 1분
+    assert.equal(trip.formatLegTransfer(t.legs[0]), null);
+    assert.equal(trip.sourceNote('TIMETABLE'), '열차 시각표 기준이에요');
+    assert.equal(trip.sourceNote('ESTIMATE'), '고정 소요시간으로 계산한 예상값이에요');
+    assert.equal(trip.sourceNote(null), '이전 계산 결과라 열차 정보가 없어요');
+    assert.equal(trip.stalePlanText(['APPOINTMENT_CHANGED']), '약속·멤버가 바뀌기 전 계획이에요 (약속 시각이 바뀌었어요)');
+    assert.equal(trip.staleReasonText(['APPOINTMENT_CHANGED', 'MEMBERS_CHANGED']), '약속 시각이 바뀌었어요 · 참여자나 출발역이 바뀌었어요');
+});
+
+test('153 출발·도착: 도착 없으면 출발만, 자정을 넘으면 "다음 날", 약속과 다른 날 출발이면 날짜', () => {
+    const trip = createRuntime().load('src/utils/recommendation-trip.ts');
+    assert.equal(trip.formatTripLine({ departureAt: '2026-11-20T18:33:00+09:00', arriveAt: '2026-11-20T18:52:00+09:00' }, '2026-11-20T19:00:00+09:00'), '18:33 출발 → 18:52 도착');
+    assert.equal(trip.formatTripLine({ departureAt: '2026-11-20T18:38:00+09:00', arriveAt: null }, '2026-11-20T19:00:00+09:00'), '18:38 출발');
+    // 23:50 출발 → 00:20 도착, 약속 00:30(다음 날) → 출발 날짜와 "다음 날" 도착
+    assert.equal(trip.formatTripLine({ departureAt: '2026-11-20T23:50:00+09:00', arriveAt: '2026-11-21T00:20:00+09:00' }, '2026-11-21T00:30:00+09:00'), '11.20 23:50 출발 → 다음 날 00:20 도착');
+    // 약속이 없으면 날짜를 붙이지 않아요. UTC 오프셋으로 와도 서울 기준이에요.
+    assert.equal(trip.formatTripLine({ departureAt: '2026-11-20T14:50:00Z', arriveAt: '2026-11-20T15:20:00Z' }, null), '23:50 출발 → 다음 날 00:20 도착');
+    assert.equal(trip.formatTripLine({ departureAt: 'bad', arriveAt: null }, null), '');
+});
+
+test('153 시간대: 기기 시간대를 바꿔도(America/New_York·UTC·Asia/Seoul) 같은 서울 시각·날짜', () => {
+    const { execFileSync } = require('node:child_process');
+    const code = `
+        const ts = require('typescript'); const fs = require('fs');
+        const out = ts.transpileModule(fs.readFileSync('src/utils/seoul-time.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
+        const m = { exports: {} }; new Function('module', 'exports', out)(m, m.exports);
+        const s = m.exports;
+        console.log(JSON.stringify({
+            local: new Date('2026-11-20T18:38:00+09:00').getHours(),
+            time: s.formatSeoulTime('2026-11-20T18:38:00+09:00'), day: s.formatSeoulMonthDay('2026-11-20T23:50:00+09:00'),
+            hour: s.seoulHour('2026-11-20T08:10:00+09:00'), trip: s.formatTripTimes('2026-11-20T23:50:00+09:00', '2026-11-21T00:20:00+09:00', '2026-11-21T00:30:00+09:00'),
+        }));`;
+    const results = ['America/New_York', 'UTC', 'Asia/Seoul'].map(TZ => JSON.parse(execFileSync(process.execPath, ['-e', code], { cwd: root, env: { ...process.env, TZ } }).toString()));
+    assert.notEqual(results[0].local, results[2].local); // 시간대 흉내가 실제로 기기 시각을 바꿨어요
+    for (const result of results) {
+        assert.deepEqual({ ...result, local: undefined }, { local: undefined, time: '18:38', day: '11.20', hour: 8, trip: { departure: '11.20 23:50', arrival: '다음 날 00:20', nextDay: true } });
+    }
+});
+
+test('153 파서: TIMETABLE·ESTIMATE·이전 실행·일부 잘못된 모양 모두 결과 전체는 표시, 잘못된 필드만 null·[]', async () => {
+    const parse = async mine => {
+        const r = recoRuntime(); r.recoRespond(async () => ok(reco153Run(mine)));
+        const run = plain(await r.load('src/services/recommendation.ts').fetchLatestRecommendation(ROOM_QUERY_ID));
+        return run.results[0].participantTimes[0];
+    };
+    const timetable = await parse(reco153Timetable());
+    assert.deepEqual(timetable.boardingTrain, reco153Timetable().boardingTrain); assert.deepEqual(timetable.legs, reco153Timetable().legs);
+    assert.deepEqual([timetable.source, timetable.arriveAt, timetable.slackSeconds], ['TIMETABLE', '2026-11-20T18:52:00+09:00', 480]);
+    const estimate = await parse({ ...reco153Estimate(), boardingTrain: reco153Timetable().boardingTrain, legs: reco153Timetable().legs });
+    assert.deepEqual([estimate.source, estimate.boardingTrain, estimate.legs, estimate.slackSeconds], ['ESTIMATE', null, [], 0]); // ESTIMATE 는 열차 정보 없음(명세)
+    const past = await parse(reco153Past);
+    assert.deepEqual([past.source, past.arriveAt, past.slackSeconds, past.boardingTrain, past.legs], [null, null, null, null, []]);
+    const missing = await parse({ source: undefined, arriveAt: undefined, slackSeconds: undefined, boardingTrain: undefined, legs: undefined });
+    assert.deepEqual([missing.source, missing.arriveAt, missing.slackSeconds, missing.boardingTrain, missing.legs], [null, null, null, null, []]);
+    // 일부 모양이 틀려도 결과는 그대로, 그 필드만 낮춰요.
+    const broken = await parse(reco153Timetable({ arriveAt: 'not-a-date', slackSeconds: '480', source: 'TIMETABLE',
+        boardingTrain: { lineName: '2호선', departureAt: '2026-11-20T18:38:00+09:00' }, legs: [reco153Timetable().legs[0], { ...reco153Timetable().legs[1], walkSec: -5 }] }));
+    assert.deepEqual([broken.arriveAt, broken.slackSeconds, broken.boardingTrain, broken.legs], [null, null, null, []]);
+    assert.equal(broken.travelMinutes, recoParticipant().travelMinutes); assert.equal(broken.nickname, '서버 나');
+    const oddSource = await parse(reco153Timetable({ source: 'FUTURE' }));
+    assert.deepEqual([oddSource.source, oddSource.boardingTrain, oddSource.legs], [null, null, []]);
+    const optional = await parse(reco153Timetable({ boardingTrain: { ...reco153Timetable().boardingTrain, direction: 'SIDEWAYS', terminal: 7, trainCode: null, lineId: 'x' } }));
+    assert.deepEqual([optional.boardingTrain.direction, optional.boardingTrain.terminal, optional.boardingTrain.trainCode, optional.boardingTrain.lineId], [null, null, null, null]);
+});
+
+test('153 화면 TIMETABLE: 내 출발→도착·여유·탑승 열차(번호는 상세만)·legs 승하차·환승 도보·대기', async () => {
+    const { r, box, detail } = await reco153Screen(reco153Run(reco153Timetable()));
+    assert.deepEqual(box, ['내 이동', '18:33 출발 → 18:52 도착', '약속 8분 전 도착', '강남역 18:38 · 2호선 성수행(내선)', '열차 시각표 기준이에요']);
+    assert.ok(!box.some(text => text.includes('2314')));
+    for (const text of ['18:33 출발 → 18:52 도착 · 약속 8분 전 도착', '탑승 강남역 18:38 · 2호선 성수행(내선) · 열차 2314', '강남역 18:38 → 교대역 18:42 (2개 역)',
+        '2호선 성수행(내선) · 열차 2314', '환승 도보 3분 · 열차 대기 2분', '교대역 18:47 → 고속터미널역 18:52 (1개 역)', '3호선 대화행(하행) · 열차 S3101']) {
+        assert.ok(detail.includes(text), text);
+    }
+    assert.ok(detail.some(text => text.includes('열차 시각표 기준이에요')));
+    assert.ok(!detail.some(text => text.includes('다익스트라')));
+    r.unmount();
+    // 여유 0 은 "딱 맞춰", 음수는 늦게 도착
+    const exact = await reco153Screen(reco153Run(reco153Timetable({ slackSeconds: 0 })));
+    assert.ok(exact.box.includes('약속 시각에 딱 맞춰 도착')); exact.r.unmount();
+    const late = await reco153Screen(reco153Run(reco153Timetable({ slackSeconds: -300 })));
+    assert.ok(late.box.includes('약속보다 5분 늦게 도착')); late.r.unmount();
+});
+
+test('153 화면 ESTIMATE·이전 실행: 오류 없이 탑승 열차 없음, 도착·여유를 만들지 않음, 문구 구분', async () => {
+    const estimate = await reco153Screen(reco153Run(reco153Estimate()));
+    assert.deepEqual(estimate.box, ['내 이동', '18:38 출발 → 19:00 도착', '약속 시각에 딱 맞춰 도착', '고정 소요시간으로 계산한 예상값이에요']);
+    assert.ok(estimate.detail.some(text => text.includes('서버 역 88001 → 서버 추천역'))); // legs 가 없으면 기존 segments
+    estimate.r.unmount();
+    const past = await reco153Screen(reco153Run(reco153Past));
+    assert.deepEqual(past.box, ['내 이동', '18:38 출발', '이전 계산 결과라 열차 정보가 없어요']);
+    assert.ok(!past.box.some(text => /도착|0분/.test(text)));
+    assert.ok(past.detail.includes('18:38 출발'), JSON.stringify(past.detail));
+    assert.ok(findElement(past.view, element => element.props?.label === '평균 예상 시간')); // "예상" 라벨 유지
+    past.r.unmount();
+    // 약속 시각이 없으면(slack null) 여유를 표시하지 않아요.
+    const noAppointment = await reco153Screen(reco153Run(reco153Timetable({ slackSeconds: null })));
+    assert.ok(!noAppointment.box.some(text => text.includes('약속') && text.includes('도착') && !text.includes('출발')));
+    noAppointment.r.unmount();
+});
+
+test('153 stale 이면 출발·도착 근처에 바뀌기 전 계획 안내(배너와 같은 이유 문구)', async () => {
+    const { r, box, detail, view } = await reco153Screen(reco153Run(reco153Timetable(), { isStale: true, staleReasons: ['APPOINTMENT_CHANGED'] }));
+    assert.ok(box.includes('약속·멤버가 바뀌기 전 계획이에요 (약속 시각이 바뀌었어요)'));
+    assert.ok(detail.includes('약속·멤버가 바뀌기 전 계획이에요 (약속 시각이 바뀌었어요)'));
+    assert.ok(findText(view, '약속 시각이 바뀌었어요')); // 기존 배너도 그대로
+    r.unmount();
+    const fresh = await reco153Screen(reco153Run(reco153Timetable()));
+    assert.ok(!fresh.box.some(text => text.includes('바뀌기 전 계획'))); fresh.r.unmount();
 });

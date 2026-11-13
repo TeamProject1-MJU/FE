@@ -28,11 +28,15 @@ import { ApiError, isAuthError } from '@/services/api/errors';
 import { fetchStation } from '@/services/station';
 import { assertRoomCacheScope, getRoomCacheScope, subscribeRoomCacheReset } from '@/services/room-cache';
 import { subscribeRoomMockChanges } from '@/stores/room-mock-events';
+import { seoulHour } from '@/utils/seoul-time';
 import {
     RecommendationError,
     type AppliedConstraints,
     type NearbyAlternative,
+    type BoardingTrain,
     type ParticipantTime,
+    type TrainDirection,
+    type TrainLeg,
     type RecommendationCriterion,
     type RecommendationErrorCode,
     type RecommendationFilter,
@@ -251,8 +255,8 @@ function estimateTrip(member: RoomMember, from: Station, to: Station, appointmen
     const base = appointmentAt ? new Date(appointmentAt).getTime() : Date.now();
     const departureAt = new Date(base - travelMinutes * 60_000).toISOString();
 
-    // 혼잡도 mock: 거리와 출발 시각으로 단순 분배
-    const hour = new Date(departureAt).getHours();
+    // 혼잡도 mock: 거리와 출발 시각으로 단순 분배. 시는 기기 시간대가 아니라 서울 기준이에요(#153).
+    const hour = seoulHour(departureAt) ?? 0;
     const peak = (hour >= 7 && hour <= 9) || (hour >= 17 && hour <= 19);
     const pct = Math.round((peak ? 95 : 55) + (distanceM / KM) * 2.2);
     const level = pct < 35 ? 'COMFORTABLE' : pct < 50 ? 'RELAXED' : pct < 100 ? 'NORMAL' : pct < 150 ? 'CROWDED' : 'VERY_CROWDED';
@@ -278,6 +282,12 @@ function estimateTrip(member: RoomMember, from: Station, to: Station, appointmen
         departureAt,
         congestion: { pct, level, levelLabel },
         segments,
+        // mock 은 고정 소요시간 추정이라 명세의 ESTIMATE 모양이에요: 도착 = 출발 + 이동 시간, 열차 정보 없음(#153).
+        arriveAt: new Date(Date.parse(departureAt) + travelMinutes * 60_000).toISOString(),
+        slackSeconds: appointmentAt ? Math.round((Date.parse(appointmentAt) - (Date.parse(departureAt) + travelMinutes * 60_000)) / 1000) : null,
+        source: 'ESTIMATE',
+        boardingTrain: null,
+        legs: [],
     };
 }
 
@@ -520,7 +530,56 @@ function parseSegment(value: unknown) {
     return { ...value } as ParticipantTime['segments'][number];
 }
 
-/** boardingTrain·legs·source·arriveAt·slackSeconds 같은 추가 값은 화면에 쓰지 않고 그대로 통과시켜요. */
+const TRAIN_DIRECTIONS: readonly TrainDirection[] = ['UP', 'DOWN', 'INNER', 'OUTER', 'LOOP'];
+const optionalNumber = (value: unknown) => (isNumber(value) ? value : null);
+const optionalString = (value: unknown) => (typeof value === 'string' && value.trim() ? value : null);
+const optionalDirection = (value: unknown) => (TRAIN_DIRECTIONS.includes(value as TrainDirection) ? value as TrainDirection : null);
+const seconds = (value: unknown) => (isNumber(value) && value >= 0 ? value : null);
+
+/** 명세 v1.13 boardingTrain. 표시에 꼭 필요한 값이 틀리면 null 로 낮춰요(결과 전체는 그대로). */
+function parseBoardingTrain(value: unknown): BoardingTrain | null {
+    if (!isRecord(value) || typeof value.lineName !== 'string' || typeof value.stationName !== 'string' || !isDate(value.departureAt)) return null;
+    return {
+        lineId: optionalNumber(value.lineId), lineName: value.lineName, stationId: optionalNumber(value.stationId), stationName: value.stationName,
+        direction: optionalDirection(value.direction), departureAt: value.departureAt, terminal: optionalString(value.terminal), trainCode: optionalString(value.trainCode),
+    };
+}
+
+/** 명세 v1.13 legs[]. 하나라도 모양이 틀리면 일부만 보여주면 오해할 수 있어 [] 로 낮춰요. */
+function parseLegs(value: unknown): TrainLeg[] {
+    if (!Array.isArray(value)) return [];
+    const legs: TrainLeg[] = [];
+    for (const raw of value) {
+        const walkSec = isRecord(raw) ? seconds(raw.walkSec) : null;
+        const transferWaitSec = isRecord(raw) ? seconds(raw.transferWaitSec) : null;
+        if (!isRecord(raw) || typeof raw.lineName !== 'string' || typeof raw.fromStationName !== 'string' || typeof raw.toStationName !== 'string'
+            || !isDate(raw.boardAt) || !isDate(raw.alightAt) || !isNumber(raw.stationCount) || raw.stationCount < 0
+            || walkSec === null || transferWaitSec === null) return [];
+        legs.push({
+            lineId: optionalNumber(raw.lineId), lineName: raw.lineName, trainCode: optionalString(raw.trainCode), terminal: optionalString(raw.terminal),
+            direction: optionalDirection(raw.direction), fromStationName: raw.fromStationName, toStationName: raw.toStationName,
+            boardAt: raw.boardAt, alightAt: raw.alightAt, stationCount: raw.stationCount, walkSec, transferWaitSec,
+        });
+    }
+    return legs;
+}
+
+/**
+ * 명세 v1.13 추가 필드(arriveAt·slackSeconds·source·boardingTrain·legs, #153).
+ * 추가만 된 값이라 없거나 모양이 틀리면 그 필드만 null·[] 로 낮추고 결과 전체를 실패시키지 않아요.
+ * ESTIMATE·이전 실행(source null)은 명세대로 boardingTrain null, legs [] 예요.
+ */
+function parseTimetableFields(value: Record<string, unknown>) {
+    const source = value.source === 'TIMETABLE' || value.source === 'ESTIMATE' ? value.source : null;
+    return {
+        arriveAt: isDate(value.arriveAt) ? value.arriveAt : null,
+        slackSeconds: isNumber(value.slackSeconds) ? value.slackSeconds : null,
+        source,
+        boardingTrain: source === 'TIMETABLE' ? parseBoardingTrain(value.boardingTrain) : null,
+        legs: source === 'TIMETABLE' ? parseLegs(value.legs) : [],
+    } satisfies Pick<ParticipantTime, 'arriveAt' | 'slackSeconds' | 'source' | 'boardingTrain' | 'legs'>;
+}
+
 function parseParticipant(value: unknown): ParticipantTime {
     if (!isRecord(value) || typeof value.userId !== 'string' || typeof value.nickname !== 'string'
         || !isRecord(value.departureStation) || !isNumber(value.departureStation.id) || typeof value.departureStation.name !== 'string'
@@ -546,6 +605,7 @@ function parseParticipant(value: unknown): ParticipantTime {
         departureAt: value.departureAt,
         congestion,
         segments,
+        ...parseTimetableFields(value),
     };
 }
 

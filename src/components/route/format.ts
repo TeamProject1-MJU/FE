@@ -19,10 +19,12 @@ export function formatWait(step: RouteStep, transfer: boolean) {
     return `${transfer ? '환승 대기' : '승차 대기'} ${step.waitKind === 'ESTIMATED' ? '약 ' : ''}${Math.round(step.waitSec / 60)}분`;
 }
 
+/** 방면 코드 표기 (경로 화면·추천 탑승 열차가 같이 써요) */
+export const DIRECTION_LABELS = { INNER: '내선', OUTER: '외선', UP: '상행', DOWN: '하행', LOOP: '순환' } as const;
+
 /** 방면 코드를 우선 표시하고 제공된 방면 이름을 덧붙입니다. */
 export function formatDirection(step: RouteStep) {
-    const labels = { INNER: '내선', OUTER: '외선', UP: '상행', DOWN: '하행', LOOP: '순환' };
-    return [step.directionCode ? labels[step.directionCode] : '', step.direction].filter(Boolean).join(' · ');
+    return [step.directionCode ? DIRECTION_LABELS[step.directionCode] : '', step.direction].filter(Boolean).join(' · ');
 }
 
 /** 남은 시간이 이 값(초) 미만이면 "곧 도착"으로 표시해요. */
