@@ -64,8 +64,8 @@ type MockMode = 'error' | 'busy' | 'load-error';
  *   /rooms/room-4/edit?mock=load-error  → 첫 조회 실패, 다시 시도하면 성공
  *   /rooms/room-2/edit                  → 내가 MEMBER 인 방 → 권한 없음 화면
  *
- * ROOM_UPDATED 실시간 수신은 #117 에서 구현했어요(방 상세·추천 화면이 방 정보만 바꿔요, hooks/use-room-events.ts).
- * TODO: ROOM_UPDATED 를 받았을 때 8.2 재조회로 isStale 갱신하는 처리는 아직 없어요 (이슈 미정)
+ * ROOM_UPDATED 실시간 수신으로 방 상세·추천 화면의 방 정보를 바꿔요(#117, hooks/use-room-events.ts).
+ * 추천 화면은 8.2를 다시 조회해 서버의 isStale·staleReasons도 갱신해요(#136).
  */
 export default function RoomEditScreen() {
     const insets = useSafeAreaInsets();

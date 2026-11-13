@@ -459,7 +459,7 @@ test('#117 이벤트별 갱신 대상과 추천 안내 판단', () => {
     const expected = {
         MEMBER_JOINED: ['detail', 'recommendation'], MEMBER_LEFT: ['detail', 'proposals', 'recommendation'],
         OWNER_CHANGED: ['detail'], DEPARTURE_UPDATED: ['detail', 'recommendation'],
-        ROOM_UPDATED: [], SELECTED_STATION_CHANGED: [], MESSAGE_CREATED: [],
+        ROOM_UPDATED: ['recommendation'], SELECTED_STATION_CHANGED: [], MESSAGE_CREATED: [],
         RECOMMENDATION_CREATED: ['recommendation'], STATION_PROPOSAL_CREATED: ['proposals'],
         STATION_PROPOSAL_DELETED: ['proposals'], STATION_PROPOSAL_VOTE_CHANGED: ['proposals'],
     };
@@ -7379,4 +7379,111 @@ test('148 실제 사용자 서비스의 로그아웃은 지난 약속 안내가 
         r.load('src/stores/auth-store.ts').signIn({ userId: 'next-user-148', nickname: '다음 사용자' });
         assert.equal(store.getSelectedRoute(), null); assert.equal(calls, 0); r.unmount();
     }
+});
+
+/* ---------- 약속 시각 변경 후 추천 최신 상태 갱신 (#136) ---------- */
+async function roomUpdated136(screen = 'src/app/rooms/[roomId]/recommendations.tsx', missing = false) {
+    const params = { roomId: ROOM_QUERY_ID };
+    const r = roomQueryScreen(screen, params); const calls = []; let listener;
+    const events = r.load('src/services/room-events.ts'); const mergeRoomUpdated = events.mergeRoomUpdated;
+    events.mergeRoomUpdated = (...args) => { const next = mergeRoomUpdated(...args); r.merged136 = next; return next; };
+    const hooks = r.load('src/hooks/use-room-events.ts'); const useRoomEvents = hooks.useRoomEvents;
+    hooks.useRoomEvents = (roomId, callbacks) => useRoomEvents(roomId, { ...callbacks, receive: event => {
+        const targets = callbacks.receive?.(event); r.targets136 = targets; return targets;
+    } });
+    r.load('src/services/realtime.ts').subscribeRoomEvents = (_id, receive) => { listener ??= receive; return () => {}; };
+    r.latest136 = recoRun({ results: [] });
+    r.context.fetch = async (url, options = {}) => {
+        calls.push({ url, method: options.method ?? 'GET' });
+        if (url.includes('/recommendations')) return r.pending136 ? r.pending136() : ok(r.latest136);
+        if (missing) return new Promise(() => {});
+        return ok(url.endsWith('/invite-code') ? { roomCode: 'ABC123' }
+            : url.includes('station-proposals') ? { items: [], maxProposals: 9, selectedStation: null }
+                : { ...roomQueryDetail(), id: params.roomId });
+    };
+    for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+    calls.length = 0;
+    return Object.assign(r, { calls136: calls, params136: params,
+        emit136: (payload = { ...roomQuerySummary(), appointmentAt: '2026-11-15T10:00:00Z' }, type = 'ROOM_UPDATED') =>
+            listener({ type, roomId: params.roomId, payload, at: '2026-11-13T10:00:00Z' }) });
+}
+
+test('#136 ROOM_UPDATED는 추천만 예약하고 SELECTED_STATION_CHANGED는 그대로예요', () => {
+    const { roomEventTargets } = createRuntime().load('src/services/room-events.ts');
+    assert.deepEqual(plain(roomEventTargets('ROOM_UPDATED')), ['recommendation']);
+    assert.deepEqual(plain(roomEventTargets('SELECTED_STATION_CHANGED')), []);
+});
+
+test('#136 연속 ROOM_UPDATED는 8.2 GET 한 번으로 합치고 서버 stale 사유를 표시해요', async () => {
+    const r = await roomUpdated136();
+    r.latest136 = recoRun({ results: [], isStale: true, staleReasons: ['APPOINTMENT_CHANGED'] });
+    r.emit136(); r.advance(100); r.emit136(); r.advance(100); r.emit136();
+    r.advance(99); await settle(); assert.equal(r.calls136.length, 0);
+    r.advance(1); await settle(); const view = r.render();
+    assert.deepEqual(r.calls136.map(call => [call.method, call.url.split('/api/v1')[1]]),
+        [['GET', `/rooms/${ROOM_QUERY_ID}/recommendations/latest`]]);
+    assert.ok(findText(view, '약속 시각이 바뀌었어요'));
+    assert.equal(findText(view, '참여자나 출발역이 바뀌었어요'), null);
+    assert.equal(r.merged136.appointmentAt, '2026-11-15T10:00:00Z');
+    await settle(); await settle();
+    // 약속이 바뀌어도 프론트에서 stale을 계산하지 않아요.
+    r.latest136 = recoRun({ results: [], isStale: false, staleReasons: [] });
+    r.emit136(); r.advance(300); await settle();
+    assert.equal(findText(r.render(), '약속 시각이 바뀌었어요'), null);
+    assert.equal(r.calls136.filter(call => call.method === 'POST').length, 0); r.unmount();
+});
+
+test('#136 ROOM_UPDATED 병합 실패·상세 미로딩 경로도 상세와 최신 추천을 조회해요', async () => {
+    for (const missing of [false, true]) {
+        const r = await roomUpdated136('src/app/rooms/[roomId]/recommendations.tsx', missing);
+        // receive 반환값과 실제 refresh 경로를 함께 검사해요.
+        const calls = [];
+        r.context.fetch = async (url, options = {}) => {
+            calls.push([url, options.method ?? 'GET']);
+            return ok(url.includes('/recommendations') ? recoRun({ results: [] }) : { ...roomQueryDetail(), id: r.params136.roomId });
+        };
+        r.emit136({}); r.advance(300); await settle();
+        assert.equal(calls.filter(([url]) => url.endsWith('/recommendations/latest')).length, 1);
+        assert.deepEqual(plain(r.targets136), ['detail', 'recommendation']);
+        // 상세 미로딩이면 기존 진행 중인 상세 조회를 공유해요.
+        assert.equal(calls.filter(([url]) => url.endsWith(`/rooms/${r.params136.roomId}`)).length, missing ? 0 : 1);
+        assert.ok(calls.every(([, method]) => method === 'GET')); r.unmount();
+    }
+});
+
+test('#136 로그아웃·계정 변경·방 이동 뒤 늦은 ROOM_UPDATED 추천 응답을 무시해요', async () => {
+    for (const change of ['logout', 'account', 'room']) {
+        const r = await roomUpdated136(); let finish;
+        r.pending136 = () => new Promise(resolve => { finish = resolve; });
+        r.emit136(); r.advance(300); await settle(); assert.ok(finish);
+        if (change === 'logout') r.load('src/stores/auth-store.ts').signOut();
+        else if (change === 'account') r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_OTHER, nickname: '다음 계정' });
+        else r.params136.roomId = ROOM_QUERY_ID2;
+        r.pending136 = null; r.render(); await settle(); await settle(); r.render();
+        finish(ok(recoRun({ results: [], isStale: true, staleReasons: ['APPOINTMENT_CHANGED'] })));
+        await settle(); assert.equal(findText(r.render(), '약속 시각이 바뀌었어요'), null);
+        assert.equal(r.calls136.filter(call => call.method === 'POST').length, 0); r.unmount();
+    }
+});
+
+test('#136 최신 요청 이후 도착한 이전 ROOM_UPDATED 추천 응답은 무시해요', async () => {
+    const r = await roomUpdated136(); let finish;
+    r.pending136 = () => new Promise(resolve => { finish = resolve; });
+    r.emit136(); r.advance(300); await settle();
+    r.pending136 = null;
+    r.emit136({ runId: 'new-run-136' }, 'RECOMMENDATION_CREATED');
+    const view = r.render();
+    const refresh = findElement(view, node => node.type === 'Pressable' && findText(node.props.children, '보기'));
+    assert.ok(refresh); refresh.props.onPress(); await settle();
+    finish(ok(recoRun({ results: [], isStale: true, staleReasons: ['APPOINTMENT_CHANGED'] })));
+    await settle(); assert.equal(findText(r.render(), '약속 시각이 바뀌었어요'), null); r.unmount();
+});
+
+test('#136 방 상세 ROOM_UPDATED는 방 정보만 반영하고 추천 API를 호출하지 않아요', async () => {
+    const r = await roomUpdated136('src/app/rooms/[roomId].tsx');
+    r.emit136(); r.emit136(); r.advance(300); await settle(); r.render();
+    assert.equal(r.load('src/services/room-cache.ts').readCachedRoomDetail(ROOM_QUERY_ID).appointmentAt, '2026-11-15T10:00:00Z');
+    assert.equal(r.calls136.length, 0);
+    r.emit136({}); r.advance(300); await settle();
+    assert.equal(r.calls136.filter(call => call.url.includes('/recommendations')).length, 0); r.unmount();
 });
