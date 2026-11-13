@@ -7143,3 +7143,179 @@ test('147 INTERNAL 다음 KAKAO를 검색·선택하면 이전 자체 계산 안
     assert.equal(findText(guide.render(), '자체 계산한 경로예요.'), null);
     search.unmount(); guide.unmount();
 });
+
+/* ---------- #146 환승 단계를 도보가 아니라 환승 소요로 표시 ---------- */
+
+/** 도보(90초) → 2호선 → 환승(660초: 도보 1분 + 대기 10분) → 3호선 → 환승(20초) → 7호선 → 도보(200초) */
+function route146({ walkingMinutes = 1, transferCount = 2 } = {}) {
+    const subway = (id, name, stops) => ({ type: 'SUBWAY', guidance: `${name} 탑승`, durationSec: 600, distanceM: 5000,
+        line: { id, name, color: '#00a84d' }, direction: null, directionCode: 'UP',
+        stops: stops.map((stopName, order) => ({ id: id * 100 + order, name: stopName, order })), path: null, stations: [] });
+    const walk = (guidance, durationSec) => ({ type: 'WALKING', guidance, durationSec, distanceM: 80, line: null, direction: null, directionCode: null, stops: [], path: null, stations: [] });
+    return {
+        routeId: 'route-146', routeType: null,
+        summary: { noService: false, serviceNotice: null, arrivesAfterAppointment: false, totalTimeSec: 2770, arrivalAt: '2026-11-14T09:00:00+09:00',
+            fare: 1500, fareSource: 'KAKAO', transferCount, walkingMinutes, congestion: { supported: false, kind: null, pct: null, level: null, levelLabel: null } },
+        steps: [
+            walk('출발역까지 걷기', 90),
+            subway(2, '2호선', ['강남', '교대']),
+            walk('서버 환승 안내', 660),
+            subway(3, '3호선', ['교대', '고속터미널']),
+            walk('고속터미널역 7호선 승강장으로 환승', 20),
+            subway(7, '7호선', ['고속터미널', '이수']),
+            walk('도착지까지 걷기', 200),
+        ],
+    };
+}
+/** 도보 줄은 끝에 " · 80m"(거리)가 붙어서 앞부분으로 비교해요. */
+function texts146(node) {
+    return findAll125(node, element => element.type === 'Text').map(textOf);
+}
+function timeline146(route) {
+    const r = createRuntime(serverEnv, { ...require('react'), useState: initial => [initial, () => {}] });
+    const Timeline = r.load('src/components/route/RouteTimeline.tsx').default;
+    return texts146(Timeline({ route, onSignCheck() {} }));
+}
+function card146(route, expanded) {
+    const r = createRuntime(serverEnv);
+    return texts146(r.load('src/components/route/RouteCard.tsx').default({ route, expanded, onPress() {}, onStart() {} }));
+}
+
+test('146 환승 판별과 분 계산: 두 SUBWAY 사이 WALKING 만 환승, 최소 1분, 안내 끝 "환승"은 "이동"으로', () => {
+    const format = createRuntime().load('src/components/route/format.ts');
+    const steps = route146().steps;
+    assert.deepEqual(steps.map((_, index) => format.isTransferStep(steps, index)), [false, false, true, false, true, false, false]);
+    assert.equal(format.isTransferStep(steps, 99), false);
+    for (const [sec, minutes] of [[660, 11], [20, 1], [29, 1], [0, 1], [89, 1], [90, 2], [NaN, 1]]) assert.equal(format.stepMinutes(sec), minutes, String(sec));
+    assert.equal(format.formatTransferDuration(steps[2]), '환승 소요 11분');
+    assert.deepEqual(steps.map((step, index) => step.type === 'WALKING' ? format.formatWalkingStep(steps, index) : null).filter(Boolean), [
+        '출발역까지 걷기 · 도보 2분', '서버 환승 안내 · 환승 소요 11분', '고속터미널역 7호선 승강장으로 이동 · 환승 소요 1분', '도착지까지 걷기 · 도보 3분']);
+    // 안내 중간의 "환승"과 단독 "환승"
+    const only = [...steps]; only[2] = { ...steps[2], guidance: '환승' };
+    assert.equal(format.formatWalkingStep(only, 2), '이동 · 환승 소요 11분');
+    only[2] = { ...steps[2], guidance: '환승통로로 이동' };
+    assert.equal(format.formatWalkingStep(only, 2), '환승통로로 이동 · 환승 소요 11분');
+    // 지하철 하나 앞뒤의 도보는 환승이 아니에요.
+    const single = [steps[0], steps[1], steps[6]];
+    assert.deepEqual(single.map((_, index) => format.isTransferStep(single, index)), [false, false, false]);
+});
+
+test('146 도보 1분 + 대기 10분 환승: 어디에도 "도보 11분" 없이 "환승 소요 11분", 요약은 서버 값 "도보 1분"', async () => {
+    const route = route146();
+    const detail = timeline146(route); const expanded = card146(route, true); const collapsed = card146(route, false);
+    for (const texts of [detail, expanded, collapsed]) assert.ok(!texts.some(text => /도보 11분|환승 도보/.test(text)), texts.join(' / '));
+    assert.ok(detail.some(text => text.startsWith('서버 환승 안내 · 환승 소요 11분')));
+    assert.ok(expanded.some(text => text.trim() === '환승 소요 11분'));
+    assert.ok(expanded.some(text => text.includes('환승 2회 · 도보 1분')));
+    // 경로 안내 화면 요약도 서버 값 그대로예요.
+    const r = guide129({ route }); const view = r.render();
+    assert.ok(findElement(view, element => element.type === 'Text' && textOf(element).includes('환승 2회 · 도보 1분')));
+    assert.ok(!textOf(view).includes('도보 11분'));
+    assert.ok(findElement(view, element => element.type === r.Timeline && element.props.route === route));
+});
+
+test('146 환승 여러 번: 펼친 카드와 경로 상세가 환승마다 같은 숫자, 첫·마지막 도보는 "도보", 요약과 모순 없음', () => {
+    for (const walkingMinutes of [1, 5]) {
+        const route = route146({ walkingMinutes });
+        const format = createRuntime().load('src/components/route/format.ts');
+        const detail = timeline146(route); const expanded = card146(route, true);
+        const detailTransfers = detail.filter(text => text.includes('환승 소요')).map(text => /환승 소요 (\d+)분/.exec(text)[1]);
+        const cardTransfers = expanded.filter(text => text.includes('환승 소요')).map(text => /환승 소요 (\d+)분/.exec(text)[1]);
+        assert.deepEqual(detailTransfers, ['11', '1']); assert.deepEqual(cardTransfers, detailTransfers);
+        assert.deepEqual(cardTransfers, route.steps.filter((_, index) => format.isTransferStep(route.steps, index)).map(step => String(format.stepMinutes(step.durationSec))));
+        // 첫 지하철 전 도보는 "도보"(이전에는 펼친 카드가 "환승 도보"로 잘못 표시했어요), 마지막 도보도 "도보"
+        assert.ok(expanded.some(text => text.trim() === '도보 2분'));
+        assert.ok(detail.some(text => text.startsWith('출발역까지 걷기 · 도보 2분'))); assert.ok(detail.some(text => text.startsWith('도착지까지 걷기 · 도보 3분')));
+        // 요약 도보는 서버 값 그대로, 환승 횟수는 환승 단계 수와 같아요.
+        assert.ok(expanded.some(text => text.includes(`환승 2회 · 도보 ${walkingMinutes}분`)));
+        assert.equal(cardTransfers.length, route.summary.transferCount);
+        assert.ok(!expanded.some(text => text.includes('환승 도보')) && !detail.some(text => text.includes('환승 도보')));
+        // 접힌 카드는 단계 시간을 보여주지 않고 환승 횟수만 보여줘요.
+        const collapsed = card146(route, false);
+        assert.ok(collapsed.some(text => text.includes('환승 2회'))); assert.ok(!collapsed.some(text => /환승 소요|도보 \d+분/.test(text)));
+    }
+});
+
+test('146 카카오(KAKAO)·시각표(INTERNAL) 경로는 같은 문구, 30초 미만 환승도 1분', () => {
+    const results = [];
+    for (const routeSource of ['KAKAO', 'INTERNAL']) {
+        const route = route146();
+        const r = guide129({ route });
+        r.load('src/stores/route-store.ts').setSelectedRoute({ ...r.load('src/stores/route-store.ts').getSelectedRoute(), routeSource });
+        const view = r.render();
+        assert.equal(r.load('src/stores/route-store.ts').getSelectedRoute().routeSource, routeSource);
+        const timeline = findElement(view, element => element.type === r.Timeline);
+        results.push(JSON.stringify([timeline146(timeline.props.route), card146(route, true)]));
+        assert.ok(timeline146(route).some(text => text.startsWith('고속터미널역 7호선 승강장으로 이동 · 환승 소요 1분')));
+        assert.ok(!timeline146(route).some(text => /환승 소요 0분|도보 0분/.test(text)));
+    }
+    assert.equal(results[0], results[1]);
+});
+
+/* #146 보완: 다음 열차 대기가 따로 표시되면 환승 단계는 걷는 시간만이라 "환승 도보", 아니면 "환승 소요" */
+
+/** route146 의 지하철 단계에 대기를 넣어요. waits[i] 는 i번째 지하철 단계의 waitSec(undefined 면 넣지 않음). */
+function route146Waits(waits, ...kind) {
+    const waitKind = kind.length ? kind[0] : 'ESTIMATED'; // undefined 를 넘기면 waitKind 없음
+    const route = route146(); let subway = 0;
+    route.steps = route.steps.map(step => {
+        if (step.type !== 'SUBWAY') return step;
+        const waitSec = waits[subway++];
+        return waitSec === undefined ? step : { ...step, waitSec, waitKind };
+    });
+    return route;
+}
+
+test('146 보완: mock 건대입구 → 사당은 "환승 도보 3분"과 "환승 대기 약 2분", "환승 소요" 없음', async () => {
+    const r = createRuntime();
+    const { MOCK_STATIONS } = r.load('src/mocks/routes.ts');
+    const station = name => MOCK_STATIONS.find(item => item.name === name);
+    const pending = r.load('src/services/route.ts').searchRoute(station('건대입구'), station('사당'));
+    r.advance(5000); const result = await pending;
+    const route = result.routes.find(item => item.routeId === 'r1');
+    const format = r.load('src/components/route/format.ts');
+    const transfers = route.steps.map((_, index) => index).filter(index => format.isTransferStep(route.steps, index));
+    assert.ok(transfers.length >= 1);
+    for (const index of transfers) assert.equal(format.hasSeparateTransferWait(route.steps, index), true);
+    const expanded = card146(route, true); const detail = timeline146(route);
+    assert.ok(expanded.some(text => text.trim() === '환승 도보 3분'), expanded.join(' / '));
+    assert.ok(expanded.some(text => text === '환승 대기 약 2분'));
+    assert.ok(detail.some(text => text.startsWith('이수역 4호선 승강장으로 환승 · 도보 3분')), detail.join(' / '));
+    assert.ok(detail.some(text => text === '환승 대기 약 2분'));
+    for (const texts of [expanded, detail]) assert.ok(!texts.some(text => text.includes('환승 소요')));
+});
+
+test('146 보완: 대기가 따로 오지 않는 660초 환승은 "환승 소요 11분", 섞인 경로는 환승마다 맞게', () => {
+    // 첫 환승(660초) 뒤 열차는 대기 없음, 둘째 환승(20초) 뒤 열차는 대기 120초
+    const mixed = route146Waits([180, undefined, 120]);
+    const format = createRuntime().load('src/components/route/format.ts');
+    assert.deepEqual([2, 4].map(index => format.hasSeparateTransferWait(mixed.steps, index)), [false, true]);
+    const expanded = card146(mixed, true); const detail = timeline146(mixed);
+    assert.ok(expanded.some(text => text.trim() === '환승 소요 11분')); assert.ok(expanded.some(text => text.trim() === '환승 도보 1분'));
+    assert.ok(expanded.some(text => text === '환승 대기 약 2분')); assert.ok(expanded.some(text => text === '승차 대기 약 3분'));
+    assert.ok(detail.some(text => text.startsWith('서버 환승 안내 · 환승 소요 11분')));
+    assert.ok(detail.some(text => text.startsWith('고속터미널역 7호선 승강장으로 환승 · 도보 1분')));
+    assert.ok(expanded.some(text => text.trim() === '도보 2분')); // 첫 열차 전 걷기는 그대로 "도보"
+    for (const texts of [expanded, detail, card146(mixed, false)]) assert.ok(!texts.some(text => text.includes('도보 11분')), texts.join(' / '));
+    assert.ok(expanded.some(text => text.includes('환승 2회 · 도보 1분')));
+    // 펼친 카드와 경로 상세의 숫자가 환승마다 같아요.
+    const numbers = texts => texts.map(text => /환승 (?:소요|도보) (\d+)분|· (?:환승 소요|도보) (\d+)분/.exec(text)).filter(Boolean).map(match => match[1] ?? match[2]);
+    assert.deepEqual(numbers(expanded.filter(text => /^\s*환승 (소요|도보)/.test(text))), ['11', '1']);
+    assert.deepEqual(numbers(detail.filter(text => /^(서버 환승 안내|고속터미널역)/.test(text))), ['11', '1']);
+});
+
+test('146 보완: waitSec 이 0·null 이거나 waitKind 가 없거나 NONE 이면 따로 표시되지 않는 경우(환승 소요)', () => {
+    const format = createRuntime().load('src/components/route/format.ts');
+    for (const [wait, kind] of [[0, 'ESTIMATED'], [null, 'ESTIMATED'], [-5, 'REALTIME'], [120, 'NONE'], [120, undefined]]) {
+        const route = route146Waits([undefined, wait, wait], kind);
+        assert.equal(format.formatWait(route.steps[3], true), '', `${wait} ${kind}`);
+        assert.deepEqual([2, 4].map(index => format.hasSeparateTransferWait(route.steps, index)), [false, false], `${wait} ${kind}`);
+        const expanded = card146(route, true); const detail = timeline146(route);
+        assert.ok(expanded.some(text => text.trim() === '환승 소요 11분')); assert.ok(!expanded.some(text => text.includes('환승 대기')));
+        assert.ok(detail.some(text => text.startsWith('고속터미널역 7호선 승강장으로 이동 · 환승 소요 1분')));
+    }
+    // 대기 줄과 환승 문구 판단은 같은 함수를 써서 어긋나지 않아요.
+    const shown = route146Waits([undefined, 60, 60], 'REALTIME');
+    assert.equal(format.formatWait(shown.steps[3], true), '환승 대기 1분'); assert.equal(format.hasSeparateTransferWait(shown.steps, 2), true);
+    assert.ok(card146(shown, true).some(text => text.trim() === '환승 도보 11분'));
+});
