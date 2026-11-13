@@ -94,6 +94,29 @@ export default function RouteGuideScreen() {
                         <Text style={styles.buttonText}>경로 탐색으로</Text>
                     </Pressable>
                 </View>
+            ) : selected.origin.id === selected.destination.id ? (
+                <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}>
+                    {selected.appointmentPassed && !!selected.notice && (
+                        <View style={styles.notice}>
+                            <Ionicons name="alert-circle-outline" size={17} color="#c58a00" />
+                            <Text style={styles.noticeText}>{selected.notice}</Text>
+                        </View>
+                    )}
+                    {selected.routeSource === 'INTERNAL' && (
+                        <View style={styles.notice}>
+                            <Ionicons name="information-circle-outline" size={18} color="#9a6a00" />
+                            <Text style={styles.noticeText}>자체 계산한 경로예요.</Text>
+                        </View>
+                    )}
+                    <View style={styles.card}>
+                        <Text style={styles.title}>지하철 이동이 필요 없어요</Text>
+                        <Text style={styles.meta}>선택한 출발역과 도착역이 같아요.</Text>
+                        <RouteNotices summary={selected.route.summary} />
+                    </View>
+                    <Pressable style={styles.button} onPress={goBack}>
+                        <Text style={styles.buttonText}>경로 검색으로 돌아가기</Text>
+                    </Pressable>
+                </ScrollView>
             ) : (
                 <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}>
                     {selected.appointmentPassed && !!selected.notice && (

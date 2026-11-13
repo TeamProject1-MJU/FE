@@ -92,7 +92,7 @@ export default function RouteSearchScreen() {
     const [search, setSearch] = useState<SearchState>({ status: 'idle' });
     const [sortKey, setSortKey] = useState<SortKey>('FASTEST');
     const [expandedId, setExpandedId] = useState<string | null>(null);
-    const [inputError, setInputError] = useState('');
+    const sameStation = !!departure && !!destination && departure.id === destination.id;
 
     const requestId = useRef(0);
     const initialLookupId = useRef({ departure: 0, destination: 0 });
@@ -153,13 +153,7 @@ export default function RouteSearchScreen() {
             return;
         }
 
-        if (from.id === to.id) {
-            setInputError('출발역과 도착역을 다르게 설정해 주세요.');
-            setSearch({ status: 'idle' });
-            return;
-        }
-
-        setInputError('');
+        // 같은 역도 서버에서 방 권한·역 지원 여부를 확인한 뒤 정상 결과로 안내해요.
         setSearch({ status: 'loading' });
 
         try {
@@ -211,7 +205,7 @@ export default function RouteSearchScreen() {
     };
 
     const startGuide = (route: Route) => {
-        if (search.status !== 'success' || !departure || !destination) return;
+        if (search.status !== 'success' || !departure || !destination || sameStation) return;
 
         setSelectedRoute({
             route,
@@ -286,13 +280,6 @@ export default function RouteSearchScreen() {
                     </Pressable>
                 </View>
 
-                {!!inputError && (
-                    <View style={styles.inputError}>
-                        <Ionicons name="alert-circle-outline" size={17} color="#dc5050" />
-                        <Text style={styles.inputErrorText}>{inputError}</Text>
-                    </View>
-                )}
-
                 {search.status === 'success' && search.data.appointmentPassed && !!search.data.notice && (
                     <View style={styles.notice}>
                         <Ionicons name="alert-circle-outline" size={17} color="#c58a00" />
@@ -309,7 +296,7 @@ export default function RouteSearchScreen() {
                 )}
 
                 {/* 정렬 탭 */}
-                {(search.status === 'loading' || search.status === 'success') && (
+                {!sameStation && (search.status === 'loading' || search.status === 'success') && (
                     <View style={styles.tabs}>
                         {SORT_TABS.map(tab => {
                             const active = tab.key === sortKey;
@@ -360,7 +347,25 @@ export default function RouteSearchScreen() {
                     />
                 )}
 
-                {search.status === 'success' &&
+                {search.status === 'success' && sameStation && (
+                    <Message
+                        icon={<Ionicons name="train-outline" size={34} color={NAVY} />}
+                        iconBackground="#e8f8f1"
+                        title="지하철 이동이 필요 없어요"
+                        description="선택한 출발역과 도착역이 같아요. 역을 바꾸면 경로를 다시 찾아요."
+                    />
+                )}
+
+                {search.status === 'success' && !sameStation && sortedRoutes.length === 0 && (
+                    <Message
+                        icon={<Ionicons name="git-commit-outline" size={34} color={NAVY} />}
+                        iconBackground="#e8f8f1"
+                        title="이 조건으로 찾은 경로가 없어요"
+                        description="출발역이나 도착역을 바꿔 다시 찾아 주세요."
+                    />
+                )}
+
+                {search.status === 'success' && !sameStation &&
                     sortedRoutes.map((route, index) => (
                         <RouteCard
                             key={route.routeId}
@@ -602,19 +607,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: BACKGROUND,
-    },
-
-    inputError: {
-        marginTop: 10,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-    },
-
-    inputErrorText: {
-        color: '#dc5050',
-        fontSize: 13,
-        fontWeight: '600',
     },
 
     notice: {

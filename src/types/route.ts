@@ -55,7 +55,7 @@ export type WaitKind = 'REALTIME' | 'ESTIMATED' | 'NONE';
 
 export type RouteStep = {
     waitSec?: number | null;
-    waitKind?: WaitKind;
+    waitKind?: WaitKind | null;
     nextTrains?: { destinationLabel: string; secondsUntil: number; message: string | null; receivedAt: string }[];
     type: 'WALKING' | 'SUBWAY';
     guidance: string;
@@ -75,9 +75,9 @@ export type RouteSummary = {
     serviceNotice: string | null;
     arrivesAfterAppointment: boolean;
     waitSec?: number | null;
-    waitKind?: WaitKind;
+    waitKind?: WaitKind | null;
     transferWaitSec?: number;
-    totalWithWaitSec?: number;
+    totalWithWaitSec?: number | null;
     totalTimeSec: number;
     /** ISO-8601 */
     arrivalAt: string;
