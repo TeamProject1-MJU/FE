@@ -29,7 +29,7 @@ const MOCK_DELAY_MS = 800;
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-/** 역 선택용 목록 (공통 역 검색 화면 연동 전까지 mock) */
+/** mock 역 목록 검색이에요. 지금 이 함수를 부르는 곳은 없고, 역 검색 화면은 services/station.ts 를 써요. */
 export async function fetchStations(keyword = ''): Promise<StationSummary[]> {
     const query = keyword.trim();
     if (!query) return MOCK_STATIONS;
@@ -247,7 +247,7 @@ function withMockWait(route: Route): Route {
  * mock 전용: 각 정차역의 혼잡도 조회 시간대를 채웁니다.
  * 명세 6.2: 역의 시간대 = 출발 예정 시각 + 그 역까지 누적 소요시간이 속한 30분 구간,
  * 05:30 시작(막차 이후 첫차): 운행 시간 밖이면 첫차(05:30) 슬롯 + firstTrain·slotDate.
- * 실제 연동 후에는 서버가 내려주므로 필요 없습니다.
+ * 서버 모드는 서버가 내려준 시간대를 그대로 쓰고 이 함수를 부르지 않아요.
  */
 function withStationSlots(route: Route, departAt: number): Route {
     let elapsedSec = 0;

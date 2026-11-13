@@ -59,7 +59,8 @@ type Notice = { tone: 'info' | 'error'; text: string } | null;
  * - 최다 득표 후보도 자동으로 확정하지 않아요. 확정은 OWNER 가 "약속역으로 확정"을 눌러야 해요
  * - 서버 모드(#101)는 7.14~7.17 을 불러요. 제안·투표·삭제 뒤에는 부모의 7.15 재조회로 서버 목록에 맞춰요
  * - 서버 station 에는 lines 가 없어 노선 배지가 비어 보여요. 제안자 닉네임이 비면 "알 수 없음"이에요
- * TODO(범위 밖): WS STATION_PROPOSAL_* 수신 시 7.15 재조회, 동시성(ROOM_BUSY) 재시도 정책
+ * - 실시간 STATION_PROPOSAL_* 수신 시 7.15 재조회는 #117 에서 구현했어요(부모 rooms/[roomId].tsx 의 useRoomEvents)
+ * TODO: 동시성(ROOM_BUSY) 자동 재시도 정책은 없어요. 지금은 안내 문구로 다시 시도를 부탁해요 (이슈 미정)
  */
 export default function ProposalPanel({
     roomId,
