@@ -413,7 +413,8 @@ export default function RoomChatPanel({
                                                     }
                                                 </Text>
                                                 <Action
-                                                    label="다시 시도"
+                                                    // 저장 여부를 확인하지 못했으면 한 번 더 누를 때 확인 없이 보내요(#139).
+                                                    label={message.pending.unconfirmed ? '그래도 다시 보내기' : '다시 시도'}
                                                     onPress={() => {
                                                         if (
                                                             message.pending
