@@ -430,7 +430,14 @@ export default function RoomRecommendationsScreen() {
     const openRoute = (item: RecommendationResult) => {
         router.push({
             pathname: '/route-search',
-            params: { departure: me?.departureStation?.name ?? '', destination: item.recommendedStation.name, roomId },
+            // #140: 역 ID 로 넘겨 이름 재검색 없이 정확한 역으로 요청해요(이름은 표시용 대체값).
+            params: {
+                departure: me?.departureStation?.name ?? '',
+                ...(me?.departureStation ? { departureId: String(me.departureStation.id) } : {}),
+                destination: item.recommendedStation.name,
+                destinationId: String(item.recommendedStation.id),
+                roomId,
+            },
         });
     };
 

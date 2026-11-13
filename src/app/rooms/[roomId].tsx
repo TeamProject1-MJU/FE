@@ -140,6 +140,8 @@ export default function RoomDetailScreen() {
     const [tab, setTab] = useState<Tab>(params.tab === 'vote' ? 'vote' : 'chat');
     const [sheet, setSheet] = useState<Sheet>(null);
     const [notice, setNotice] = useState('');
+    /** 확정 약속역 "내 경로 보기"에서 내 출발역이 없을 때 안내 (#140) */
+    const [routeHint, setRouteHint] = useState('');
     const accountScope = roomEventsScope();
     const stationEvent = useRef({ roomId, at: -Infinity, revision: 0 });
     const summaryEvent = useRef<{ revision: number; payload: unknown }>({ revision: 0, payload: null });
@@ -421,6 +423,33 @@ export default function RoomDetailScreen() {
 
     const at = detail.appointmentAt ? new Date(detail.appointmentAt) : null;
     const station = detail.selectedStation;
+
+    /**
+     * 확정 약속역까지 내 경로 (#140). OWNER·MEMBER 모두 써요.
+     * 출발 = 로그인한 나의 이 방 출발역(내 userId 로 찾아요), 도착 = 확정 약속역, roomId = 이 방(약속방 모드, 방 약속 시각 반영).
+     * 역은 ID 로 넘겨 이름 재검색 없이 정확한 역으로 요청해요. 출발역과 약속역이 같으면 경로 화면의 같은 역 안내(#141)에 맡겨요.
+     * 내 출발역이 없으면 경로 화면으로 가지 않고 안내와 함께 기존 출발역 설정(역 검색)을 바로 열어요.
+     */
+    const openMyRoute = () => {
+        if (!detail.selectedStation) return;
+        const myDeparture = detail.members.find(item => item.userId === myUserId)?.departureStation;
+        if (!myDeparture) {
+            setRouteHint('내 출발역을 먼저 설정해 주세요.');
+            pickDeparture();
+            return;
+        }
+        setRouteHint('');
+        router.push({
+            pathname: '/route-search',
+            params: {
+                departureId: String(myDeparture.id),
+                departure: myDeparture.name,
+                destinationId: String(detail.selectedStation.id),
+                destination: detail.selectedStation.name,
+                roomId: detail.id,
+            },
+        });
+    };
     const setCount = detail.members.filter(item => item.departureStation).length;
     const proposalItems = proposals.status === 'ready' ? proposals.list.items : [];
     // 방 카드 요약: 최다 득표 후보 (동점이면 개수만). 투표는 참고용이라 확정과는 무관해요
@@ -515,6 +544,9 @@ export default function RoomDetailScreen() {
                                         <Text style={styles.stationName}>{formatStationName(station.name)}</Text>
                                     </View>
                                 </View>
+                                <Pressable style={[styles.stripButton, styles.stripPrimary]} onPress={openMyRoute} accessibilityRole="button" accessibilityLabel="확정 약속역까지 내 경로 보기">
+                                    <Text style={[styles.stripButtonText, styles.stripPrimaryText]}>내 경로 보기</Text>
+                                </Pressable>
                             </>
                         ) : (
                             <>
@@ -535,6 +567,13 @@ export default function RoomDetailScreen() {
                         )}
                     </View>
                 </View>
+                {/* 출발역을 설정하면 안내는 저절로 사라져요. */}
+                {!!station && !!routeHint && !detail.members.find(item => item.userId === myUserId)?.departureStation && (
+                    <View style={styles.routeHint} accessibilityRole="alert">
+                        <Ionicons name="information-circle-outline" size={16} color={NAVY} />
+                        <Text style={styles.routeHintText}>{routeHint}</Text>
+                    </View>
+                )}
                 <SelectedStationControls
                     detail={detail}
                     controller={stationManager}
@@ -811,6 +850,8 @@ const styles = StyleSheet.create({
     lineBadge: { minWidth: 20, height: 20, paddingHorizontal: 5, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
     lineText: { color: WHITE, fontSize: 11, fontWeight: '900' },
     stationName: { marginLeft: 2, color: WHITE, fontSize: 17, fontWeight: '900' },
+    routeHint: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 6, padding: 10, borderRadius: 10, backgroundColor: '#fff4e0' },
+    routeHintText: { flex: 1, color: NAVY, fontSize: 13, fontWeight: '700' },
     stripButton: { paddingHorizontal: 13, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#4a5a83' },
     stripButtonText: { color: WHITE, fontSize: 13, fontWeight: '800' },
     stripPrimary: { backgroundColor: MINT, borderColor: MINT },

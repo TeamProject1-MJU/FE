@@ -8897,3 +8897,147 @@ test('139 확인 중 화면 이탈·권한 상실이면 결과를 버리고 POST
         r.unmount();
     }
 });
+
+/* ---------- #140 확정 약속역 "내 경로 보기" ---------- */
+
+/** 확정 약속역이 있는 방 상세. members 는 순서를 섞을 수 있어요. */
+function room140Detail({ role = 'OWNER', selected = roomQueryStation(77005), members } = {}) {
+    const detail = roomQueryDetail(role);
+    detail.selectedStation = selected; detail.confirmedAt = selected ? '2026-11-12T10:00:00Z' : null; detail.status = selected ? 'CONFIRMED' : 'OPEN';
+    if (members) detail.members = members;
+    return detail;
+}
+async function room140Screen(detail) {
+    const r = roomQueryScreen('src/app/rooms/[roomId].tsx', { roomId: ROOM_QUERY_ID }); r.pushes = [];
+    r.external['expo-router'].router.push = value => r.pushes.push(value);
+    r.context.fetch = async url => {
+        if (url.includes('/recommendations')) return ok(null);
+        if (url.includes('station-proposals')) return ok({ items: [], maxProposals: 9, selectedStation: detail.selectedStation });
+        return ok(detail);
+    };
+    r.render(); await settle(); await settle();
+    r.button = () => findElement(r.render(), element => element.type === 'Pressable' && element.props.accessibilityLabel === '확정 약속역까지 내 경로 보기');
+    return r;
+}
+/** 넘겨받은 params 로 경로 화면을 열고 실제 6.1 요청 본문과 역 검색 요청을 기록해요. */
+async function route140(params, stations = {}) {
+    const r = routeScreenRuntime(params); r.bodies = []; r.keywordSearches = []; r.stationLookups = [];
+    r.context.fetch = async (url, options) => {
+        if (url.endsWith('/routes/search')) { r.bodies.push(JSON.parse(options.body)); return ok(routeData()); }
+        const parsed = new URL(url);
+        const match = /\/stations\/(\d+)$/.exec(parsed.pathname);
+        if (match) { r.stationLookups.push(Number(match[1])); const id = Number(match[1]); return ok(serverRouteStation(id, stations[id] ?? `역 ${id}`)); }
+        if (parsed.pathname.endsWith('/stations')) {
+            r.keywordSearches.push(parsed.searchParams.get('keyword'));
+            return ok(stationSearchData(Object.entries(stations).map(([id, name]) => serverRouteStation(Number(id), name))));
+        }
+        throw Error(`예상하지 못한 요청 ${url}`);
+    };
+    r.render(); await settle(); r.render(); await settle(); r.render(); await settle();
+    return r;
+}
+
+test('140 추천 기록 없이 확정한 약속역 → 내 경로 보기 → 6.1 요청의 출발(내 출발역)·도착(확정역) ID·roomId 정확', async () => {
+    for (const role of ['OWNER', 'MEMBER']) {
+        // 다른 멤버를 먼저 두고 그 멤버도 출발역이 있어요. 내 것만 써야 해요.
+        const members = [
+            { userId: ROOM_QUERY_OTHER, nickname: '서버 동료', role: role === 'OWNER' ? 'MEMBER' : 'OWNER', joinedAt: '2026-11-09T09:00:00Z', departureStation: roomQueryStation(99002) },
+            { userId: ROOM_QUERY_ME, nickname: '서버 나', role, joinedAt: '2026-11-10T09:00:00Z', departureStation: roomQueryStation(88001) },
+        ];
+        const r = await room140Screen(room140Detail({ role, members }));
+        const button = r.button(); assert.ok(button, role);
+        assert.ok(findTextIncluding(button.props.children, '내 경로 보기'));
+        button.props.onPress();
+        assert.equal(r.pushes.length, 1);
+        const push = plain(r.pushes[0]);
+        assert.equal(push.pathname, '/route-search');
+        assert.deepEqual(push.params, { departureId: '88001', departure: '서버 역 88001', destinationId: '77005', destination: '서버 역 77005', roomId: ROOM_QUERY_ID }, role);
+        r.unmount();
+        const route = await route140(push.params);
+        assert.deepEqual(route.bodies, [{ originStationId: 88001, destinationStationId: 77005, roomId: ROOM_QUERY_ID }], role);
+        assert.deepEqual(route.keywordSearches, []); assert.deepEqual(route.stationLookups.sort(), [77005, 88001]);
+        route.unmount();
+    }
+});
+
+test('140 내 출발역이 없으면 경로 화면으로 가지 않고 안내와 함께 출발역 설정을 열어요', async () => {
+    const members = [
+        { userId: ROOM_QUERY_OTHER, nickname: '서버 동료', role: 'OWNER', joinedAt: '2026-11-09T09:00:00Z', departureStation: roomQueryStation(99002) },
+        { userId: ROOM_QUERY_ME, nickname: '서버 나', role: 'MEMBER', joinedAt: '2026-11-10T09:00:00Z', departureStation: null },
+    ];
+    const r = await room140Screen(room140Detail({ role: 'MEMBER', members }));
+    r.button().props.onPress();
+    const view = r.render();
+    assert.ok(!r.pushes.some(push => (push.pathname ?? push) === '/route-search'));
+    assert.ok(r.pushes.some(push => push.pathname === '/station-search' && push.params?.purpose === 'departure'), JSON.stringify(plain(r.pushes)));
+    assert.ok(findText(view, '내 출발역을 먼저 설정해 주세요.'));
+    r.unmount();
+});
+
+test('140 확정 약속역이 없으면 버튼이 없어요', async () => {
+    const r = await room140Screen(room140Detail({ selected: null }));
+    assert.equal(r.button(), null); assert.ok(findText(r.render(), '약속역 미정')); r.unmount();
+});
+
+test('140 같은 이름의 역이 둘이어도 ID 로 넘기면 그 역으로 요청하고, 이름만 넘기면 기존처럼 이름으로 찾아요', async () => {
+    const stations = { 1001: '시청', 2002: '시청', 3003: '강남' };
+    const byId = await route140({ departureId: '2002', departure: '시청', destinationId: '3003', destination: '강남', roomId: ROOM_QUERY_ID }, stations);
+    assert.deepEqual(byId.bodies, [{ originStationId: 2002, destinationStationId: 3003, roomId: ROOM_QUERY_ID }]);
+    assert.deepEqual(byId.keywordSearches, []);
+    byId.unmount();
+    // 이름만 넘기는 기존 진입점: 이름 검색으로 찾고(같은 이름이면 첫 결과) roomId 없이 보내요.
+    const byName = await route140({ departure: '시청', destination: '강남' }, stations);
+    assert.deepEqual(byName.keywordSearches.sort(), ['강남', '시청']);
+    assert.deepEqual(byName.bodies, [{ originStationId: 1001, destinationStationId: 3003 }]);
+    byName.unmount();
+    // 숫자가 아닌 ID 는 무시하고 그 칸만 이름으로 찾아요(ID 조회 실패는 다음 검사).
+    const mixed = await route140({ departureId: '2002', departure: '시청', destinationId: 'abc', destination: '강남' }, stations);
+    assert.deepEqual(mixed.bodies, [{ originStationId: 2002, destinationStationId: 3003 }]);
+    assert.deepEqual(mixed.keywordSearches, ['강남']);
+    mixed.unmount();
+});
+
+test('140 ID 역 상세 조회 실패: 넘겨받은 이름·ID 로 그대로 요청', async () => {
+    const r = routeScreenRuntime({ departureId: '2002', departure: '시청', destinationId: '3003', destination: '강남' }); const bodies = [];
+    r.context.fetch = async (url, options) => {
+        if (url.endsWith('/routes/search')) { bodies.push(JSON.parse(options.body)); return ok(routeData()); }
+        if (/\/stations\/\d+$/.test(new URL(url).pathname)) return jsonResponse({ success: false, error: { code: 'NETWORK_ERROR' } }, 503);
+        throw Error(`이름 재검색을 하면 안 돼요 ${url}`);
+    };
+    r.render(); await settle(); r.render(); await settle(); r.render(); await settle();
+    assert.deepEqual(bodies, [{ originStationId: 2002, destinationStationId: 3003 }]);
+    const view = r.render();
+    assert.equal(findElement(view, element => element.props?.label === '출발').props.station.name, '시청');
+    r.unmount();
+});
+
+test('140 추천 카드 "경로 자세히 보기"도 역 ID 로 넘겨요', async () => {
+    const r = recoScreen(); const pushes = [];
+    r.external['expo-router'].router.push = value => pushes.push(value);
+    r.recoRespond(async () => ok(recoRun()));
+    const view = await pumpScreen(r);
+    findElement(view, e => e.type === 'Pressable' && findTextIncluding(e.props.children, '경로 자세히')).props.onPress();
+    assert.deepEqual(plain(pushes[0].params), { departure: '서버 역 88001', departureId: '88001', destination: '서버 추천역 77001', destinationId: '77001', roomId: ROOM_QUERY_ID });
+    r.unmount();
+});
+
+test('140 mock 방(room-1, 확정 건대입구·내 출발 홍대입구)에서도 내 출발역·확정역 ID 로 경로 화면을 열어요', async () => {
+    const r = createScreenRuntime({}, 'src/app/rooms/[roomId].tsx', runtime => {
+        runtime.external['expo-clipboard'] = { setStringAsync: async () => {} }; runtime.native.ScrollView = 'ScrollView';
+        runtime.external['expo-router'].useLocalSearchParams = () => ({ roomId: 'room-1' });
+        runtime.external['expo-router'].useFocusEffect = callback => runtime.external.react.useEffect(callback, [callback]);
+        runtime.external.react.useCallback = (callback, dependencies) => {
+            const ref = runtime.external.react.useRef(null);
+            if (!ref.current || dependencies.some((value, index) => value !== ref.current.dependencies[index])) ref.current = { callback, dependencies };
+            return ref.current.callback;
+        };
+    });
+    const pushes = []; r.external['expo-router'].router.push = value => pushes.push(value);
+    for (let i = 0; i < 6; i++) { r.render(); await settle(); r.advance(1000); await settle(); }
+    const button = findElement(r.render(), element => element.type === 'Pressable' && element.props.accessibilityLabel === '확정 약속역까지 내 경로 보기');
+    assert.ok(button); button.props.onPress();
+    const { MOCK_STATIONS } = r.load('src/mocks/stations.ts');
+    const id = name => String(MOCK_STATIONS.find(station => station.name === name).id);
+    assert.deepEqual(plain(pushes.at(-1).params), { departureId: id('홍대입구'), departure: '홍대입구', destinationId: id('건대입구'), destination: '건대입구', roomId: 'room-1' });
+    r.unmount();
+});
