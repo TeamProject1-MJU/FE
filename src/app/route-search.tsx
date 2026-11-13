@@ -344,6 +344,7 @@ export default function RouteSearchScreen() {
                     <ErrorMessage
                         code={search.code}
                         onRetry={() => runSearch(departure, destination)}
+                        onRoomList={() => router.replace('/rooms')}
                     />
                 )}
 
@@ -443,7 +444,26 @@ function Message({
     );
 }
 
-function ErrorMessage({ code, onRetry }: { code: RouteErrorCode; onRetry: () => void }) {
+function ErrorMessage({ code, onRetry, onRoomList }: {
+    code: RouteErrorCode;
+    onRetry: () => void;
+    onRoomList: () => void;
+}) {
+    if (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND') {
+        return (
+            <Message
+                icon={<Ionicons name="lock-closed-outline" size={30} color={SECONDARY} />}
+                iconBackground="#eef1f5"
+                title={code === 'NOT_ROOM_MEMBER' ? '이 약속방에 접근할 수 없어요' : '약속방을 찾을 수 없어요'}
+                description={code === 'NOT_ROOM_MEMBER'
+                    ? '참여 중인 약속방이 아니에요. 약속방 목록에서 확인해 주세요.'
+                    : '삭제됐거나 존재하지 않는 약속방이에요. 약속방 목록에서 확인해 주세요.'}
+                actionLabel="약속방 목록으로"
+                onAction={onRoomList}
+            />
+        );
+    }
+
     if (code === 'ROUTE_NOT_FOUND') {
         return (
             <Message

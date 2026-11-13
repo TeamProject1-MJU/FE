@@ -2391,7 +2391,8 @@ test('경로 오류 매핑 422·404·403·400·5xx와 TOKEN 계열 원본 보존
     const { ApiError } = r.load('src/services/api/errors.ts');
     for (const [code, status, expected] of [
         ['STATION_UNSUPPORTED', 422, 'STATION_UNSUPPORTED'], ['ROUTE_NOT_FOUND', 404, 'ROUTE_NOT_FOUND'],
-        ['STATION_NOT_FOUND', 404, 'STATION_NOT_FOUND'], ['NOT_ROOM_MEMBER', 403, 'EXTERNAL_API_ERROR'],
+        ['STATION_NOT_FOUND', 404, 'STATION_NOT_FOUND'], ['NOT_ROOM_MEMBER', 403, 'NOT_ROOM_MEMBER'],
+        ['ROOM_NOT_FOUND', 404, 'ROOM_NOT_FOUND'],
         ['VALIDATION_ERROR', 400, 'EXTERNAL_API_ERROR'], ['EXTERNAL_API_ERROR', 502, 'EXTERNAL_API_ERROR'],
         ['UNKNOWN_ERROR', 500, 'EXTERNAL_API_ERROR'], ['TOKEN_EXPIRED', 401, 'TOKEN_EXPIRED'],
         ['TOKEN_INVALID', 401, 'TOKEN_INVALID'], ['TOKEN_FUTURE', 401, 'TOKEN_FUTURE'], ['AUTH_REQUIRED', 401, 'AUTH_REQUIRED'],
@@ -8001,7 +8002,6 @@ test('141 같은 역이어도 서버의 권한·지원 역 검사를 우회하�
         assert.ok(findElement(view, element => element.props?.code), code);
         assert.equal(r.calls141.filter(call => call.options.method === 'POST').length, 1); r.unmount();
     }
-    // 방 오류 코드 자체를 보존하는 변경은 다음 이슈 #142에서 진행해요.
 });
 
 test('141 동일 역에서 출발·도착역을 다시 바꾸면 일반 경로 검색과 안내 시작이 정상 동작해요', async () => {
@@ -8477,4 +8477,109 @@ test('138 시간 창: 화면에서도 옛 미답 질문이 답변을 가로채�
     await r.ask(); assert.equal(r.render().aiPending, 1);
     r.event(ai138WindowReply(11, 125_000)); assert.equal(r.render().aiPending, 0); assert.equal(r.timers.size, 0);
     r.unmount();
+});
+
+/* ---------- 방 경로 검색의 권한·삭제 오류 구분 (#142) ---------- */
+const roomRoute142Cases = [
+    ['NOT_ROOM_MEMBER', 403, '이 약속방에 접근할 수 없어요', '참여 중인 약속방이 아니에요. 약속방 목록에서 확인해 주세요.'],
+    ['ROOM_NOT_FOUND', 404, '약속방을 찾을 수 없어요', '삭제됐거나 존재하지 않는 약속방이에요. 약속방 목록에서 확인해 주세요.'],
+];
+
+function route142Message(r) {
+    const error = findElement(r.render(), element => element.props?.code);
+    assert.ok(error);
+    return error.type(error.props);
+}
+
+test('142 방 경로의 403·404 코드를 보존하고 동일 역도 서버의 방 권한 검사를 거쳐요', async () => {
+    for (const [code, status] of roomRoute142Cases) for (const same of [false, true]) {
+        const r = createRuntime(serverEnv); const calls = [];
+        const service = r.load('src/services/route.ts'); const { RouteSearchError } = r.load('src/types/route.ts');
+        r.context.fetch = async (url, options) => { calls.push({ url, options }); return jsonResponse({ success: false, error: { code } }, status); };
+        const destination = same ? routeOrigin : routeDestination;
+        await assert.rejects(service.searchRoute(routeOrigin, destination, { roomId: 'room-142' }), error => error instanceof RouteSearchError && error.code === code);
+        assert.equal(calls.length, 1); assert.equal(calls[0].url, 'https://example.test/api/v1/routes/search');
+        assert.deepEqual(JSON.parse(calls[0].options.body), { originStationId: routeOrigin.id, destinationStationId: destination.id, roomId: 'room-142' });
+    }
+});
+
+test('142 비멤버·없는 방은 서로 다른 안내와 방 목록 버튼만 표시하고 경로를 재시도하지 않아요', async () => {
+    for (const [code, status, title, description] of roomRoute142Cases) for (const same of [false, true]) {
+        const r = await screen141({ departure: '강남', destination: same ? '강남역' : '사당', roomId: 'room-142' },
+            () => jsonResponse({ success: false, error: { code } }, status));
+        const moves = []; r.external['expo-router'].router.replace = href => moves.push(['replace', href]);
+        r.external['expo-router'].router.push = href => moves.push(['push', href]);
+        const message = route142Message(r);
+        assert.equal(message.props.title, title); assert.equal(message.props.description, description);
+        assert.equal(message.props.actionLabel, '약속방 목록으로');
+        const content = message.type(message.props);
+        assert.equal(findElement(content, element => element.type === 'Text' && element.props.children === '다시 시도'), null);
+        const button = findElement(content, element => element.type === 'Pressable'); assert.ok(button);
+        button.props.onPress(); assert.deepEqual(moves, [['replace', '/rooms']]);
+        r.advance(60000); await settle();
+        assert.equal(r.calls141.filter(call => call.options.method === 'POST').length, 1);
+        assert.equal(sameMessage141(r.render()), null); r.unmount();
+    }
+});
+
+test('142 네트워크·외부 경로 장애는 방·개인 경로 모두 기존 다시 시도로 정상 경로를 불러와요', async () => {
+    for (const roomId of [undefined, 'room-142']) for (const code of ['NETWORK_ERROR', 'EXTERNAL_API_ERROR']) {
+        let count = 0;
+        const r = await screen141({ departure: '강남', destination: '사당', ...(roomId ? { roomId } : {}) }, () => {
+            if (++count > 1) return jsonResponse({ success: true, data: routeData() });
+            if (code === 'NETWORK_ERROR') throw new TypeError('연결 실패');
+            return jsonResponse({ success: false, error: { code } }, 502);
+        });
+        const message = route142Message(r);
+        assert.equal(message.props.title, '경로를 불러오지 못했어요'); assert.equal(message.props.actionLabel, '다시 시도');
+        assert.equal(findElement(message.type(message.props), element => element.props?.children === '약속방 목록으로'), null);
+        await message.props.onAction(); await settle();
+        assert.equal(count, 2); assert.ok(findElement(r.render(), element => element.props?.route?.routeId === 'server-route-1'));
+        const body = JSON.parse(r.calls141.filter(call => call.options.method === 'POST')[0].options.body);
+        assert.equal(Object.hasOwn(body, 'roomId'), roomId !== undefined); r.unmount();
+    }
+});
+
+test('142 방 검색의 TOKEN 계열·인증 오류는 원본을 보존하고 방 접근 오류 안내나 목록 이동을 추가하지 않아요', async () => {
+    for (const code of ['TOKEN_EXPIRED', 'TOKEN_INVALID', 'TOKEN_FUTURE', 'AUTH_REQUIRED']) {
+        const r = createRuntime(serverEnv); const { ApiError } = r.load('src/services/api/errors.ts');
+        r.context.fetch = async () => jsonResponse({ success: false, error: { code, message: '인증 오류' } }, 401);
+        await assert.rejects(r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination, { roomId: 'room-142' }),
+            error => error instanceof ApiError && error.code === code && error.status === 401);
+        const screen = await screen141({ departure: '강남', destination: '사당', roomId: 'room-142' },
+            () => jsonResponse({ success: false, error: { code } }, 401));
+        const view = screen.render(); assert.equal(findElement(view, element => element.props?.code), null);
+        assert.equal(findElement(view, element => element.props?.actionLabel === '약속방 목록으로'), null);
+        assert.equal(screen.calls141.filter(call => call.options.method === 'POST').length, 1); screen.unmount();
+    }
+});
+
+test('142 이전 방의 늦은 권한 오류는 새 방의 정상 경로를 덮지 않아요', async () => {
+    for (const [code, status] of roomRoute142Cases) {
+        let resolveOld;
+        const params = { departure: '강남', destination: '사당', roomId: 'old-room-142' };
+        const r = await screen141(params, body => body.roomId === 'old-room-142'
+            ? new Promise(resolve => { resolveOld = resolve; }) : jsonResponse({ success: true, data: routeData() }));
+        assert.ok(resolveOld); params.roomId = 'new-room-142';
+        for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+        assert.ok(findElement(r.render(), element => element.props?.route?.routeId === 'server-route-1'));
+        resolveOld(jsonResponse({ success: false, error: { code } }, status)); await settle();
+        const view = r.render(); assert.equal(findElement(view, element => element.props?.code), null);
+        assert.ok(findElement(view, element => element.props?.route?.routeId === 'server-route-1')); r.unmount();
+    }
+});
+
+test('142 방에서 개인 검색으로 바꾸면 이전 방 오류를 지우고 roomId 없는 요청으로 정상 경로를 표시해요', async () => {
+    for (const [code, status] of roomRoute142Cases) {
+        const params = { departure: '강남', destination: '사당', roomId: 'room-142' };
+        const r = await screen141(params, body => Object.hasOwn(body, 'roomId')
+            ? jsonResponse({ success: false, error: { code } }, status) : jsonResponse({ success: true, data: routeData() }));
+        assert.equal(findElement(r.render(), element => element.props?.code)?.props.code, code);
+        delete params.roomId;
+        for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+        const view = r.render(); assert.equal(findElement(view, element => element.props?.code), null);
+        assert.ok(findElement(view, element => element.props?.route?.routeId === 'server-route-1'));
+        const calls = r.calls141.filter(call => call.options.method === 'POST'); assert.equal(calls.length, 2);
+        assert.equal(Object.hasOwn(JSON.parse(calls[1].options.body), 'roomId'), false); r.unmount();
+    }
 });
