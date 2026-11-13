@@ -51,7 +51,7 @@ export type RouteStationCongestion = {
     congestion: Congestion;
 };
 
-export type WaitKind = 'REALTIME' | 'ESTIMATED' | 'NONE';
+export type WaitKind = 'REALTIME' | 'ESTIMATED' | 'NONE' | 'TIMETABLE';
 
 export type RouteStep = {
     waitSec?: number | null;

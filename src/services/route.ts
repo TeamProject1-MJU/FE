@@ -44,7 +44,7 @@ const isNumber = (value: unknown): value is number => typeof value === 'number' 
 const isNullableString = (value: unknown): value is string | null => value === null || typeof value === 'string';
 const LEVELS = ['COMFORTABLE', 'RELAXED', 'NORMAL', 'CROWDED', 'VERY_CROWDED'];
 const KINDS = ['PREDICTED', 'ESTIMATED', 'MOCK'];
-const WAIT_KINDS = ['REALTIME', 'ESTIMATED', 'NONE'];
+const WAIT_KINDS = ['REALTIME', 'ESTIMATED', 'NONE', 'TIMETABLE'];
 
 /** 6.1은 kind를 받아요. 데이터 없음은 화면이 안전하게 읽을 수 있는 모양으로 정리해요. */
 function parseCongestion(value: unknown): Congestion {

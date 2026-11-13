@@ -7359,3 +7359,81 @@ test('141 정상 null 대기 필드는 허용하되 잘못된 문자열·객체�
         await assert.rejects(r.load('src/services/route.ts').searchRoute(routeOrigin, routeOrigin), { code: 'EXTERNAL_API_ERROR' });
     }
 });
+
+/* ---------- 시각표 대기 출처 응답 호환 (PR #161) ---------- */
+function timetable161Data(waitSec = 180) {
+    const data = { ...routeData(), routeSource: 'INTERNAL', appointmentPassed: false, notice: null };
+    Object.assign(data.routes[0].summary, {
+        totalTimeSec: 1200, departureAt: '2026-11-13T14:03:00+09:00', arrivalAt: '2026-11-13T14:23:00+09:00',
+        noService: false, serviceNotice: null, arrivesAfterAppointment: false,
+        waitSec, waitKind: 'TIMETABLE', totalWithWaitSec: 1200 + waitSec, slackSeconds: null,
+    });
+    return data;
+}
+
+test('161 TIMETABLE 정상 응답은 대기 0초·양수를 그대로 파싱하고 원본 시각·총시간을 보존해요', async () => {
+    for (const waitSec of [0, 180]) {
+        const r = createRuntime(serverEnv); const raw = timetable161Data(waitSec); const calls = [];
+        r.context.fetch = async (url, options) => { calls.push({ url, options }); return jsonResponse({ success: true, data: raw }); };
+        const parsed = await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination);
+        assert.equal(parsed.routes[0].summary.waitKind, 'TIMETABLE');
+        for (const field of ['waitSec', 'totalTimeSec', 'totalWithWaitSec', 'departureAt', 'arrivalAt']) {
+            assert.equal(parsed.routes[0].summary[field], raw.routes[0].summary[field], field);
+        }
+        assert.equal(calls.length, 1); assert.equal(calls[0].url, 'https://example.test/api/v1/routes/search');
+        assert.deepEqual(JSON.parse(calls[0].options.body), { originStationId: routeOrigin.id, destinationStationId: routeDestination.id });
+    }
+});
+
+test('161 TIMETABLE 경로의 펼침·접힘·안내 화면은 서버의 대기 포함 총시간을 사용하고 약을 붙이지 않아요', async () => {
+    for (const waitSec of [0, 180]) {
+        const search = await route147Search(timetable161Data(waitSec)); const card = search.card147(); assert.ok(card);
+        const summary = card.props.route.summary; const expected = `대기 포함 ${waitSec === 0 ? 20 : 23}분`;
+        const format = search.load('src/components/route/format.ts');
+        assert.equal(format.formatTotalTime(summary), expected);
+        assert.equal(format.formatTotalTime({ ...summary, transferWaitSec: 300 }), expected, '이미 포함된 대기를 다시 합산하지 않아요');
+        const Card = search.load('src/components/route/RouteCard.tsx').default;
+        for (const expanded of [false, true]) assert.ok(findText(Card({ ...card.props, expanded }), expected));
+        card.props.onStart(); const selected = search.load('src/stores/route-store.ts').getSelectedRoute();
+        assert.equal(selected.route.summary.waitKind, 'TIMETABLE');
+        const guide = route147Guide(selected); assert.ok(findText(guide.render(), expected));
+        assert.equal(findElement(search.render(), element => element.props?.code), null);
+        search.unmount(); guide.unmount();
+    }
+});
+
+test('161 대기 포함 서버 값이 null·생략이면 이동 시간으로 표시하고 waitSec을 임의로 더하지 않아요', async () => {
+    for (const omit of [false, true]) {
+        const r = createRuntime(serverEnv); const raw = timetable161Data(180);
+        if (omit) delete raw.routes[0].summary.totalWithWaitSec; else raw.routes[0].summary.totalWithWaitSec = null;
+        r.context.fetch = async () => jsonResponse({ success: true, data: raw });
+        const parsed = await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination); const summary = parsed.routes[0].summary;
+        assert.equal(summary.waitKind, 'TIMETABLE'); assert.equal(summary.waitSec, 180);
+        assert.equal(Object.hasOwn(summary, 'totalWithWaitSec'), !omit);
+        if (!omit) assert.equal(summary.totalWithWaitSec, null);
+        assert.equal(r.load('src/components/route/format.ts').formatTotalTime(summary), '20분');
+    }
+});
+
+test('161 기존 생략·null·REALTIME·ESTIMATED·NONE의 파싱·시간 표시는 유지돼요', async () => {
+    for (const kind of [undefined, null, 'REALTIME', 'ESTIMATED', 'NONE']) {
+        const r = createRuntime(serverEnv); const raw = timetable161Data(kind === 'NONE' ? 0 : 180); const summary = raw.routes[0].summary;
+        if (kind === undefined) { delete summary.waitKind; delete summary.waitSec; delete summary.totalWithWaitSec; }
+        else if (kind === null) Object.assign(summary, { waitKind: null, waitSec: null, totalWithWaitSec: null });
+        else summary.waitKind = kind;
+        r.context.fetch = async () => jsonResponse({ success: true, data: raw });
+        const parsed = (await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination)).routes[0].summary;
+        assert.equal(Object.hasOwn(parsed, 'waitKind'), kind !== undefined); assert.equal(parsed.waitKind, kind);
+        const expected = kind == null ? '20분' : kind === 'ESTIMATED' ? '대기 포함 약 23분' : kind === 'NONE' ? '대기 포함 20분' : '대기 포함 23분';
+        assert.equal(r.load('src/components/route/format.ts').formatTotalTime(parsed), expected);
+    }
+});
+
+test('161 TIMETABLE 추가 후에도 미등록 출처·잘못된 대기 값은 계속 거절해요', async () => {
+    for (const [field, value] of [['waitKind', 'UNKNOWN'], ['waitKind', 'timetable'], ['waitKind', 'TIMETABLE '], ['waitKind', 1],
+        ['waitSec', '0'], ['waitSec', {}], ['totalWithWaitSec', '1380'], ['totalWithWaitSec', {}]]) {
+        const r = createRuntime(serverEnv); const raw = timetable161Data(); raw.routes[0].summary[field] = value;
+        r.context.fetch = async () => jsonResponse({ success: true, data: raw });
+        await assert.rejects(r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination), { code: 'EXTERNAL_API_ERROR' });
+    }
+});
