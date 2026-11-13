@@ -11,6 +11,7 @@ import {
 } from '@/services/chat';
 import type {
     ChatMessage,
+    ChatMessagePage,
     ChatMockScenario,
     PendingChatMessage,
 } from '@/types/chat';
@@ -57,6 +58,8 @@ type Context = {
     historyLoading: boolean;
     hasMore: boolean;
     cursor: string | null;
+    /** REST 로 받아 빈 구간 없이 이어진 메시지 id (처음 로드·이전 메시지·복구). WS·전송 결과는 넣지 않아요(#137). */
+    syncedIds: Set<string>;
     sending: Set<string>;
     sendBaseline: Map<string, Set<string>>;
 };
@@ -102,6 +105,64 @@ export function mergeChatMessages(
     return [...unique.values()].sort(
         (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt),
     );
+}
+
+/** 재연결 복구에서 최신 쪽부터 받을 최대 페이지 수 (30개 × 10 = 300개, #137) */
+export const CHAT_RECOVERY_MAX_PAGES = 10;
+
+export type ChatRecovery = {
+    /** 받은 메시지(최신 → 오래된 순서) */
+    items: ChatMessage[];
+    /**
+     * overlap: 이어진 목록의 메시지를 만났어요. 그 사이를 합치고 오래된 쪽 cursor·hasMore 는 그대로예요.
+     * complete: 겹치기 전에 방의 처음까지 받았어요(hasMore: false). 받은 것이 방의 모든 메시지예요.
+     * replace: 상한까지 겹치지 않았어요. 목록을 받은 범위로 바꾸고 그보다 오래된 건 이전 메시지 조회로 이어 받아요.
+     */
+    mode: 'overlap' | 'complete' | 'replace';
+    cursor: string | null;
+    hasMore: boolean;
+};
+
+/**
+ * 재연결·화면 복귀·reload 때 끊긴 동안 쌓인 메시지를 빈 구간 없이 받아요 (#137, 명세 10.2·11장).
+ * 최신 페이지부터 nextCursor 를 따라 이어 받고, syncedIds(이미 이어져 있는 목록)의 메시지를 만나면 멈춰요.
+ * 중간에 실패하면 예외를 그대로 던져요(받은 일부만 합치면 빈 구간이 생겨요). 더 진행하면 안 되면(valid false) null.
+ */
+export async function recoverChatGap(
+    fetchPage: (cursor: string | null) => Promise<ChatMessagePage>,
+    syncedIds: ReadonlySet<string>,
+    valid: () => boolean,
+    maxPages = CHAT_RECOVERY_MAX_PAGES,
+): Promise<ChatRecovery | null> {
+    const items: ChatMessage[] = [];
+    let cursor: string | null = null;
+    for (let page = 1; ; page++) {
+        const result = await fetchPage(cursor);
+        if (!valid()) return null;
+        items.push(...result.items);
+        if (result.items.some(message => syncedIds.has(message.id))) return { items, mode: 'overlap', cursor: null, hasMore: false };
+        if (!result.hasMore || !result.nextCursor) return { items, mode: result.hasMore ? 'replace' : 'complete', cursor: result.nextCursor, hasMore: result.hasMore && !!result.nextCursor };
+        if (page >= maxPages) return { items, mode: 'replace', cursor: result.nextCursor, hasMore: true };
+        cursor = result.nextCursor;
+    }
+}
+
+/**
+ * 복구 결과를 현재 목록에 반영해요.
+ * - overlap: 합치기만 해요.
+ * - complete·replace: 받은 범위보다 오래된 기존 메시지만 버려요. 복구 중 WS 로 들어온 더 최신 메시지는 남겨요.
+ */
+export function applyChatRecovery(current: ChatMessage[], recovery: ChatRecovery) {
+    // 받은 것이 없으면(빈 방) 버릴 기준이 없어 그대로 둬요.
+    if (recovery.mode === 'overlap' || !recovery.items.length) return mergeChatMessages(current, recovery.items);
+    const oldest = Math.min(...recovery.items.map(message => Date.parse(message.createdAt)));
+    const fetched = new Set(recovery.items.map(message => message.id));
+    return mergeChatMessages(current.filter(message => fetched.has(message.id) || Date.parse(message.createdAt) >= oldest), recovery.items);
+}
+
+/** 서버 모드에서 최신 한 페이지만 합쳤을 때 이어진 목록과 사이가 빌 수 있는지 (#137) */
+function needsRecovery(ctx: Context, page: ChatMessagePage) {
+    return !isMockMode() && ctx.loaded && page.hasMore && !page.items.some(message => ctx.syncedIds.has(message.id));
 }
 
 const errorText = (error: unknown) =>
@@ -171,6 +232,37 @@ export function useRoomChat(roomId: string, mock?: string) {
             do {
                 ctx.refreshAgain = false;
 
+                // 서버 모드에서 이미 로드된 목록은 끊긴 동안 쌓인 메시지를 빈 구간 없이 복구해요(#137).
+                // 처음 로드와 mock 모드는 이전처럼 최신 한 페이지예요.
+                if (ctx.loaded && !isMockMode()) {
+                    const recovery = await recoverChatGap(
+                        cursor => fetchChatMessages(roomId, { cursor }),
+                        ctx.syncedIds,
+                        () => ctx.valid() && actionId === ctx.actionId,
+                    );
+                    if (!recovery) return;
+                    recovery.items.forEach(message => ctx.knownIds.add(message.id));
+                    if (recovery.mode === 'overlap') recovery.items.forEach(message => ctx.syncedIds.add(message.id));
+                    else {
+                        // 목록·cursor·hasMore 를 받은 범위로 맞춰요. 그보다 오래된 건 이전 메시지 조회로 이어 받아요.
+                        ctx.syncedIds = new Set(recovery.items.map(message => message.id));
+                        ctx.cursor = recovery.cursor;
+                        ctx.hasMore = recovery.hasMore;
+                    }
+                    ctx.receiveReplies(recovery.items);
+                    ctx.blocked = false;
+                    update(ctx, previous => ({
+                        ...previous,
+                        status: 'ready',
+                        error: null,
+                        blocked: false,
+                        hasMore: ctx.hasMore,
+                        messages: applyChatRecovery(previous.messages, recovery),
+                        aiPending: ctx.aiPending,
+                    }));
+                    continue;
+                }
+
                 const page = await fetchChatMessages(roomId, {
                     mock: scenario,
                 });
@@ -180,6 +272,7 @@ export function useRoomChat(roomId: string, mock?: string) {
                 if (!ctx.loaded) {
                     ctx.cursor = page.nextCursor;
                     ctx.hasMore = page.hasMore;
+                    page.items.forEach(message => ctx.syncedIds.add(message.id));
                 }
 
                 page.items.forEach(message => ctx.knownIds.add(message.id));
@@ -253,6 +346,7 @@ export function useRoomChat(roomId: string, mock?: string) {
             historyLoading: false,
             hasMore: false,
             cursor: null,
+            syncedIds: new Set(),
             sending: new Set(),
             sendBaseline: new Map(),
         };
@@ -310,6 +404,8 @@ export function useRoomChat(roomId: string, mock?: string) {
                 page.items.forEach(message => ctx.knownIds.add(message.id));
                 resolveWaiting(page.items);
                 update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, page.items) }));
+                // 최신 한 페이지가 이어진 목록과 겹치지 않으면 그 사이가 비어요. 같은 복구(refresh)로 채워요(#137).
+                if (needsRecovery(ctx, page)) void refresh();
             } catch (error) {
                 if (!ctx.valid() || epoch !== generation) return;
                 if (denied(error)) block((error as RoomError).code as 'NOT_ROOM_MEMBER' | 'ROOM_NOT_FOUND');
@@ -466,15 +562,18 @@ export function useRoomChat(roomId: string, mock?: string) {
             historyError: null,
         }));
 
+        const requestedCursor = ctx.cursor;
         try {
             const page = await fetchChatMessages(roomId, {
-                cursor: ctx.cursor,
+                cursor: requestedCursor,
                 mock: scenario,
             });
 
             if (!ctx.valid() || actionId !== ctx.actionId) return;
+            // 그사이 재연결 복구가 목록 범위를 바꿨으면(cursor 변경) 이 페이지는 이어지지 않아 버려요(#137).
+            if (ctx.cursor !== requestedCursor) return;
 
-            page.items.forEach(message => ctx.knownIds.add(message.id));
+            page.items.forEach(message => { ctx.knownIds.add(message.id); ctx.syncedIds.add(message.id); });
             ctx.cursor = page.nextCursor;
             ctx.hasMore = page.hasMore;
 
@@ -551,6 +650,7 @@ export function useRoomChat(roomId: string, mock?: string) {
                 const latest = await fetchChatMessages(roomId);
                 if (!ctx.valid() || actionId !== ctx.actionId) return;
                 update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, latest.items) }));
+                if (needsRecovery(ctx, latest)) void refresh();
                 const saved = latest.items.find(message => !knownIds.has(message.id) && message.senderType === 'USER'
                     && message.senderId === getSession()?.userId && message.content === entry.content);
                 latest.items.forEach(message => ctx.knownIds.add(message.id));
