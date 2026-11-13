@@ -20,7 +20,7 @@ import RouteTimeSelector from '@/components/route/RouteTimeSelector';
 import RouteTimeNotice from '@/components/route/RouteTimeNotice';
 import { routeTimeOptions } from '@/utils/route-time';
 import { searchRoute } from '@/services/route';
-import { searchStations } from '@/services/station';
+import { fetchStation, searchStations } from '@/services/station';
 import { useMock as isMockMode } from '@/services/api/config';
 import { ApiError, isAuthError } from '@/services/api/errors';
 import { setSelectedRoute } from '@/stores/route-store';
@@ -83,9 +83,12 @@ export default function RouteSearchScreen() {
     const insets = useSafeAreaInsets();
 
     // 홈 화면 등에서 넘겨받은 초기값 (#32)
+    // departureId·destinationId(#140)가 있으면 이름 재검색 없이 그 역 ID 로 요청해요. 이름은 표시용 대체값이에요.
     const params = useLocalSearchParams<{
         departure?: string;
         destination?: string;
+        departureId?: string;
+        destinationId?: string;
         focus?: Field;
         arrivals?: string;
         roomId?: string;
@@ -134,17 +137,25 @@ export default function RouteSearchScreen() {
                 return null;
             }
         };
-        const fill = async (field: Field, name: string) => {
+        // ID 로 넘어온 역은 5.3 역 상세로 이름·노선을 채워요. 조회에 실패하면 넘겨받은 이름과 그 ID 로 그대로 요청해요.
+        const findById = async (stationId: number, name: string | undefined): Promise<StationSummary | null> => {
+            try { return toStationSummary(await fetchStation(stationId)); }
+            catch { return name?.trim() ? { id: stationId, name: name.trim(), lines: [], isSupported: true } : null; }
+        };
+        const fill = async (field: Field, name: string | undefined, rawId: string | undefined) => {
+            const stationId = rawId && /^\d+$/.test(rawId) ? Number(rawId) : NaN;
+            const byId = Number.isSafeInteger(stationId) && stationId > 0;
+            if (!byId && !name) return;
             const id = ++initialLookupId.current[field];
-            const station = await find(name);
+            const station = byId ? await findById(stationId, name) : await find(name!);
             if (!active || id !== initialLookupId.current[field]) return;
             if (field === 'departure') setDeparture(station);
             else setDestination(station);
         };
-        if (params.departure) void fill('departure', params.departure);
-        if (params.destination) void fill('destination', params.destination);
+        void fill('departure', params.departure, params.departureId);
+        void fill('destination', params.destination, params.destinationId);
         return () => { active = false; };
-    }, [params.departure, params.destination]);
+    }, [params.departure, params.destination, params.departureId, params.destinationId]);
 
     useEffect(() => {
         if (params.focus) openPicker(params.focus, null);

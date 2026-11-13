@@ -21,6 +21,18 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { openStationPicker, type Station } from '@/app/station-search';
 import { formatMonthDay, formatTime } from '@/constants/home-mock';
 import {
+    formatBoardingTrain,
+    formatLeg,
+    formatLegTrain,
+    formatLegTransfer,
+    formatSlack,
+    formatTripLine,
+    sourceNote,
+    stalePlanText,
+    staleReasonText,
+} from '@/utils/recommendation-trip';
+import { formatSeoulTime } from '@/utils/seoul-time';
+import {
     createRecommendation,
     fetchLatestRecommendation,
     fetchRecommendation,
@@ -418,7 +430,14 @@ export default function RoomRecommendationsScreen() {
     const openRoute = (item: RecommendationResult) => {
         router.push({
             pathname: '/route-search',
-            params: { departure: me?.departureStation?.name ?? '', destination: item.recommendedStation.name, roomId },
+            // #140: 역 ID 로 넘겨 이름 재검색 없이 정확한 역으로 요청해요(이름은 표시용 대체값).
+            params: {
+                departure: me?.departureStation?.name ?? '',
+                ...(me?.departureStation ? { departureId: String(me.departureStation.id) } : {}),
+                destination: item.recommendedStation.name,
+                destinationId: String(item.recommendedStation.id),
+                roomId,
+            },
         });
     };
 
@@ -685,7 +704,7 @@ export default function RoomRecommendationsScreen() {
                         <Ionicons name="alert-circle" size={18} color={ORANGE} />
                         <View style={styles.flex}>
                             <Text style={styles.staleTitle}>
-                                {[run.staleReasons?.includes('APPOINTMENT_CHANGED') && '약속 시각이 바뀌었어요', run.staleReasons?.includes('MEMBERS_CHANGED') && '참여자나 출발역이 바뀌었어요'].filter(Boolean).join(' · ')}
+                                {staleReasonText(run.staleReasons)}
                             </Text>
                             <Text style={styles.staleBody}>{blockReason ?? '지금 조건으로 다시 추천받아 보세요. 기존 약속역 후보는 그대로 남아요.'}</Text>
                         </View>
@@ -752,6 +771,28 @@ export default function RoomRecommendationsScreen() {
                                 <View style={styles.lineRow}>{result.recommendedStation.lines?.map(line => <LineDot key={line.lineId} color={line.color} name={line.lineName} size={22} />)}</View>
                             </View>
 
+                            {/* 내 출발·도착 우선 (#153): 출발 → 도착, 약속까지 여유, 탑승 열차, 계산 근거, 이전 계획 안내 */}
+                            {(() => {
+                                const mine = result.participantTimes.find(p => p.userId === myUserId);
+                                if (!mine) return null;
+                                const slack = formatSlack(mine.slackSeconds);
+                                return (
+                                    <View style={styles.myTrip} accessibilityLabel="내 이동">
+                                        <Text style={styles.myTripLabel}>내 이동</Text>
+                                        <Text style={styles.myTripTime}>{formatTripLine(mine, detail?.appointmentAt ?? null)}</Text>
+                                        {!!slack && <Text style={[styles.myTripSlack, (mine.slackSeconds ?? 0) < 0 && styles.myTripLate]}>{slack}</Text>}
+                                        {mine.boardingTrain && (
+                                            <View style={styles.myTripTrain}>
+                                                <Ionicons name="train-outline" size={14} color={NAVY} />
+                                                <Text style={styles.myTripTrainText}>{formatBoardingTrain(mine.boardingTrain)}</Text>
+                                            </View>
+                                        )}
+                                        <Text style={styles.myTripNote}>{sourceNote(mine.source)}</Text>
+                                        {run.isStale === true && <Text style={styles.myTripStale}>{stalePlanText(run.staleReasons)}</Text>}
+                                    </View>
+                                );
+                            })()}
+
                             {/* ❸ 이동 정보 요약 — 모두 추정치라 "예상" 라벨 */}
                             <View style={styles.metrics}>
                                 <Metric label="평균 예상 시간" value={`${Math.round(result.metrics.averageMinutes)}분`} />
@@ -769,6 +810,8 @@ export default function RoomRecommendationsScreen() {
                                         color={AVATAR_COLORS[index % AVATAR_COLORS.length]}
                                         maxMinutes={result.metrics.maxMinutes}
                                         mine={p.userId === myUserId}
+                                        appointmentAt={detail?.appointmentAt ?? null}
+                                        stalePlan={run.isStale === true ? stalePlanText(run.staleReasons) : null}
                                         opened={openedParticipant === p.userId}
                                         onPress={() => setOpenedParticipant(prev => (prev === p.userId ? null : p.userId))}
                                     />
@@ -854,7 +897,8 @@ function Metric({ label, value, accent }: { label: string; value: string; accent
 }
 
 /** 그림 33 참여자 막대 + 그림 37 상세(탭) */
-function ParticipantRow({ participant: p, color, maxMinutes, mine, opened, onPress }: { participant: ParticipantTime; color: string; maxMinutes: number; mine: boolean; opened: boolean; onPress: () => void }) {
+function ParticipantRow({ participant: p, color, maxMinutes, mine, appointmentAt, stalePlan, opened, onPress }: { participant: ParticipantTime; color: string; maxMinutes: number; mine: boolean; appointmentAt: string | null; stalePlan: string | null; opened: boolean; onPress: () => void }) {
+    const slack = formatSlack(p.slackSeconds);
     const ratio = maxMinutes > 0 ? Math.max(0.08, p.travelMinutes / maxMinutes) : 0;
     // 서버는 혼잡도 데이터가 없으면 congestion: null 이에요. 이때는 점·라벨과 안내의 혼잡도 부분만 숨겨요.
     const congestionColor = p.congestion ? CONGESTION_COLOR[p.congestion.level] ?? SECONDARY : SECONDARY;
@@ -870,17 +914,37 @@ function ParticipantRow({ participant: p, color, maxMinutes, mine, opened, onPre
             {opened && (
                 <View style={styles.participantDetail}>
                     <Text style={styles.detailTitle}>{p.nickname}님의 경로 · {formatStationName(p.departureStation.name)} 출발</Text>
-                    {p.segments.map((seg, i) => (
-                        <View key={i} style={styles.segmentRow}>
-                            <LineDot color={seg.color} name={seg.lineName} />
-                            <Text style={styles.segmentText}>{seg.fromStationName} → {seg.toStationName} · {seg.stationCount}개 역</Text>
-                        </View>
-                    ))}
+                    {/* #153: 출발 → 도착(서울 기준)·여유·탑승 열차(열차 번호는 상세에서만) */}
+                    <Text style={styles.detailTrip}>{formatTripLine(p, appointmentAt)}{slack ? ` · ${slack}` : ''}</Text>
+                    {p.boardingTrain && <Text style={styles.segmentText}>탑승 {formatBoardingTrain(p.boardingTrain, true)}</Text>}
+                    {!!stalePlan && <Text style={styles.myTripStale}>{stalePlan}</Text>}
+                    {p.legs.length > 0
+                        ? p.legs.map((leg, i) => {
+                            const transfer = i > 0 ? formatLegTransfer(leg) : null;
+                            return (
+                                <View key={i}>
+                                    {!!transfer && <Text style={styles.legTransfer}>{transfer}</Text>}
+                                    <View style={styles.segmentRow}>
+                                        <LineDot color={p.segments.find(seg => seg.lineId === leg.lineId)?.color ?? SECONDARY} name={leg.lineName} />
+                                        <View style={styles.flex}>
+                                            <Text style={styles.segmentText}>{formatLeg(leg)}</Text>
+                                            <Text style={styles.legTrain}>{formatLegTrain(leg)}</Text>
+                                        </View>
+                                    </View>
+                                </View>
+                            );
+                        })
+                        : p.segments.map((seg, i) => (
+                            <View key={i} style={styles.segmentRow}>
+                                <LineDot color={seg.color} name={seg.lineName} />
+                                <Text style={styles.segmentText}>{seg.fromStationName} → {seg.toStationName} · {seg.stationCount}개 역</Text>
+                            </View>
+                        ))}
                     <View style={styles.detailMeta}>
                         <Text style={styles.detailMetaText}>환승 {p.transferCount}회 · 예상 {p.fareWon.toLocaleString()}원 · {(p.distanceM / 1000).toFixed(1)}km</Text>
                         {p.congestion && <View style={styles.congestion}><View style={[styles.congestionDot, { backgroundColor: congestionColor }]} /><Text style={[styles.congestionText, { color: congestionColor }]}>{p.congestion.levelLabel}</Text></View>}
                     </View>
-                    <Text style={styles.detailHint}>출발 예정 {formatTime(new Date(p.departureAt))}{p.congestion ? ' 기준 혼잡도' : ''} · 다익스트라 추정치예요</Text>
+                    <Text style={styles.detailHint}>출발 예정 {formatSeoulTime(p.departureAt)}{p.congestion ? ' 기준 혼잡도' : ''} · {sourceNote(p.source)}</Text>
                 </View>
             )}
         </Pressable>
@@ -1023,6 +1087,18 @@ const styles = StyleSheet.create({
     metric: { flex: 1, alignItems: 'center', gap: 4, borderRightWidth: 1, borderRightColor: BORDER },
     metricLabel: { fontSize: 11.5, fontWeight: '600', color: SECONDARY },
     metricValue: { fontSize: 20, fontWeight: '800', color: NAVY },
+    myTrip: { marginTop: 12, padding: 12, borderRadius: 12, backgroundColor: '#f3f5f8', gap: 4 },
+    myTripLabel: { color: SECONDARY, fontSize: 12, fontWeight: '700' },
+    myTripTime: { color: NAVY, fontSize: 18, fontWeight: '800' },
+    myTripSlack: { color: MINT_DEEP, fontSize: 13, fontWeight: '700' },
+    myTripLate: { color: RED },
+    myTripTrain: { flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' },
+    myTripTrainText: { flexShrink: 1, color: NAVY, fontSize: 13, fontWeight: '600' },
+    myTripNote: { color: SECONDARY, fontSize: 11.5 },
+    myTripStale: { color: ORANGE, fontSize: 12, fontWeight: '600' },
+    detailTrip: { color: NAVY, fontSize: 13, fontWeight: '700', marginBottom: 4 },
+    legTransfer: { color: SECONDARY, fontSize: 12, marginLeft: 26, marginVertical: 2 },
+    legTrain: { color: SECONDARY, fontSize: 11.5 },
     estimateNote: { fontSize: 11.5, lineHeight: 16, fontWeight: '500', color: SECONDARY, marginTop: -6 },
 
     participants: { gap: 4 },
