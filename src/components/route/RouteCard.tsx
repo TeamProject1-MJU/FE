@@ -1,5 +1,5 @@
 import RouteNotices from '@/components/route/RouteNotices';
-import { formatClock, formatDirection, formatTotalTime, formatWait } from '@/components/route/format';
+import { formatClock, formatDirection, formatTotalTime, formatWait, formatWalkBeforeRide } from '@/components/route/format';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -138,7 +138,8 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
             {route.steps.map((step, index) => {
                 if (step.type !== 'SUBWAY') return null;
                 const previous = route.steps[index - 1];
-                const transferWalk = index > 0 && previous?.type === 'WALKING' ? toMinutes(previous.durationSec) : null;
+                // 바로 앞 WALKING: 환승 도보 / 환승 소요 / 도보 (#146, format.ts formatWalkBeforeRide)
+                const walkLabel = index > 0 && previous?.type === 'WALKING' ? formatWalkBeforeRide(route.steps, index - 1) : null;
                 const color = step.line?.color ?? WALK;
 
                 return (
@@ -151,8 +152,8 @@ export default function RouteCard({ route, expanded, badgeLabel, onPress, onStar
                         <View style={styles.stepBody}>
                             <View style={styles.row}>
                                 <Text style={styles.stationName}>{step.stops[0]?.name}</Text>
-                                {transferWalk != null && (
-                                    <Text style={styles.greenText}>  환승 도보 {transferWalk}분</Text>
+                                {walkLabel != null && (
+                                    <Text style={styles.greenText}>  {walkLabel}</Text>
                                 )}
                             </View>
 
