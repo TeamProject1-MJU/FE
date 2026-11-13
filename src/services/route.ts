@@ -44,7 +44,7 @@ const isNumber = (value: unknown): value is number => typeof value === 'number' 
 const isNullableString = (value: unknown): value is string | null => value === null || typeof value === 'string';
 const LEVELS = ['COMFORTABLE', 'RELAXED', 'NORMAL', 'CROWDED', 'VERY_CROWDED'];
 const KINDS = ['PREDICTED', 'ESTIMATED', 'MOCK'];
-const WAIT_KINDS = ['REALTIME', 'ESTIMATED', 'NONE'];
+const WAIT_KINDS = ['REALTIME', 'ESTIMATED', 'NONE', 'TIMETABLE'];
 
 /** 6.1은 kind를 받아요. 데이터 없음은 화면이 안전하게 읽을 수 있는 모양으로 정리해요. */
 function parseCongestion(value: unknown): Congestion {
@@ -66,8 +66,9 @@ function parseCongestion(value: unknown): Congestion {
 /** 대기 필드는 없으면 그대로 두고, 내려오는 경우에만 타입을 검사해요. */
 function validateWait(value: Record<string, unknown>, summary: boolean) {
     if (('waitSec' in value && value.waitSec !== null && !isNumber(value.waitSec))
-        || ('waitKind' in value && !WAIT_KINDS.includes(value.waitKind as string))
-        || (summary && ['transferWaitSec', 'totalWithWaitSec'].some(key => key in value && !isNumber(value[key])))
+        || ('waitKind' in value && value.waitKind !== null && !WAIT_KINDS.includes(value.waitKind as string))
+        || (summary && 'transferWaitSec' in value && !isNumber(value.transferWaitSec))
+        || (summary && 'totalWithWaitSec' in value && value.totalWithWaitSec !== null && !isNumber(value.totalWithWaitSec))
         || (!summary && 'nextTrains' in value && (!Array.isArray(value.nextTrains)
             || !value.nextTrains.every(train => isRecord(train)
                 && typeof train.destinationLabel === 'string'
@@ -189,6 +190,11 @@ export async function searchRoute(
 
     if (!origin.isSupported || !destination.isSupported) {
         throw new RouteSearchError('STATION_UNSUPPORTED', '서비스에서 지원하지 않는 역이에요.');
+    }
+
+    // 동일 역도 정상 상태예요. mock에서는 이동 경로를 만들지 않아요.
+    if (origin.id === destination.id) {
+        return { appointmentPassed: false, notice: null, routeSource: 'INTERNAL', routes: [] };
     }
 
     const result = findMockRoutes(origin.name, destination.name);
