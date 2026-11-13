@@ -1729,8 +1729,21 @@ const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve()
 
 const userData = () => ({ id: 'user-1', nickname: '새닉네임', createdAt: '2026-11-11T00:00:00Z' });
 
+/** #130: 마이 화면은 기기 권한을 조회하므로 포커스 효과와 권한 조회를 지정해요. */
+function myPermissionSetup(runtime) {
+    runtime.permissions = { camera: { status: 'granted', granted: true }, location: { status: 'granted', granted: true } };
+    // 실제 React처럼 안정적인 콜백을 써서 포커스 효과가 렌더마다 다시 돌지 않게 해요.
+    runtime.external.react.useCallback = (callback, dependencies) => {
+        const ref = runtime.external.react.useRef(null);
+        if (!ref.current || dependencies.some((value, index) => value !== ref.current.dependencies[index])) ref.current = { callback, dependencies };
+        return ref.current.callback;
+    };
+    runtime.external['expo-router'].useFocusEffect = callback => runtime.external.react.useEffect(callback, [callback]);
+    runtime.external['expo-image-picker'] = { ...runtime.external['expo-image-picker'], getCameraPermissionsAsync: async () => runtime.permissions.camera };
+    runtime.external['expo-location'] = { ...runtime.external['expo-location'], getForegroundPermissionsAsync: async () => runtime.permissions.location };
+}
 async function myScreenRuntime() {
-    const r = createScreenRuntime(serverEnv, 'src/app/my.tsx');
+    const r = createScreenRuntime(serverEnv, 'src/app/my.tsx', myPermissionSetup);
     r.load('src/stores/auth-store.ts').signIn({ userId: 'user-1', nickname: '이전이름' });
     r.context.fetch = async () => ok(userData());
     r.render(); await flush();
@@ -6347,4 +6360,324 @@ test('125 mock 모드 화면은 #125 이전과 같은 트리·스타일·동작�
             `일부러 바꾼 거라면 기준 파일 다시 만들기: ${MOCK_FIXTURE_UPDATE125}`,
         ].join('\n'));
     }
+});
+
+/* ---------- #130 서버 모드 시작 흐름과 마이페이지 권한 표시 ---------- */
+
+const SEEN_KEY130 = 'linkro.onboardingSeen';
+/** 기기 저장소(expo-secure-store)와 웹 localStorage 를 가짜로 둬요. */
+function storage130(runtime, platform = 'ios') {
+    runtime.native.Platform.OS = platform;
+    const disk = new Map(); const faults = { read: false, write: false, hang: false }; const calls = [];
+    runtime.external['expo-secure-store'] = {
+        getItemAsync: async key => { calls.push(['get', key]); if (faults.hang) return new Promise(() => {}); if (faults.read) throw Error(); return disk.get(key) ?? null; },
+        setItemAsync: async (key, value) => { calls.push(['set', key, value]); if (faults.hang) return new Promise(() => {}); if (faults.write) throw Error(); disk.set(key, value); },
+    };
+    const web = new Map();
+    runtime.context.localStorage = {
+        getItem: key => { calls.push(['web-get', key]); if (faults.read) throw Error(); return web.get(key) ?? null; },
+        setItem: (key, value) => { calls.push(['web-set', key, value]); if (faults.write) throw Error(); web.set(key, String(value)); },
+    };
+    return { disk, web, faults, calls };
+}
+
+test('130 시작 갈 곳 규칙: mock 은 항상 온보딩, 세션 있으면 홈, 없으면 본 적 여부로 온보딩·로그인', () => {
+    const { startDestination } = createRuntime().load('src/utils/start-flow.ts');
+    for (const status of ['unknown', 'restoring', 'signedIn', 'signedOut']) for (const seen of [false, true]) {
+        assert.equal(startDestination({ mock: true, status, seen }), '/onboarding-1');
+        assert.equal(startDestination({ mock: false, status, seen }), status === 'signedIn' ? '/home' : seen ? '/login' : '/onboarding-1');
+    }
+});
+
+test('130 저장 모듈: 기기·웹 읽기·쓰기, 실패·멈춤은 예외 없이 본 적 없음·false', async () => {
+    for (const platform of ['ios', 'android', 'web']) {
+        const r = createRuntime(serverEnv); const s = storage130(r, platform);
+        const { readOnboardingSeen, markOnboardingSeen } = r.load('src/services/onboarding-seen.ts');
+        assert.equal(await readOnboardingSeen(), false);
+        assert.equal(await markOnboardingSeen(), true);
+        assert.equal(await readOnboardingSeen(), true);
+        const store = platform === 'web' ? s.web : s.disk;
+        assert.deepEqual([...store.entries()], [[SEEN_KEY130, '1']]);
+        assert.equal((platform === 'web' ? s.disk : s.web).size, 0);
+        s.faults.read = true; assert.equal(await readOnboardingSeen(), false);
+        s.faults.read = false; s.faults.write = true; store.clear();
+        assert.equal(await markOnboardingSeen(), false); assert.equal(await readOnboardingSeen(), false);
+        store.set(SEEN_KEY130, 'yes'); s.faults.write = false; assert.equal(await readOnboardingSeen(), false);
+        if (platform !== 'web') {
+            s.faults.hang = true; const pending = markOnboardingSeen(); await settle();
+            r.advance(999); let done = false; void pending.then(() => { done = true; }); await settle(); assert.equal(done, false);
+            r.advance(1); assert.equal(await pending, false); assert.equal(r.timers.size, 0);
+        }
+    }
+    // 웹에서 localStorage 가 없거나 접근 자체가 막혀도 예외를 던지지 않아요.
+    for (const broken of [undefined, 'throw']) {
+        const r = createRuntime(serverEnv); r.native.Platform.OS = 'web';
+        if (broken === 'throw') Object.defineProperty(r.context, 'localStorage', { get() { throw Error('SecurityError'); } });
+        const { readOnboardingSeen, markOnboardingSeen } = r.load('src/services/onboarding-seen.ts');
+        assert.equal(await readOnboardingSeen(), false); assert.equal(await markOnboardingSeen(), false);
+    }
+    // 기기에서 저장소 모듈을 불러오지 못해도 예외를 던지지 않아요.
+    const r = createRuntime(serverEnv); r.native.Platform.OS = 'ios';
+    const { readOnboardingSeen, markOnboardingSeen } = r.load('src/services/onboarding-seen.ts');
+    assert.equal(await readOnboardingSeen(), false); assert.equal(await markOnboardingSeen(), false);
+});
+
+/** 시작 화면(index.tsx). Animated 는 가짜로 두고 이동만 기록해요. */
+function splash130(env = serverEnv, platform = 'ios') {
+    let storage;
+    const r = createScreenRuntime(env, 'src/app/index.tsx', runtime => {
+        storage = storage130(runtime, platform);
+        runtime.native.Animated = { Value: class { interpolate() { return this; } }, View: 'Animated.View', timing: () => ({}), parallel: () => ({ start() {} }), multiply: () => 0, subtract: () => 0 };
+        runtime.native.Easing = { out: value => value, ease: 0 };
+    });
+    r.storage = storage; r.routes = [];
+    r.external['expo-router'].router.replace = route => r.routes.push(route);
+    r.store = r.load('src/stores/auth-store.ts');
+    return r;
+}
+
+test('130 서버 시작 화면: 세션 있음은 홈, 세션 없음은 본 적 여부로 온보딩·로그인, 읽기 실패는 온보딩', async () => {
+    for (const [name, prepare, expected] of [
+        ['세션 있음', r => { r.store.signIn({ userId: 'u', nickname: 'n' }); r.storage.disk.set(SEEN_KEY130, '1'); }, '/home'],
+        ['세션 있음 + 본 적 없음', r => r.store.signIn({ userId: 'u', nickname: 'n' }), '/home'],
+        ['세션 없음 + 본 적 없음', r => r.store.signOut(), '/onboarding-1'],
+        ['세션 없음 + 본 적 있음', r => { r.store.signOut(); r.storage.disk.set(SEEN_KEY130, '1'); }, '/login'],
+        ['세션 없음 + 읽기 실패', r => { r.store.signOut(); r.storage.disk.set(SEEN_KEY130, '1'); r.storage.faults.read = true; }, '/onboarding-1'],
+    ]) {
+        const r = splash130(); prepare(r);
+        r.render(); await settle();
+        r.advance(1499); await settle(); assert.deepEqual(r.routes, [], name);
+        r.advance(1); await settle(); assert.deepEqual(r.routes, [expected], name);
+        r.advance(5000); await settle(); assert.deepEqual(r.routes, [expected], name);
+        assert.ok(r.storage.calls.every(call => call[0] === 'get'), name);
+        r.unmount();
+    }
+});
+
+test('130 서버 시작 화면: 늦은 읽기는 도착하면 이동, 멈춘 읽기는 1초 더 기다린 뒤 온보딩, 떠난 뒤에는 이동 안 함', async () => {
+    // 늦은 읽기: 1.5초 뒤 도착하면 그때 이동해요.
+    let r = splash130(); r.store.signOut(); let resolve;
+    r.external['expo-secure-store'].getItemAsync = () => new Promise(done => { resolve = done; });
+    r.render(); await settle(); r.advance(1500); await settle(); assert.deepEqual(r.routes, []);
+    r.advance(400); resolve('1'); await settle(); assert.deepEqual(r.routes, ['/login']);
+    r.advance(5000); await settle(); assert.deepEqual(r.routes, ['/login']); r.unmount();
+    // 멈춘 읽기: 2.5초에 본 적 없는 것으로 보고 온보딩, 그 뒤 도착한 값은 무시해요.
+    r = splash130(); r.store.signOut();
+    r.external['expo-secure-store'].getItemAsync = () => new Promise(done => { resolve = done; });
+    r.render(); await settle(); r.advance(2499); await settle(); assert.deepEqual(r.routes, []);
+    r.advance(1); await settle(); assert.deepEqual(r.routes, ['/onboarding-1']);
+    resolve('1'); await settle(); assert.deepEqual(r.routes, ['/onboarding-1']); r.unmount();
+    // 세션이 있으면 읽기를 기다리지 않아요.
+    r = splash130(); r.store.signIn({ userId: 'u', nickname: 'n' }); r.storage.faults.hang = true;
+    r.render(); await settle(); r.advance(1500); await settle(); assert.deepEqual(r.routes, ['/home']); r.unmount();
+    // 화면을 떠난 뒤에는 이동하지 않아요(애니메이션 중, 추가 대기 중 모두).
+    for (const leaveAt of [1000, 2000]) {
+        r = splash130(); r.store.signOut();
+        r.external['expo-secure-store'].getItemAsync = () => new Promise(done => { resolve = done; });
+        r.render(); await settle(); r.advance(leaveAt); await settle(); r.unmount();
+        resolve('1'); r.advance(5000); await settle(); assert.deepEqual(r.routes, []); assert.equal(r.timers.size, 0);
+    }
+});
+
+test('130 mock 시작 화면은 이전과 같이 1.5초 뒤 항상 온보딩이고 표시를 읽지도 쓰지도 않아요', async () => {
+    for (const platform of ['ios', 'web']) for (const signedIn of [false, true]) {
+        const r = splash130({}, platform); r.storage.disk.set(SEEN_KEY130, '1'); r.storage.web.set(SEEN_KEY130, '1');
+        if (signedIn) r.store.signIn({ userId: 'u', nickname: 'n' });
+        r.render(); await settle(); r.advance(1499); assert.deepEqual(r.routes, []);
+        r.advance(1); assert.deepEqual(r.routes, ['/onboarding-1']);
+        assert.deepEqual(r.storage.calls, []); assert.equal(r.timers.size, 0); r.unmount();
+    }
+});
+
+test('130 공개 경로: 로그인 전에도 /·/permission·온보딩·로그인은 열리고 나머지는 /login 으로', () => {
+    const publicPaths = ['/', '/permission', '/login', '/onboarding-1', '/onboarding-3'];
+    const privatePaths = ['/home', '/my', '/route-guide', '/rooms', '/permission/extra', '/permissions', '/login2', '/ai-direction'];
+    for (const status of ['signedOut', 'signedIn']) for (const pathname of [...publicPaths, ...privatePaths]) {
+        const r = createRuntime(serverEnv, { useEffect() {}, useState: () => ['', () => {}], useSyncExternalStore: (_, get) => get() });
+        r.external['expo-router'].usePathname = () => pathname;
+        r.external['expo-router'].Redirect = 'Redirect';
+        const module = r.load('src/components/auth-gate.tsx');
+        const store = r.load('src/stores/auth-store.ts');
+        if (status === 'signedOut') store.signOut(); else store.signIn({ userId: 'u', nickname: 'n' });
+        const view = module.default({ children: '화면' });
+        const open = status === 'signedIn' || publicPaths.includes(pathname);
+        assert.equal(module.isPublicRoute(pathname), publicPaths.includes(pathname), pathname);
+        if (open) assert.deepEqual(plain(view.props.children.filter(Boolean)), ['화면'], pathname);
+        else { assert.equal(view.type, 'Redirect', pathname); assert.equal(view.props.href, '/login'); }
+        // 복원 중에는 공개 경로여도 지금처럼 가려요.
+        store.startRestoring();
+        assert.ok(findElement(module.default({ children: '화면' }), element => element.type === 'ActivityIndicator'), pathname);
+    }
+});
+
+/** 권한 안내 화면 */
+function permission130(env = serverEnv) {
+    let storage;
+    const r = createScreenRuntime(env, 'src/app/permission.tsx', runtime => { storage = storage130(runtime, 'ios'); });
+    r.storage = storage; r.order = [];
+    r.external['expo-router'].router.replace = route => r.order.push(['route', route]);
+    const origin = storage.calls.push.bind(storage.calls);
+    storage.calls.push = (...items) => { items.forEach(item => r.order.push(item)); return origin(...items); };
+    r.external['expo-image-picker'].requestCameraPermissionsAsync = async () => { r.order.push(['camera']); return { granted: false }; };
+    r.external['expo-location'].requestForegroundPermissionsAsync = async () => { r.order.push(['location']); throw Error(); };
+    r.button = text => findElement(r.render(), el => el.type === 'Pressable' && findText(el, text));
+    return r;
+}
+
+test('130 권한 안내: 서버 모드는 계속·나중에 둘 다 본 적 있음 저장 뒤 로그인, 저장 실패·멈춤에도 로그인', async () => {
+    for (const later of [false, true]) {
+        let r = permission130();
+        const pending = r.button(later ? '나중에 할게요' : '시작하기').props.onPress();
+        r.button('시작하기').props.onPress(); r.button('나중에 할게요').props.onPress(); // 이중 탭은 무시
+        await pending; await settle();
+        assert.deepEqual(r.order, [...(later ? [] : [['camera'], ['location']]), ['set', SEEN_KEY130, '1'], ['route', '/login']]);
+        assert.deepEqual([...r.storage.disk.entries()], [[SEEN_KEY130, '1']]); r.unmount();
+
+        r = permission130(); r.storage.faults.write = true;
+        await r.button(later ? '나중에 할게요' : '시작하기').props.onPress(); await settle();
+        assert.deepEqual(r.order.at(-1), ['route', '/login']); assert.equal(r.storage.disk.size, 0); r.unmount();
+
+        r = permission130(); r.storage.faults.hang = true;
+        const hung = r.button(later ? '나중에 할게요' : '시작하기').props.onPress(); await settle();
+        assert.equal(r.order.some(item => item[0] === 'route'), false);
+        r.advance(1000); await hung; await settle(); assert.deepEqual(r.order.at(-1), ['route', '/login']); r.unmount();
+    }
+});
+
+test('130 권한 안내: mock 모드는 저장하지 않고 이전처럼 로그인으로', async () => {
+    for (const later of [false, true]) {
+        const r = permission130({});
+        const result = r.button(later ? '나중에 할게요' : '시작하기').props.onPress();
+        if (later) assert.deepEqual(r.order, [['route', '/login']]); // 나중에는 이전처럼 바로 이동해요.
+        await result; await settle();
+        assert.deepEqual(r.order, [...(later ? [] : [['camera'], ['location']]), ['route', '/login']]);
+        assert.equal(r.storage.calls.length, 0); r.unmount();
+    }
+});
+
+test('130 권한 응답 → 표시 상태와 글자·동작·접근성 문구', () => {
+    const { toPermissionState, PERMISSION_DISPLAY, permissionAccessibilityLabel, APP_PERMISSIONS } = createRuntime().load('src/utils/app-permission.ts');
+    const cases = [
+        [{ status: 'granted', granted: true, canAskAgain: true }, 'granted'], [{ status: 'denied', granted: false, canAskAgain: false }, 'denied'],
+        [{ status: 'denied', granted: false, canAskAgain: true }, 'denied'], [{ status: 'undetermined', granted: false, canAskAgain: true }, 'undetermined'],
+        [{ granted: true }, 'granted'], [{ granted: false }, 'unknown'], [{ status: 'future' }, 'unknown'], [null, 'unknown'], [undefined, 'unknown'], ['granted', 'unknown'],
+    ];
+    for (const [response, expected] of cases) assert.equal(toPermissionState(response), expected, JSON.stringify(response));
+    assert.deepEqual(plain(PERMISSION_DISPLAY), {
+        granted: { text: '허용', hint: '', action: 'settings', spoken: '허용, 설정 열기' },
+        denied: { text: '허용 안 함', hint: '설정에서 바꿀 수 있어요', action: 'settings', spoken: '허용 안 함, 설정에서 바꿀 수 있어요. 설정 열기' },
+        undetermined: { text: '아직 묻지 않음', hint: '눌러서 허용할 수 있어요', action: 'request', spoken: '아직 묻지 않음, 눌러서 권한 요청' },
+        unknown: { text: '확인할 수 없음', hint: '눌러서 다시 확인해요', action: 'refresh', spoken: '확인할 수 없음, 눌러서 다시 확인' },
+    });
+    assert.equal(permissionAccessibilityLabel('카메라', 'loading'), '카메라 권한 확인 중');
+    assert.equal(permissionAccessibilityLabel('위치', 'denied'), '위치 권한 허용 안 함, 설정에서 바꿀 수 있어요. 설정 열기');
+    assert.deepEqual(plain(APP_PERMISSIONS), [{ key: 'camera', label: '카메라' }, { key: 'location', label: '위치' }]);
+});
+
+/** 마이 화면의 권한 줄. 조회·요청·설정 열기를 기록해요. */
+function myPermission130(env = serverEnv) {
+    const r = createScreenRuntime(env, 'src/app/my.tsx', runtime => {
+        myPermissionSetup(runtime);
+        let focus; let blur;
+        runtime.external['expo-router'].useFocusEffect = callback => { if (focus !== callback) { blur?.(); focus = callback; blur = callback(); } };
+        runtime.blur = () => { blur?.(); blur = undefined; };
+        runtime.focus = () => { blur = focus(); };
+        runtime.mock = { queries: [], requests: [], opened: 0 };
+        runtime.native.Linking = { openSettings: async () => { runtime.mock.opened++; } };
+        const picker = runtime.external['expo-image-picker']; const location = runtime.external['expo-location'];
+        picker.getCameraPermissionsAsync = () => { runtime.mock.queries.push('camera'); return runtime.mock.answer('camera'); };
+        location.getForegroundPermissionsAsync = () => { runtime.mock.queries.push('location'); return runtime.mock.answer('location'); };
+        picker.requestCameraPermissionsAsync = async () => { runtime.mock.requests.push('camera'); return runtime.permissions.cameraRequest; };
+        location.requestForegroundPermissionsAsync = async () => { runtime.mock.requests.push('location'); return runtime.permissions.locationRequest; };
+        runtime.mock.answer = async key => { const value = runtime.permissions[key]; if (value instanceof Error) throw value; return value; };
+    });
+    r.load('src/stores/auth-store.ts').signIn({ userId: 'user-1', nickname: '이전이름' });
+    r.context.fetch = async () => ok(userData());
+    r.row = (label, view = r.render()) => findElement(view, el => el.type === 'Pressable' && el.props.accessibilityLabel?.startsWith(`${label} 권한`));
+    r.shown = label => {
+        const row = r.row(label);
+        const texts = []; const collect = node => { if (Array.isArray(node)) node.forEach(collect); else if (node?.type === 'Text') texts.push(textOf(node)); else if (node?.props) collect(node.props.children); };
+        collect(row.props.children);
+        return { texts, label: row.props.accessibilityLabel, spinner: !!findElement(row.props.children, el => el.type === 'ActivityIndicator'), disabled: row.props.disabled };
+    };
+    return r;
+}
+const permission130State = status => ({ status, granted: status === 'granted', canAskAgain: status !== 'denied', expires: 'never' });
+
+test('130 마이 권한: 조회 중에는 가짜 값 없이 확인 중, 4가지 상태의 글자·안내·접근성 문구', async () => {
+    const r = myPermission130(); const finishers = []; const finish = () => finishers.splice(0).forEach(fn => fn());
+    r.permissions.camera = permission130State('denied');
+    r.mock.answer = key => new Promise(done => { finishers.push(done); }).then(() => r.permissions[key]);
+    r.render();
+    for (const label of ['카메라', '위치']) {
+        assert.deepEqual(plain(r.shown(label)), { texts: [label], label: `${label} 권한 확인 중`, spinner: true, disabled: true });
+    }
+    finish(); await flush();
+    for (const [status, text, hint, color] of [['granted', '허용', null, '#12a77a'], ['denied', '허용 안 함', '설정에서 바꿀 수 있어요', '#e5484d'],
+        ['undetermined', '아직 묻지 않음', '눌러서 허용할 수 있어요', '#6b7488'], [Error('조회 실패'), '확인할 수 없음', '눌러서 다시 확인해요', '#6b7488']]) {
+        const v = myPermission130(); v.permissions.camera = typeof status === 'string' ? permission130State(status) : status;
+        v.render(); await flush();
+        const shown = v.shown('카메라');
+        assert.deepEqual(plain(shown.texts), ['카메라', ...(hint ? [hint] : []), text]);
+        assert.equal(shown.spinner, false); assert.equal(shown.disabled, false);
+        assert.equal(shown.label, `카메라 권한 ${v.load('src/utils/app-permission.ts').PERMISSION_DISPLAY[typeof status === 'string' ? status : 'unknown'].spoken}`);
+        const stateText = findElement(v.row('카메라').props.children, el => el.type === 'Text' && textOf(el) === text);
+        assert.equal(stateText.props.style[1].color, color);
+        assert.deepEqual(plain(v.shown('위치').texts), ['위치', '허용']);
+        v.unmount();
+    }
+    r.unmount();
+});
+
+test('130 마이 권한: 허용·허용 안 함은 설정 열기, 아직 묻지 않음은 바로 요청 후 갱신, 확인할 수 없음은 다시 조회', async () => {
+    const r = myPermission130();
+    r.permissions.camera = permission130State('undetermined'); r.permissions.location = permission130State('denied');
+    r.permissions.cameraRequest = permission130State('granted');
+    r.render(); await flush(); assert.deepEqual(r.mock.queries, ['camera', 'location']);
+    r.row('위치').props.onPress(); await flush(); assert.equal(r.mock.opened, 1); assert.deepEqual(r.mock.requests, []);
+    r.row('카메라').props.onPress(); r.row('카메라').props.onPress(); await flush();
+    assert.deepEqual(r.mock.requests, ['camera']); assert.equal(r.mock.opened, 1);
+    assert.deepEqual(plain(r.shown('카메라').texts), ['카메라', '허용']);
+    r.row('카메라').props.onPress(); await flush(); assert.equal(r.mock.opened, 2); assert.deepEqual(r.mock.requests, ['camera']);
+    // 요청이 실패하면 확인할 수 없음, 누르면 다시 조회해요.
+    r.permissions.location = permission130State('undetermined'); r.mock.queries.length = 0;
+    r.render(); r.native.AppState.change('active'); await flush(); assert.deepEqual(plain(r.shown('위치').texts), ['위치', '눌러서 허용할 수 있어요', '아직 묻지 않음']);
+    r.permissions.locationRequest = undefined; r.row('위치').props.onPress(); await flush();
+    assert.deepEqual(plain(r.shown('위치').texts), ['위치', '눌러서 다시 확인해요', '확인할 수 없음']);
+    r.permissions.location = permission130State('granted'); r.mock.queries.length = 0;
+    r.row('위치').props.onPress(); await flush(); assert.deepEqual(r.mock.queries, ['camera', 'location']);
+    assert.deepEqual(plain(r.shown('위치').texts), ['위치', '허용']); assert.equal(r.mock.opened, 2);
+    r.unmount();
+});
+
+test('130 마이 권한: 앱이 다시 앞으로 오면(설정에서 돌아오면) 다시 조회해 갱신, 화면을 떠난 뒤 응답은 무시, 멈춘 조회는 확인할 수 없음', async () => {
+    const r = myPermission130(); r.render(); await flush();
+    assert.deepEqual(plain(r.shown('카메라').texts), ['카메라', '허용']);
+    r.permissions.camera = permission130State('denied'); r.mock.queries.length = 0;
+    r.native.AppState.change('background'); await flush(); assert.deepEqual(r.mock.queries, []);
+    r.native.AppState.change('active'); await flush(); assert.deepEqual(r.mock.queries, ['camera', 'location']);
+    assert.deepEqual(plain(r.shown('카메라').texts), ['카메라', '설정에서 바꿀 수 있어요', '허용 안 함']);
+    // 화면을 떠난 뒤에는 조회하지 않고, 늦게 온 응답도 반영하지 않아요. 다시 들어오면 조회해요.
+    const finishers = []; const finish = () => finishers.splice(0).forEach(fn => fn());
+    r.mock.answer = key => new Promise(done => { finishers.push(() => done(r.permissions[key])); });
+    r.native.AppState.change('active'); r.blur(); r.permissions.camera = permission130State('granted'); finish(); await flush();
+    assert.deepEqual(plain(r.shown('카메라').texts), ['카메라', '설정에서 바꿀 수 있어요', '허용 안 함']);
+    r.mock.queries.length = 0; r.native.AppState.change('active'); await flush(); assert.deepEqual(r.mock.queries, []);
+    r.mock.answer = async key => r.permissions[key]; r.focus(); await flush();
+    assert.deepEqual(r.mock.queries, ['camera', 'location']); assert.deepEqual(plain(r.shown('카메라').texts), ['카메라', '허용']);
+    // 조회가 멈추면 5초 뒤 확인할 수 없음이에요.
+    r.mock.answer = () => new Promise(() => {}); r.native.AppState.change('active'); await flush(); r.advance(5000); await flush();
+    assert.deepEqual(plain(r.shown('카메라').texts), ['카메라', '눌러서 다시 확인해요', '확인할 수 없음']);
+    r.unmount(); assert.equal(r.native.AppState.listeners.size, 0);
+});
+
+test('130 마이 권한은 mock 모드도 실제 조회 결과를 보여줘요', async () => {
+    const r = myPermission130({}); r.permissions.camera = permission130State('denied'); r.permissions.location = permission130State('undetermined');
+    r.render(); await flush(); r.advance(2000); await flush();
+    assert.deepEqual(r.mock.queries, ['camera', 'location']);
+    assert.deepEqual(plain(r.shown('카메라').texts), ['카메라', '설정에서 바꿀 수 있어요', '허용 안 함']);
+    assert.deepEqual(plain(r.shown('위치').texts), ['위치', '눌러서 허용할 수 있어요', '아직 묻지 않음']);
+    const source = fs.readFileSync(path.join(root, 'src/app/my.tsx'), 'utf8');
+    assert.equal(source.includes('MOCK_PERMISSIONS'), false); assert.equal(/granted:\s*true/.test(source), false);
+    r.unmount();
 });
