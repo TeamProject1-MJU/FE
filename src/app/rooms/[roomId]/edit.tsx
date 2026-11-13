@@ -22,6 +22,7 @@ import {
     fetchRoomDetail,
     ROOM_NAME_MAX,
     roomNameLength,
+    validateRoomName,
     updateRoom,
     type UpdateRoomPatch,
 } from '@/services/room';
@@ -64,8 +65,8 @@ type MockMode = 'error' | 'busy' | 'load-error';
  *   /rooms/room-4/edit?mock=load-error  → 첫 조회 실패, 다시 시도하면 성공
  *   /rooms/room-2/edit                  → 내가 MEMBER 인 방 → 권한 없음 화면
  *
- * ROOM_UPDATED 실시간 수신은 #117 에서 구현했어요(방 상세·추천 화면이 방 정보만 바꿔요, hooks/use-room-events.ts).
- * TODO: ROOM_UPDATED 를 받았을 때 8.2 재조회로 isStale 갱신하는 처리는 아직 없어요 (이슈 미정)
+ * ROOM_UPDATED 실시간 수신으로 방 상세·추천 화면의 방 정보를 바꿔요(#117, hooks/use-room-events.ts).
+ * 추천 화면은 8.2를 다시 조회해 서버의 isStale·staleReasons도 갱신해요(#136).
  */
 export default function RoomEditScreen() {
     const insets = useSafeAreaInsets();
@@ -170,8 +171,8 @@ export default function RoomEditScreen() {
 
     const validate = () => {
         const errors: { name?: string; time?: string } = {};
-        if (nameLength === 0) errors.name = '약속방 이름을 입력해 주세요.';
-        else if (nameLength > ROOM_NAME_MAX) errors.name = `약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`;
+        const nameError = validateRoomName(name);
+        if (nameError) errors.name = nameError;
         if (timePartial) errors.time = '약속 날짜와 시간을 모두 고르거나, 둘 다 비워 두세요.';
         else if (pickedAt && timeChanged && pickedAt.getTime() < Date.now()) errors.time = '지금 이후의 약속 시각을 선택해 주세요.';
         setFieldError(errors);
@@ -319,7 +320,6 @@ export default function RoomEditScreen() {
                             onChangeText={value => { setName(value); setFieldError(prev => ({ ...prev, name: undefined })); setSaveError(''); }}
                             placeholder="약속 이름을 입력하세요"
                             placeholderTextColor="#a1a8b8"
-                            maxLength={ROOM_NAME_MAX + 10}
                             returnKeyType="done"
                             editable={!saving && !saved}
                             accessibilityLabel="약속 이름"

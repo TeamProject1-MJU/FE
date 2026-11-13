@@ -53,6 +53,13 @@ export type RouteStationCongestion = {
 
 export type WaitKind = 'REALTIME' | 'ESTIMATED' | 'NONE' | 'TIMETABLE';
 
+/**
+ * 경로 단계 (명세 6.1)
+ * - 두 SUBWAY 사이의 WALKING 은 환승 단계예요. 시각표 기반 경로(약속방 모드, 8.1)에서는 이 단계의 durationSec 이
+ *   도보와 다음 열차 대기를 함께 포함해요(명세 v1.13: 하차부터 다음 승차까지). 도보와 대기를 나누는 필드는 없어요.
+ * - 그래서 다음 열차 대기(waitSec)가 따로 표시되지 않는 환승 단계는 "도보"가 아니라 "환승 소요 N분"으로 표시해요.
+ *   대기가 따로 표시되면 환승 단계는 걷는 시간만이라 "환승 도보 N분"이에요(#146, components/route/format.ts).
+ */
 export type RouteStep = {
     waitSec?: number | null;
     waitKind?: WaitKind | null;

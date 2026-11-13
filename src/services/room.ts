@@ -25,7 +25,7 @@ import { MOCK_STATIONS } from '@/mocks/stations';
 import { useMock as isMockMode } from '@/services/api/config';
 import { fetchStation } from '@/services/station';
 import { getSession } from '@/stores/auth-store';
-import { createServerRoom, joinServerRoom, fetchServerInviteCode, leaveServerRoom, setServerSelectedStation, updateServerDeparture, updateServerRoom, fetchServerRoomDetail, fetchServerRoomMembers, fetchServerRooms } from '@/services/room-query';
+import { createServerRoom, isRoomCreateOutcomeUnknown, joinServerRoom, fetchServerInviteCode, leaveServerRoom, setServerSelectedStation, updateServerDeparture, updateServerRoom, fetchServerRoomDetail, fetchServerRoomMembers, fetchServerRooms } from '@/services/room-query';
 import { createServerProposal, deleteServerProposal, fetchServerProposals, voteServerProposal } from '@/services/room-proposals';
 import { assertRoomCacheScope, getRoomCacheScope, readCachedMembers, readCachedRoom, subscribeRoomCacheReset } from '@/services/room-cache';
 import { forgetRoom } from '@/services/realtime';
@@ -51,10 +51,24 @@ const MOCK_DELAY_MS = 600;
 const MAX_MEMBERS = 4;
 /** 방 이름 길이 (명세 부록 A ck_room_name: char_length(btrim(name)) BETWEEN 1 AND 30) */
 export const ROOM_NAME_MAX = 30;
+export { isRoomCreateOutcomeUnknown };
+/** 방 생성 결과를 알 수 없을 때 생성 화면의 안내 (#144) */
+export const ROOM_CREATE_UNKNOWN_NOTICE = '방이 만들어졌을 수 있어요. 다시 만들기 전에 방 목록을 먼저 확인해 주세요.';
 
 /** 방 이름 글자 수: 앞뒤 공백을 빼고 글자 단위로 셉니다(서버와 같은 기준) */
 export function roomNameLength(value: string) {
     return Array.from(value.trim()).length;
+}
+
+/**
+ * 방 이름 검사 (#143): 생성·수정 화면과 서비스(서버·mock)가 모두 이 함수 하나로 판정하고 같은 문구를 써요.
+ * roomNameLength(앞뒤 공백 제외, 코드 포인트) 기준 1~30자면 null, 아니면 오류 문구예요.
+ */
+export function validateRoomName(value: string): string | null {
+    const length = roomNameLength(value);
+    if (length === 0) return '약속방 이름을 입력해 주세요.';
+    if (length > ROOM_NAME_MAX) return `약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`;
+    return null;
 }
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -400,16 +414,15 @@ export function mockTransferOwner(roomId: string, direction: 'give' | 'take') {
 export async function createRoom(request: CreateRoomRequest, failForTest = false): Promise<CreatedRoom> {
     if (!isMockMode()) {
         const name = typeof request?.name === 'string' ? request.name.trim() : '';
-        if (roomNameLength(name) === 0) throw new RoomError('VALIDATION_ERROR', '약속방 이름을 입력해 주세요.');
-        if (roomNameLength(name) > ROOM_NAME_MAX) throw new RoomError('VALIDATION_ERROR', `약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`);
+        const invalid = validateRoomName(name);
+        if (invalid) throw new RoomError('VALIDATION_ERROR', invalid);
         return createServerRoom({ name, appointmentAt: request.appointmentAt });
     }
     await wait(MOCK_DELAY_MS);
     if (failForTest) throw new RoomError('NETWORK_ERROR', '약속방을 만들지 못했어요. 잠시 후 다시 시도해 주세요.');
     const name = request.name.trim();
-    const length = roomNameLength(name);
-    if (length === 0) throw new RoomError('VALIDATION_ERROR', '약속방 이름을 입력해 주세요.');
-    if (length > ROOM_NAME_MAX) throw new RoomError('VALIDATION_ERROR', `약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`);
+    const invalid = validateRoomName(name);
+    if (invalid) throw new RoomError('VALIDATION_ERROR', invalid);
 
     const room: RoomSummary = {
         id: newId(),
@@ -637,8 +650,8 @@ const updateFailOnce = new Map<string, 'error' | 'busy'>();
  * - 이름은 앞뒤 공백 제거 후 1~30자 (명세 부록 A ck_room_name), 아니면 VALIDATION_ERROR(400)
  * - 방장이 아니면 NOT_ROOM_OWNER(403), 없는 방 ROOM_NOT_FOUND(404), 락 대기 초과 ROOM_BUSY(409, 7.12)
  * - 약속 시각을 바꿔도 추천을 새로 만들지 않고 기존 추천·후보·확정 약속역은 그대로 둡니다 (명세 7.5).
- *   ROOM_UPDATED 실시간 수신은 #117 에서 구현했어요(방 상세·추천 화면이 방 정보만 바꿔요).
- *   TODO: ROOM_UPDATED 를 받았을 때 8.2 재조회로 isStale 갱신하는 처리는 아직 없어요 (이슈 미정)
+ *   ROOM_UPDATED 실시간 수신으로 방 상세·추천 화면의 방 정보를 바꿔요(#117).
+ *   추천 화면은 8.2를 다시 조회해 서버의 isStale·staleReasons도 갱신해요(#136).
  * mock: 'error' 면 한 번 NETWORK_ERROR, 'busy' 면 한 번 ROOM_BUSY (다시 시도하면 성공)
  */
 export async function updateRoom(
@@ -651,8 +664,8 @@ export async function updateRoom(
         const next: UpdateRoomPatch = {};
         if (patch?.name !== undefined) {
             if (typeof patch.name !== 'string') throw new RoomError('VALIDATION_ERROR', '약속방 이름을 입력해 주세요.');
-            const length = roomNameLength(patch.name);
-            if (length === 0 || length > ROOM_NAME_MAX) throw new RoomError('VALIDATION_ERROR', `약속방 이름은 1~${ROOM_NAME_MAX}자로 입력해 주세요.`);
+            const invalid = validateRoomName(patch.name);
+            if (invalid) throw new RoomError('VALIDATION_ERROR', invalid);
             next.name = patch.name.trim();
         }
         if (patch?.appointmentAt !== undefined) next.appointmentAt = patch.appointmentAt;
@@ -665,9 +678,8 @@ export async function updateRoom(
 
     const next: UpdateRoomPatch = {};
     if (patch.name !== undefined) {
-        const length = roomNameLength(patch.name);
-        if (length === 0) throw new RoomError('VALIDATION_ERROR', '약속방 이름을 입력해 주세요.');
-        if (length > ROOM_NAME_MAX) throw new RoomError('VALIDATION_ERROR', `약속방 이름은 ${ROOM_NAME_MAX}자까지 쓸 수 있어요.`);
+        const invalid = validateRoomName(patch.name);
+        if (invalid) throw new RoomError('VALIDATION_ERROR', invalid);
         next.name = patch.name.trim();
     }
     if (patch.appointmentAt !== undefined) {

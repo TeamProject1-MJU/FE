@@ -1,4 +1,4 @@
-import { formatClock, formatDirection, formatWait } from '@/components/route/format';
+import { formatClock, formatDirection, formatWait, formatWalkingStep } from '@/components/route/format';
 import { type ReactNode, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -47,7 +47,8 @@ type Props = {
 
 /**
  * 경로 구간 목록 (#35)
- * 명세 6.1 route.steps 를 순서대로 그립니다: 승차 → (중간역) → 하차 → 환승 도보 → … → 도착
+ * 명세 6.1 route.steps 를 순서대로 그립니다: 승차 → (중간역) → 하차 → 환승 → … → 도착
+ * WALKING 은 "도보 N분"이고, 다음 열차 대기가 따로 표시되지 않는 환승 단계만 "환승 소요 N분"이에요(#146, format.ts formatWalkingStep).
  */
 export default function RouteTimeline({ route, onSignCheck, nextTrains }: Props) {
     const [openSteps, setOpenSteps] = useState<Record<number, boolean>>({});
@@ -72,7 +73,7 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains }: Props)
                             <View style={styles.walkBox}>
                                 <Ionicons name="walk-outline" size={18} color={MINT_DEEP} />
                                 <Text style={styles.walkText}>
-                                    {step.guidance} · 도보 {toMinutes(step.durationSec)}분
+                                    {formatWalkingStep(route.steps, index)}
                                     {step.distanceM > 0 ? ` · ${step.distanceM}m` : ''}
                                 </Text>
                             </View>
