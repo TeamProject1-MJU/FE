@@ -6,7 +6,6 @@ import {
     ActivityIndicator,
     BackHandler,
     KeyboardAvoidingView,
-    Linking,
     Platform,
     Pressable,
     ScrollView,
@@ -20,7 +19,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { fetchMe, logout, nicknameLength, updateNickname, validateNickname, withdraw } from '@/services/user';
+import { useAppPermissions } from '@/hooks/use-app-permissions';
 import { resetToLogin, useRedirectIfSignedOut } from '@/stores/auth-store';
+import { APP_PERMISSIONS, PERMISSION_DISPLAY, permissionAccessibilityLabel } from '@/utils/app-permission';
 import { NICKNAME_MAX, UserError, type UserProfile } from '@/types/user';
 
 const NAVY = '#0f1c3f';
@@ -45,11 +46,6 @@ function userErrorMessage(error: unknown, fallback: string): string {
     return fallback;
 }
 
-/** 앱 권한 상태 (TODO: expo-image-picker·expo-location 권한 조회로 교체) */
-const MOCK_PERMISSIONS: { key: string; label: string; granted: boolean }[] = [
-    { key: 'camera', label: '카메라', granted: true },
-    { key: 'location', label: '위치', granted: true },
-];
 
 const TAB_BAR_CONTENT_HEIGHT = 58;
 
@@ -57,6 +53,7 @@ const TAB_BAR_CONTENT_HEIGHT = 58;
  * 마이페이지 (#38, 상세설계서 5.5 그림 40~43, API 명세 4.3~4.6)
  *
  * 내 정보(닉네임·로그인 방식), 앱 권한, 로그아웃·회원 탈퇴.
+ * 앱 권한은 mock·서버 모드 모두 기기의 실제 권한 상태(카메라·위치)를 보여줘요(#130, use-app-permissions).
  * 닉네임 수정·로그아웃·회원 탈퇴는 상세설계서대로 아래에서 올라오는 시트로 엽니다.
  * 서버 모드도 내 정보를 조회하고, 수정 결과로 화면과 세션을 갱신해요.
  */
@@ -76,6 +73,7 @@ export default function MyScreen() {
 
     // 로그아웃한 뒤 이 화면으로 돌아오면 로그인 화면으로 보냅니다 (#40)
     useRedirectIfSignedOut();
+    const permissions = useAppPermissions();
 
     const tabBarHeight = TAB_BAR_CONTENT_HEIGHT + Math.max(insets.bottom, 8);
 
@@ -167,27 +165,36 @@ export default function MyScreen() {
                 {/* ❷ 앱 권한 */}
                 <Text style={styles.sectionTitle}>앱 권한</Text>
                 <View style={styles.card}>
-                    {MOCK_PERMISSIONS.map((item, index) => (
-                        <Pressable
-                            key={item.key}
-                            style={({ pressed }) => [
-                                styles.listRow,
-                                index > 0 && styles.listDivider,
-                                pressed && styles.pressed,
-                            ]}
-                            // 권한 변경은 iPhone 설정에서 합니다.
-                            onPress={() => Linking.openSettings().catch(() => undefined)}
-                            accessibilityRole="button"
-                            accessibilityLabel={`${item.label} 권한 ${item.granted ? '허용' : '허용 안 함'}, 설정 열기`}
-                        >
-                            <Text style={styles.listLabel}>{item.label}</Text>
-                            <View style={styles.flex} />
-                            <Text style={[styles.permission, { color: item.granted ? MINT_DEEP : RED }]}>
-                                {item.granted ? '허용' : '허용 안 함'}
-                            </Text>
-                            <Ionicons name="chevron-forward" size={17} color={SECONDARY} />
-                        </Pressable>
-                    ))}
+                    {APP_PERMISSIONS.map((item, index) => {
+                        const state = permissions.states[item.key];
+                        const display = state === 'loading' ? null : PERMISSION_DISPLAY[state];
+                        const color = state === 'granted' ? MINT_DEEP : state === 'denied' ? RED : SECONDARY;
+                        return (
+                            <Pressable
+                                key={item.key}
+                                style={({ pressed }) => [
+                                    styles.listRow,
+                                    index > 0 && styles.listDivider,
+                                    pressed && styles.pressed,
+                                ]}
+                                // 허용·허용 안 함은 기기 설정을 열고, 아직 묻지 않음은 바로 요청, 확인할 수 없음은 다시 조회해요.
+                                onPress={() => permissions.press(item.key)}
+                                disabled={!display}
+                                accessibilityRole="button"
+                                accessibilityState={{ disabled: !display, busy: !display }}
+                                accessibilityLabel={permissionAccessibilityLabel(item.label, state)}
+                            >
+                                <View style={styles.flex}>
+                                    <Text style={styles.listLabel}>{item.label}</Text>
+                                    {!!display?.hint && <Text style={styles.permissionHint}>{display.hint}</Text>}
+                                </View>
+                                {display
+                                    ? <Text style={[styles.permission, { color }]}>{display.text}</Text>
+                                    : <ActivityIndicator size="small" color={SECONDARY} />}
+                                <Ionicons name="chevron-forward" size={17} color={SECONDARY} />
+                            </Pressable>
+                        );
+                    })}
                 </View>
 
                 {/* ❸ ❹ 계정 */}
@@ -735,6 +742,13 @@ const styles = StyleSheet.create({
     permission: {
         fontSize: 13.5,
         fontWeight: '700',
+    },
+
+    permissionHint: {
+        marginTop: 2,
+        color: SECONDARY,
+        fontSize: 12,
+        fontWeight: '600',
     },
 
     footer: {

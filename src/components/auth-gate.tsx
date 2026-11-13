@@ -9,6 +9,11 @@ import { signOut, startRestoring, useAuthStatus } from '@/stores/auth-store';
 
 let started = false;
 
+/** 로그인 없이 열 수 있는 경로: 시작 화면, 온보딩, 권한 안내, 로그인 */
+export function isPublicRoute(pathname: string) {
+    return pathname === '/' || pathname === '/login' || pathname === '/permission' || pathname.startsWith('/onboarding-');
+}
+
 export default function AuthGate({ children }: { children: ReactNode }) {
     const status = useAuthStatus();
     const pathname = usePathname();
@@ -29,7 +34,8 @@ export default function AuthGate({ children }: { children: ReactNode }) {
         {failure ? <><Text>{failure}</Text><Pressable onPress={() => void restore()}><Text>다시 시도해요</Text></Pressable>
             <Pressable onPress={signOut}><Text>카카오로 다시 로그인해요</Text></Pressable></> : <ActivityIndicator accessibilityLabel="로그인을 복원하고 있어요" />}
     </View>;
-    const publicRoute = pathname === '/login' || pathname.startsWith('/onboarding-');
+    // 로그인 전에도 시작 화면(/)·온보딩·권한 안내·로그인은 열려요(#130). 그 밖은 로그인으로 보내요.
+    const publicRoute = isPublicRoute(pathname);
     if (status !== 'signedIn' && !publicRoute) return <Redirect href="/login" />;
     return <>{deletionFailed && <Text accessibilityRole="alert">기기에서 로그인 정보를 지우지 못했어요. 앱을 다시 켜면 로그인이 복원될 수 있어요.</Text>}{children}</>;
 }

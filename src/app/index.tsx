@@ -12,8 +12,13 @@ import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 
 import LinkRoLogo, { LinkRoColors } from '@/components/linkro-logo';
+import { readOnboardingSeen } from '@/services/onboarding-seen';
+import { getAuthStatus } from '@/stores/auth-store';
+import { startDestination } from '@/utils/start-flow';
 
 const SPLASH_DURATION = 1500;
+/** 서버 모드에서 "본 적 있음" 읽기가 늦을 때 시작 화면 뒤로 더 기다리는 최대 시간. 넘으면 본 적 없는 것으로 봐요. */
+const SEEN_READ_GRACE = 1000;
 
 const BACKGROUND = '#182f58';
 const TAGLINE_COLOR = '#a9b2c8';
@@ -62,11 +67,45 @@ export default function SplashScreen() {
             }),
         ]).start();
 
+        // mock 모드는 이전과 같아요: 표시를 읽지 않고 1.5초 뒤 온보딩으로 가요.
+        if (useMock()) {
+            const timer = setTimeout(() => {
+                router.replace(startDestination({ mock: true, status: getAuthStatus(), seen: false }));
+            }, SPLASH_DURATION);
+            return () => clearTimeout(timer);
+        }
+
+        /*
+         * 서버 모드 (#130): 로그인 복원은 auth-gate 가 끝낸 뒤 이 화면이 보여요.
+         * "본 적 있음" 읽기는 애니메이션 시간 동안 같이 기다리고, 늦으면 SEEN_READ_GRACE 까지만 더 기다려요.
+         * 화면을 떠난 뒤에는 이동하지 않아요.
+         */
+        let active = true;
+        let moved = false;
+        let seen: boolean | null = null;
+        let waiting = false;
+        let grace: ReturnType<typeof setTimeout> | undefined;
+        const go = (value: boolean) => {
+            if (!active || moved) return;
+            moved = true;
+            clearTimeout(grace);
+            router.replace(startDestination({ mock: false, status: getAuthStatus(), seen: value }));
+        };
+        void readOnboardingSeen().then(value => {
+            seen = value;
+            if (waiting) go(value);
+        }, () => { seen = false; if (waiting) go(false); });
         const timer = setTimeout(() => {
-            router.replace(useMock() ? '/onboarding-1' : '/home');
+            if (seen !== null || getAuthStatus() === 'signedIn') { go(seen ?? false); return; }
+            waiting = true;
+            grace = setTimeout(() => go(false), SEEN_READ_GRACE);
         }, SPLASH_DURATION);
 
-        return () => clearTimeout(timer);
+        return () => {
+            active = false;
+            clearTimeout(timer);
+            clearTimeout(grace);
+        };
     }, [whiteLine, mintLine, whiteStation, mintStation]);
 
     return (

@@ -6,6 +6,8 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useRef, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
+import { useMock } from '@/services/api/config';
+import { markOnboardingSeen } from '@/services/onboarding-seen';
 
 const NAVY = '#0f1c3f';
 const NAVY_SOFT = '#f3f5f8';
@@ -22,6 +24,17 @@ const DIVIDER = '#e6e9ef';
 const MINT_DEEP = '#12a77a';
 const MINT_SOFT = '#e6f8f1';
 
+/**
+ * 권한 안내 (#126, #130)
+ *
+ * 서버 모드는 "시작하기"·"나중에 할게요" 둘 다 로그인으로 가기 전에 "본 적 있음"을 기기에 저장해요.
+ * 저장이 실패해도 로그인으로 가요. mock 모드는 저장하지 않고 이전과 같아요.
+ */
+async function toLogin() {
+    if (!useMock()) await markOnboardingSeen();
+    router.replace('/login');
+}
+
 export default function PermissionScreen() {
     const insets = useSafeAreaInsets();
 
@@ -33,12 +46,13 @@ export default function PermissionScreen() {
         setRequesting(true);
         try { await ImagePicker.requestCameraPermissionsAsync(); } catch { /* 오류여도 다음 권한을 요청해요. */ }
         try { await Location.requestForegroundPermissionsAsync(); } catch { /* 거부·오류여도 로그인으로 이동해요. */ }
-        router.replace('/login');
+        await toLogin();
     };
     const handleLater = () => {
         if (busy.current) return;
         busy.current = true;
-        router.replace('/login');
+        if (useMock()) { router.replace('/login'); return; }
+        return toLogin();
     };
 
     return (
