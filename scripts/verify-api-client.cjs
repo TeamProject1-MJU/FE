@@ -542,7 +542,7 @@ test('#117 구독 예외에도 마운트·언마운트와 coalescer 정리·개�
         r.load('src/services/realtime.ts').subscribeRoomEvents = (_roomId, _listener, options) => {
             subscriptions++;
             // Even queued work created immediately before a failed registration must be disposed.
-            options.onReconnected();
+            options.onSubscribed();
             throw Error('invalid https://private.test/api token=secret message=private');
         };
         const callbacks = { refresh: () => { refreshes++; }, rejected: () => assert.fail('구독 예외는 접근 거부가 아님') };
@@ -656,7 +656,7 @@ test('#117 추천: 기존 결과 유지·새 추천 배너·보기·자기 이�
 /* ---------- WebSocket/STOMP base (#116): real library, virtual socket and clock ---------- */
 const RT_ROOM = '00000000-0000-0000-0000-000000000116';
 const RT_OTHER = '00000000-0000-0000-0000-000000000117';
-async function realtimeRuntime({ mock = false, token = 'opaque-access', random = () => 0.5, native = false, base } = {}) {
+async function realtimeRuntime({ mock = false, token = 'opaque-access', random = () => 0.5, native = false, base, settleSubscriptions = true } = {}) {
     const r = createRuntime(mock ? {} : { ...serverEnv, ...(base ? { EXPO_PUBLIC_API_BASE_URL: base } : {}) });
     r.context.Date = class extends Date {
         constructor(...args) { super(...(args.length ? args : [2000000000000 + r.now()])); }
@@ -683,9 +683,11 @@ async function realtimeRuntime({ mock = false, token = 'opaque-access', random =
     r.context.WebSocket = FakeSocket;
     r.rt = r.load('src/services/realtime.ts');
     r.service = r.rt.createRealtimeService({ socketFactory: (url, protocols) => new FakeSocket(url, protocols), random });
-    r.connect = async () => {
+    r.connect = async (ready = settleSubscriptions) => {
         await settle(); const socket = r.sockets.at(-1); assert.ok(socket); socket.open();
-        socket.receive('CONNECTED', { version: '1.2', 'heart-beat': '10000,10000' }); await settle(); return socket;
+        socket.receive('CONNECTED', { version: '1.2', 'heart-beat': '10000,10000' }); await settle();
+        if (ready) { r.advance(r.rt.SUBSCRIBE_SETTLE_MS); await settle(); }
+        return socket;
     };
     r.reconnect = async (delay = 1000) => { r.advance(delay); await settle(); return r.connect(); };
     r.event = (socket, room = RT_ROOM, overrides = {}) => {
@@ -720,6 +722,7 @@ test('116 real STOMP CONNECT headers, RN binary option, shared subscription, rec
     const three = r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onReconnected: () => reconnected++ });
     assert.equal(reconnected, 0); assert.equal(socket.commands('SUBSCRIBE').length, 2);
     const ids = socket.commands('SUBSCRIBE').map(frame => frame.match(/\nid:([^\n]+)/)[1]); assert.equal(new Set(ids).size, 2);
+    socket.receive('RECEIPT', { 'receipt-id': socket.commands('SUBSCRIBE')[1].match(/\nreceipt:([^\n]+)/)[1] });
     socket.close(); const restored = await r.reconnect(); assert.equal(reconnected, 1);
     r.service.subscribeRoomEvents(RT_OTHER, () => {}, { onReconnected: () => reconnected++ }); assert.equal(reconnected, 1);
     assert.equal(new Set(restored.commands('SUBSCRIBE').map(frame => frame.match(/\nid:([^\n]+)/)[1])).size, 2);
@@ -747,7 +750,7 @@ test('116 idle grace cancels on a new subscriber and closes after 10 seconds wit
 
 test('116 denied subscription uses receipt-id or newest unconfirmed fallback; other rooms recover', async () => {
     for (const code of ['NOT_ROOM_MEMBER', 'ROOM_NOT_FOUND']) for (const receipt of [true, false]) {
-        const r = await realtimeRuntime(); const rejected = []; let restored = 0;
+        const r = await realtimeRuntime({ settleSubscriptions: false }); const rejected = []; let restored = 0;
         r.service.subscribeRoomEvents(RT_OTHER, () => {}, { onReconnected: () => restored++ });
         r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onRejected: value => rejected.push(value) });
         const socket = await r.connect();
@@ -756,13 +759,13 @@ test('116 denied subscription uses receipt-id or newest unconfirmed fallback; ot
         socket.receive('RECEIPT', { 'receipt-id': r.receipt(socket, RT_OTHER) });
         socket.receive('ERROR', { message: code, ...(receipt ? { 'receipt-id': r.receipt(socket, RT_ROOM) } : {}) });
         assert.deepEqual(rejected, [code]); assert.equal(cache.findCachedRoomIdByCode('ABC123'), undefined);
-        const next = await r.reconnect(); assert.equal(next.commands('SUBSCRIBE').length, 1); assert.match(next.commands('SUBSCRIBE')[0], new RegExp(RT_OTHER)); assert.equal(restored, 1); r.service.dispose();
+        const next = await r.reconnect(); next.receive('RECEIPT', { 'receipt-id': r.receipt(next, RT_OTHER) }); assert.equal(next.commands('SUBSCRIBE').length, 1); assert.match(next.commands('SUBSCRIBE')[0], new RegExp(RT_OTHER)); assert.equal(restored, 1); r.service.dispose();
     }
 });
 
 test('116 repeated validation/access/internal errors abandon only the offending room after three attempts', async () => {
     for (const code of ['VALIDATION_ERROR', 'ACCESS_DENIED', 'INTERNAL_ERROR']) {
-        const r = await realtimeRuntime(); const rejected = [];
+        const r = await realtimeRuntime({ settleSubscriptions: false }); const rejected = [];
         r.service.subscribeRoomEvents(RT_OTHER, () => {});
         r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onRejected: value => rejected.push(value) });
         let socket = await r.connect();
@@ -776,7 +779,7 @@ test('116 repeated validation/access/internal errors abandon only the offending 
 
 test('116 confirmed subscription resets room failures before a new consecutive failure streak', async () => {
     for (const code of ['VALIDATION_ERROR', 'ACCESS_DENIED', 'INTERNAL_ERROR']) {
-        const r = await realtimeRuntime(); const rejected = [];
+        const r = await realtimeRuntime({ settleSubscriptions: false }); const rejected = [];
         r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onRejected: value => rejected.push(value) });
         let socket = await r.connect();
         const fail = async () => {
@@ -892,7 +895,9 @@ test('116 logout/account switch rejects old messages and old unsubscribe cannot 
 test('116 background grace, suspension and foreground recovery; ACCOUNT_WITHDRAWN never retries', async () => {
     const r = await realtimeRuntime(); let recovered = 0;
     r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onReconnected: () => recovered++ }); const socket = await r.connect();
-    r.native.AppState.change('background'); r.advance(29999); r.native.AppState.change('active'); assert.equal(socket.readyState, 1); assert.equal(recovered, 0);
+    r.native.AppState.change('background'); r.advance(20000);
+    socket.onmessage?.({ data: '\n' }); // 구독 대기 시간과 별개로 서버 하트비트가 연결을 유지해요.
+    r.advance(9999); r.native.AppState.change('active'); assert.equal(socket.readyState, 1); assert.equal(recovered, 0);
     r.native.AppState.change('background'); r.advance(30000); await settle(); assert.equal(socket.readyState, 3);
     const count = r.sockets.length; r.advance(60000); await settle(); assert.equal(r.sockets.length, count);
     r.native.AppState.change('active'); const next = await r.connect(); assert.equal(recovered, 1);
@@ -933,7 +938,7 @@ test('116 auth recovery cannot connect or clear a different account after an awa
 });
 
 test('116 listener/state observer exceptions and delayed callbacks after cleanup remain isolated', async () => {
-    const r = await realtimeRuntime(); const states = []; let rejected = 0;
+    const r = await realtimeRuntime({ settleSubscriptions: false }); const states = []; let rejected = 0;
     const offState = r.service.subscribeRealtimeState(() => { throw Error('observer'); });
     r.service.subscribeRealtimeState(() => states.push(r.service.getRealtimeState()));
     r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onRejected: () => { throw Error('rejection'); } });
@@ -3056,6 +3061,7 @@ function chat118Hook(realtimeState = 'closed') {
     r.event = (payload, type = 'MESSAGE_CREATED') => listener?.({ type, roomId: ROOM_QUERY_ID, payload, at: payload.createdAt });
     r.captureEvent = () => { const current = listener; return payload => current({ type: 'MESSAGE_CREATED', roomId: ROOM_QUERY_ID, payload, at: payload.createdAt }); };
     r.reconnect = () => options.onReconnected();
+    r.prepared = () => options.onSubscribed();
     r.reject = code => options.onRejected(code);
     r.realtimeState = value => { realtimeState = value; stateListeners.forEach(callback => callback()); };
     r.screen.default = () => r.screen.useRoomChat(ROOM_QUERY_ID);
@@ -7060,12 +7066,159 @@ test('129 mock 모드 경로 화면 트리는 #129 이전과 같아요', () => {
     assert.equal(sha, MOCK_GUIDE_SHA129);
 });
 
+
+test('145 receipt 없이 구독 전 변경을 동기화하고 준비된 방의 추가 등록은 재조회하지 않아요', async () => {
+    const r = await realtimeRuntime(); let server = '이전 이름'; let cached = server; let reads = 1;
+    const sync = () => { cached = server; reads++; };
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onSubscribed: sync, onReconnected: sync });
+    const socket = await r.connect(false);
+    server = '바뀐 이름';
+    assert.equal(cached, '이전 이름'); assert.equal(reads, 1);
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onSubscribed: sync, onReconnected: sync });
+    assert.equal(socket.commands('SUBSCRIBE').length, 1);
+    r.advance(r.rt.SUBSCRIBE_SETTLE_MS);
+    assert.equal(cached, server); assert.equal(reads, 3);
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onSubscribed: sync, onReconnected: sync });
+    socket.receive('RECEIPT', { 'receipt-id': r.receipt(socket, RT_ROOM) });
+    assert.equal(reads, 3); assert.equal(socket.commands('SUBSCRIBE').length, 1);
+    socket.close(); const next = await r.reconnect(); assert.equal(reads, 6);
+    next.close(); const stale = await r.reconnect(); r.service.dispose();
+    stale.receive('RECEIPT', { 'receipt-id': r.receipt(stale, RT_ROOM) });
+    assert.equal(reads, 9);
+});
+
+test('145 최초 구독 확인 후 방 상세·후보·추천 요청을 합쳐요', async () => {
+    const r = roomQueryScreen('src/hooks/use-room-events.ts'); let ready; const calls = [];
+    r.load('src/services/realtime.ts').subscribeRoomEvents = (_id, _listener, options) => {
+        ready = options.onSubscribed; return () => {};
+    };
+    const callbacks = { refresh: target => calls.push(target), rejected() {} };
+    r.renderComponent({ type: () => r.screen.useRoomEvents(ROOM_QUERY_ID, callbacks), props: {} });
+    r.advance(300); await settle(); assert.equal(calls.length, 0);
+    ready(); ready(); r.advance(300); await settle();
+    assert.deepEqual(calls, ['detail', 'proposals', 'recommendation']);
+    r.unmount(); ready(); r.advance(300); await settle(); assert.equal(calls.length, 3);
+});
+
+test('145 최초 REST 이후 구독 확인 전에 생긴 채팅을 최신 조회로 복구해요', async () => {
+    const r = chat118Hook('open'); let items = []; let reads = 0;
+    r.context.fetch = async () => { reads++; return ok({ items, hasMore: false, nextCursor: null }); };
+    r.render(); await settle(); assert.equal(reads, 1);
+    const message = chat118Message(); items = [message];
+    r.prepared(); await settle();
+    assert.equal(reads, 2); assert.equal(r.render().messages[0].id, message.id);
+    r.render(); await settle(); assert.equal(reads, 2);
+    r.unmount(); r.prepared(); await settle(); assert.equal(reads, 2);
+});
+
+test('145 최초 채팅 조회가 늦어도 구독 동기화와 조회 중 이벤트를 보존해요', async () => {
+    const r = chat118Hook('open'); const initial = deferred(); const sync = deferred(); let reads = 0;
+    r.context.fetch = () => ++reads === 1 ? initial.promise : sync.promise;
+    r.render(); await settle(); assert.equal(reads, 1);
+    r.prepared(); await settle(); assert.equal(reads, 2);
+    const missed = chat118Message();
+    const live = chat118Message({ id: '01900000-0000-7000-8000-000000000002', content: '구독 후 메시지' });
+    r.event(live);
+    sync.resolve(ok({ items: [missed], hasMore: false, nextCursor: null })); await settle();
+    initial.resolve(ok({ items: [], hasMore: false, nextCursor: null })); await settle();
+    assert.deepEqual(plain(r.render().messages.map(message => message.id)).sort(), [missed.id, live.id].sort());
+    r.unmount();
+});
+
+test('145 최초 조회 뒤 구독 확인 전 방 이름과 멤버 변경을 화면 캐시에 반영해요', async () => {
+    const r = roomQueryScreen('src/app/rooms/[roomId].tsx', { roomId: ROOM_QUERY_ID });
+    let ready; let detail = roomQueryDetail(); let detailReads = 0; let proposalReads = 0;
+    r.load('src/services/realtime.ts').subscribeRoomEvents = (_id, _receive, options) => {
+        ready ??= options.onSubscribed; return () => {};
+    };
+    r.context.fetch = async url => {
+        if (url.endsWith('/invite-code')) return ok({ roomCode: 'ABC123' });
+        if (url.includes('station-proposals')) {
+            proposalReads++; return ok({ items: [], maxProposals: 9, selectedStation: null });
+        }
+        detailReads++; return ok(detail);
+    };
+    r.render(); await settle(); await settle(); r.render();
+    const cache = r.load('src/services/room-cache.ts');
+    const initialDetailReads = detailReads; const initialProposalReads = proposalReads;
+    assert.ok(initialDetailReads > 0); assert.ok(initialProposalReads > 0);
+    detail = { ...detail, name: '구독 대기 중 바뀐 방', members: detail.members.slice(0, 1) };
+    assert.notEqual(cache.readCachedRoomDetail(ROOM_QUERY_ID).name, detail.name);
+    ready(); r.advance(300); await settle(); await settle(); r.render();
+    assert.equal(cache.readCachedRoomDetail(ROOM_QUERY_ID).name, detail.name);
+    assert.equal(cache.readCachedRoomDetail(ROOM_QUERY_ID).members.length, 1);
+    assert.equal(detailReads, initialDetailReads + 1); assert.equal(proposalReads, initialProposalReads + 1);
+    r.unmount();
+});
+
+test('145 receipt 없이 500ms 뒤 최초 동기화와 재연결 재조회를 한 번씩 실행해요', async () => {
+    const r = await realtimeRuntime({ settleSubscriptions: false }); let initial = 0; let recovered = 0;
+    const callbacks = { onSubscribed: () => initial++, onReconnected: () => recovered++ };
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, callbacks);
+    const socket = await r.connect();
+    assert.equal(r.rt.SUBSCRIBE_SETTLE_MS, 500);
+    r.advance(499); assert.equal(initial, 0);
+    r.advance(1); assert.equal(initial, 1); assert.equal(recovered, 0);
+    r.advance(500); assert.equal(initial, 1);
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, callbacks);
+    assert.equal(socket.commands('SUBSCRIBE').length, 1);
+    r.advance(500); assert.equal(initial, 1); assert.equal(recovered, 0);
+    socket.close(); await r.reconnect();
+    r.advance(499); assert.equal(recovered, 0);
+    r.advance(1); assert.equal(initial, 1); assert.equal(recovered, 2);
+    r.advance(500); assert.equal(recovered, 2);
+    r.service.dispose(); assert.equal(r.timers.size, 0);
+});
+
+test('145 receipt가 먼저 오면 즉시 준비되고 타이머나 늦은 receipt는 중복 호출하지 않아요', async () => {
+    for (const receiptFirst of [true, false]) {
+        const r = await realtimeRuntime({ settleSubscriptions: false }); let calls = 0;
+        r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onSubscribed: () => calls++ });
+        const socket = await r.connect();
+        r.advance(receiptFirst ? 100 : 500);
+        assert.equal(calls, receiptFirst ? 0 : 1);
+        socket.receive('RECEIPT', { 'receipt-id': r.receipt(socket, RT_ROOM) });
+        assert.equal(calls, 1);
+        assert.equal([...r.timers.values()].filter(timer => timer.ms === 500).length, 0);
+        r.advance(1000); assert.equal(calls, 1);
+        r.service.dispose();
+    }
+});
+
+test('145 화면 이탈·방 제거·로그아웃·연결 종료·dispose 뒤 준비 콜백과 타이머를 정리해요', async () => {
+    for (const action of ['unmount', 'forget', 'logout', 'stop', 'dispose']) {
+        const r = await realtimeRuntime({ settleSubscriptions: false }); let calls = 0;
+        const off = r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onSubscribed: () => calls++, onReconnected: () => calls++ });
+        const socket = await r.connect();
+        r.advance(100);
+        if (action === 'unmount') off();
+        if (action === 'forget') r.service.forgetRoom(RT_ROOM);
+        if (action === 'logout') await r.auth.clearLocalSession();
+        if (action === 'stop') socket.close();
+        if (action === 'dispose') r.service.dispose();
+        assert.equal([...r.timers.values()].filter(timer => timer.ms === 500).length, 0, action);
+        socket.receive('RECEIPT', { 'receipt-id': r.receipt(socket, RT_ROOM) });
+        r.advance(500); assert.equal(calls, 0, action);
+        r.service.dispose(); assert.equal(r.timers.size, 0);
+    }
+});
+
+test('145 대기 중 제거된 리스너는 무시하고 남은 화면만 동기화해요', async () => {
+    const r = await realtimeRuntime({ settleSubscriptions: false }); let removed = 0; let active = 0;
+    const off = r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onSubscribed: () => removed++ });
+    const socket = await r.connect();
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onSubscribed: () => active++ });
+    off(); r.advance(500);
+    assert.equal(removed, 0); assert.equal(active, 1); assert.equal(socket.commands('SUBSCRIBE').length, 1);
+    r.service.dispose();
+});
+
 /* ---------- INTERNAL 경로 안내 문구 (#147) ---------- */
 async function route147Search(data, roomId) {
     const r = routeScreenRuntime({ departure: '강남', destination: '사당', ...(roomId ? { roomId } : {}) });
     r.route147Data = data;
     r.context.fetch = async url => jsonResponse({ success: true, data: url.endsWith('/routes/search') ? r.route147Data
-        : stationSearchData([url.includes(encodeURIComponent('강남')) ? serverRouteStation(88001, '강남') : serverRouteStation(99002, '사당')]) });
+            : stationSearchData([url.includes(encodeURIComponent('강남')) ? serverRouteStation(88001, '강남') : serverRouteStation(99002, '사당')]) });
     for (let i = 0; i < 5; i++) { r.render(); await settle(); }
     r.view147 = () => r.render();
     r.card147 = () => findElement(r.view147(), element => element.type === r.load('src/components/route/RouteCard.tsx').default);
