@@ -391,6 +391,12 @@ export function useRoomChat(roomId: string, mock?: string) {
                     update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, [message]) }));
                 }, {
                     onReconnected: () => { if (ctx.valid() && !ctx.blocked) void refresh(); },
+                    onSubscribed: () => {
+                        if (!ctx.valid() || ctx.blocked) return;
+                        // 구독 전에 시작한 요청은 동기화로 재사용하지 않고, 이후 요청끼리 합쳐요.
+                        latestPage = undefined;
+                        void latest();
+                    },
                     onRejected: code => {
                         if (ctx.valid() && (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND')) block(code);
                     },
