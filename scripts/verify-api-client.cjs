@@ -7939,3 +7939,158 @@ test('144 mock 모드 생성 실패는 이전과 같은 안내이고 결과 불�
     const retry = roomWriteButton(view, '약속방 만들기').props.onPress(); m.advance(1000); await retry; await settle(); view = m.render();
     assert.ok(view.props.room); assert.equal(calls, 0); m.unmount();
 });
+
+/* ---------- #137 채팅 재연결 뒤 끊긴 동안 쌓인 메시지 빠짐없이 복구 ---------- */
+
+const chat137Id = n => `01900000-0000-7000-8000-${String(n).padStart(12, '0')}`;
+const chat137Message = n => chat118Message({ id: chat137Id(n), senderId: ROOM_QUERY_OTHER, nickname: '상대', content: `메시지 ${n}`,
+    createdAt: new Date(Date.UTC(2026, 10, 12, 10, 0, 0) + n * 1000).toISOString() });
+/** 명세 10.2 처럼 최신순·cursor(이전 페이지 마지막 id) 페이지를 돌려주는 가짜 서버 */
+function chat137Server(r, count) {
+    const server = { count, gets: [], fail: null, hold: null };
+    server.add = to => { server.count = to; };
+    r.context.fetch = async (url) => {
+        const query = new URL(url).searchParams;
+        const cursor = query.get('cursor'); const size = Number(query.get('size') ?? 30);
+        server.gets.push(cursor);
+        if (server.hold) await server.hold(server.gets.length);
+        if (server.fail?.(server.gets.length, cursor)) return jsonResponse({ success: false, error: { code: 'NETWORK_ERROR' } }, 503);
+        const all = Array.from({ length: server.count }, (_, i) => server.count - i); // 최신 → 오래된
+        const start = cursor ? all.indexOf(Number(cursor.slice(-12))) + 1 : 0;
+        const items = all.slice(start, start + size);
+        const hasMore = start + size < all.length;
+        return ok({ items: items.map(chat137Message), hasMore, nextCursor: hasMore ? chat137Id(items.at(-1)) : null });
+    };
+    return server;
+}
+const chat137Numbers = view => plain(view.messages.map(message => Number(message.id.slice(-12))));
+/** 여러 페이지를 이어 받는 복구가 끝날 때까지 기다려요. */
+const drain137 = async () => { for (let i = 0; i < 40; i++) await settle(); };
+const range137 = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+async function chat137Load(count) {
+    const r = chat118Hook('open'); const server = chat137Server(r, count);
+    r.render(); await drain137();
+    return { r, server };
+}
+async function chat137LoadAll(r) {
+    for (let i = 0; i < 40 && r.render().hasMore; i++) { r.render().loadOlder(); await drain137(); }
+}
+
+test('137 복구 함수: 겹침·처음까지·상한 세 경우와 결과 반영', async () => {
+    const hook = createRuntime(serverEnv).load('src/hooks/use-room-chat.ts');
+    const page = (numbers, hasMore) => ({ items: numbers.map(chat137Message), hasMore, nextCursor: hasMore ? chat137Id(numbers.at(-1)) : null });
+    const pages = new Map([[null, page(range137(71, 100).reverse(), true)], [chat137Id(71), page(range137(41, 70).reverse(), true)], [chat137Id(41), page(range137(11, 40).reverse(), true)], [chat137Id(11), page(range137(1, 10).reverse(), false)]]);
+    const fetch = async cursor => pages.get(cursor);
+    const overlap = await hook.recoverChatGap(fetch, new Set([chat137Id(30)]), () => true);
+    assert.equal(overlap.mode, 'overlap'); assert.equal(overlap.items.length, 90);
+    const complete = await hook.recoverChatGap(fetch, new Set(), () => true);
+    assert.deepEqual([complete.mode, complete.items.length, complete.cursor, complete.hasMore], ['complete', 100, null, false]);
+    const capped = await hook.recoverChatGap(fetch, new Set(), () => true, 2);
+    assert.deepEqual([capped.mode, capped.items.length, capped.cursor, capped.hasMore], ['replace', 60, chat137Id(41), true]);
+    assert.equal(await hook.recoverChatGap(fetch, new Set(), () => false), null);
+    assert.equal(hook.CHAT_RECOVERY_MAX_PAGES, 10);
+    // 상한 결과 반영: 받은 범위보다 오래된 기존 메시지만 버리고 더 최신(WS) 메시지는 남겨요.
+    const current = [...range137(1, 30), 101].map(chat137Message);
+    assert.deepEqual(plain(hook.applyChatRecovery(current, capped).map(message => Number(message.id.slice(-12)))), [...range137(41, 100), 101]);
+    assert.deepEqual(plain(hook.applyChatRecovery(current, overlap).map(message => Number(message.id.slice(-12)))), [...range137(1, 100), 101]);
+});
+
+test('137 이슈 시나리오: 30개 본 뒤 끊긴 동안 70개 추가 → 재연결 → 빈 구간 없이 표시, 이전 메시지 조회도 이어져요', async () => {
+    const { r, server } = await chat137Load(60);
+    assert.deepEqual(chat137Numbers(r.render()), range137(31, 60)); assert.equal(r.render().hasMore, true);
+    server.add(130); server.gets.length = 0;
+    r.reconnect(); await drain137();
+    assert.deepEqual(chat137Numbers(r.render()), range137(31, 130));
+    assert.deepEqual(server.gets, [null, chat137Id(101), chat137Id(71)]); // 31~60 과 겹치는 페이지까지만
+    assert.equal(r.render().error, null);
+    await chat137LoadAll(r);
+    assert.deepEqual(chat137Numbers(r.render()), range137(1, 130)); assert.equal(r.render().hasMore, false);
+    // 이슈 원래 모양(1~30 이 전부인 방)도 1~100 이 돼요.
+    const small = await chat137Load(30); small.server.add(100);
+    small.r.reconnect(); await drain137();
+    assert.deepEqual(chat137Numbers(small.r.render()), range137(1, 100)); assert.equal(small.r.render().hasMore, false);
+    r.unmount(); small.r.unmount();
+});
+
+test('137 누락이 30개 이하면 한 페이지로 복구하고 화면 복귀·reload 도 같은 방식이에요', async () => {
+    const { r, server } = await chat137Load(60);
+    server.add(75); server.gets.length = 0;
+    r.reconnect(); await drain137();
+    assert.deepEqual(chat137Numbers(r.render()), range137(31, 75)); assert.deepEqual(server.gets, [null]);
+    server.add(120); r.blur(); r.focus(); await drain137();
+    assert.deepEqual(chat137Numbers(r.render()), range137(31, 120));
+    server.add(160); await r.render().reload(); await settle();
+    assert.deepEqual(chat137Numbers(r.render()), range137(31, 160));
+    r.unmount();
+});
+
+test('137 누락이 상한(300개)을 넘으면 받은 범위로 바꾸고 이전 메시지 조회로 빈 구간 없이 이어 받아요', async () => {
+    const { r, server } = await chat137Load(60);
+    server.add(460); server.gets.length = 0;
+    r.reconnect(); await drain137();
+    assert.equal(server.gets.length, 10);
+    assert.deepEqual(chat137Numbers(r.render()), range137(161, 460)); assert.equal(r.render().hasMore, true);
+    await chat137LoadAll(r);
+    assert.deepEqual(chat137Numbers(r.render()), range137(1, 460));
+    r.unmount();
+});
+
+test('137 복구 중 WS 로 받은 메시지는 한 번만, 목록을 바꿀 때도 사라지지 않아요', async () => {
+    for (const added of [75, 460]) {
+        const { r, server } = await chat137Load(60);
+        server.add(added); let release; const gate = new Promise(resolve => { release = resolve; });
+        server.hold = count => count === 2 ? gate : undefined; // 첫 복구 페이지 응답 직후 멈춰요
+        r.reconnect(); await settle();
+        const ws = chat137Message(added + 1); r.event(ws); r.event(chat137Message(added)); // 새 메시지와 이미 받을 메시지
+        release(); await drain137();
+        server.hold = null;
+        const numbers = chat137Numbers(r.render());
+        assert.equal(numbers.filter(n => n === added + 1).length, 1, String(added));
+        assert.equal(new Set(numbers).size, numbers.length, String(added));
+        assert.deepEqual(numbers, range137(added > 300 ? added - 299 : 31, added + 1), String(added));
+        r.unmount();
+    }
+});
+
+test('137 복구 중 화면 이탈·권한 상실·계정 전환이면 결과를 버리고 더 받지 않아요', async () => {
+    for (const cause of ['blur', 'reject', 'account']) {
+        const { r, server } = await chat137Load(60);
+        server.add(200); let release; const gate = new Promise(resolve => { release = resolve; });
+        server.hold = count => count === 3 ? gate : undefined; server.gets.length = 0;
+        r.reconnect(); await settle();
+        assert.equal(server.gets.length, 2);
+        if (cause === 'blur') r.blur();
+        if (cause === 'reject') r.reject('NOT_ROOM_MEMBER');
+        if (cause === 'account') r.load('src/stores/auth-store.ts').signIn({ userId: 'other-user', nickname: '다른 사람' });
+        release(); await drain137();
+        assert.equal(server.gets.length, 2, cause); // 더 받지 않아요
+        const view = r.render();
+        if (cause === 'blur') assert.deepEqual(chat137Numbers(view), range137(31, 60));
+        else assert.equal(view.messages.length, 0, cause);
+        if (cause === 'reject') assert.equal(view.blocked, true);
+        r.unmount();
+    }
+});
+
+test('137 복구 중 두 번째 페이지 실패: 기존 목록 그대로·오류 표시, 다시 시도하면 빈 구간 없이 복구', async () => {
+    const { r, server } = await chat137Load(60);
+    server.add(130); server.gets.length = 0;
+    server.fail = count => count === 2;
+    r.reconnect(); await drain137();
+    let view = r.render();
+    assert.deepEqual(chat137Numbers(view), range137(31, 60)); // 받은 첫 페이지(101~130)를 합치지 않아요
+    assert.ok(view.error); assert.equal(view.status, 'ready');
+    server.fail = null;
+    await view.reload(); await settle(); view = r.render();
+    assert.deepEqual(chat137Numbers(view), range137(31, 130)); assert.equal(view.error, null);
+    r.unmount();
+});
+
+test('137 AI 답변 대기 폴링의 최신 페이지가 목록과 이어지지 않으면 같은 복구로 채워요', async () => {
+    const r = chat118Hook('closed'); const server = chat137Server(r, 60);
+    r.render(); await drain137();
+    server.add(130); server.gets.length = 0;
+    r.prepared(); await drain137(); await settle(); // 구독 직후 최신 한 페이지 조회
+    assert.deepEqual(chat137Numbers(r.render()), range137(31, 130));
+    r.unmount();
+});
