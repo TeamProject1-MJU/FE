@@ -11,6 +11,9 @@ import type { Route, RouteSource, StationSummary } from '@/types/route';
 export type SelectedRoute = {
     route: Route;
     routeSource: RouteSource;
+    /** API 6.1 응답 최상위의 지난 약속 여부와 서버 안내예요. */
+    appointmentPassed: boolean;
+    notice: string | null;
     origin: StationSummary;
     destination: StationSummary;
 };

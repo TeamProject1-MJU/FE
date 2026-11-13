@@ -96,12 +96,17 @@ export default function RouteGuideScreen() {
                 </View>
             ) : (
                 <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}>
+                    {selected.appointmentPassed && !!selected.notice && (
+                        <View style={styles.notice}>
+                            <Ionicons name="alert-circle-outline" size={17} color="#c58a00" />
+                            <Text style={styles.noticeText}>{selected.notice}</Text>
+                        </View>
+                    )}
+
                     {selected.routeSource === 'INTERNAL' && (
                         <View style={styles.notice}>
                             <Ionicons name="information-circle-outline" size={18} color="#9a6a00" />
-                            <Text style={styles.noticeText}>
-                                실시간 경로를 불러오지 못해 자체 계산한 경로를 보여드려요. 요금은 예상 금액이에요.
-                            </Text>
+                            <Text style={styles.noticeText}>자체 계산한 경로예요.</Text>
                         </View>
                     )}
 
