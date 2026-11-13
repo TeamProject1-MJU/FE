@@ -343,7 +343,7 @@ const inviteFailOnce = new Set<string>();
  * - 현재 OWNER(meeting_members.role) 기준입니다. 최초 생성자(created_by)여도 방장이 위임됐으면 NOT_ROOM_OWNER(403)
  * - 없는 방 ROOM_NOT_FOUND(404), 참여하지 않은 방 NOT_ROOM_MEMBER(403)
  * mock: 'error' 면 한 번 NETWORK_ERROR (다시 시도하면 성공)
- * TODO: 실제 연동 시 GET /rooms/{roomId}/invite-code 호출로 교체
+ * 서버 모드는 GET /rooms/{roomId}/invite-code 를 불러요(#106, room-query.ts fetchServerInviteCode).
  */
 export async function fetchInviteCode(roomId: string, mock?: 'error'): Promise<{ roomCode: string }> {
     if (!isMockMode()) return fetchServerInviteCode(roomId);
@@ -510,7 +510,8 @@ export type UpdateMyDepartureRequest = {
  * - 없는 역 STATION_NOT_FOUND(404), isSupported=false(미제공) STATION_UNSUPPORTED(422), 참여하지 않은 방 NOT_ROOM_MEMBER(403)
  * - 실패하면 기존 출발역을 그대로 둡니다. 명세에 출발역 해제(null) API 는 없어요.
  * - 성공하면 바뀐 내 멤버 정보를 돌려주고, 7.4 상세·7.6 멤버 목록 mock 에 바로 반영됩니다.
- *   TODO: 실제 연동 시 WS DEPARTURE_UPDATED 수신 → 7.6 재조회·8.2 재조회(isStale) (이번 범위 밖)
+ *   서버 모드의 DEPARTURE_UPDATED 실시간 수신은 #117 에서 구현했어요: 방 상세 화면은 7.4(멤버 포함) 재조회,
+ *   추천 화면은 7.4·8.2 재조회(services/room-events.ts, hooks/use-room-events.ts).
  * mock: 'error' 면 한 번 NETWORK_ERROR, 'unsupported' 면 한 번 STATION_UNSUPPORTED (다시 시도하면 성공)
  */
 export async function updateMyDeparture(
@@ -632,11 +633,12 @@ const updateFailOnce = new Map<string, 'error' | 'busy'>();
  * 7.5 방 정보 수정 (OWNER, #46)
  * - 수정할 수 있는 필드는 name·appointmentAt 뿐 (정원 4명 고정, 명세 7.5)
  * - 생략한 필드는 그대로 두고, appointmentAt: null 은 약속 시각 해제로 처리합니다
- *   (명세 7.5 "모든 필드 선택". TODO: 백엔드와 null = 해제인지 확인)
+ *   (명세 7.5 "모든 필드 선택". TODO: 백엔드와 null = 해제인지 확인 (이슈 미정))
  * - 이름은 앞뒤 공백 제거 후 1~30자 (명세 부록 A ck_room_name), 아니면 VALIDATION_ERROR(400)
  * - 방장이 아니면 NOT_ROOM_OWNER(403), 없는 방 ROOM_NOT_FOUND(404), 락 대기 초과 ROOM_BUSY(409, 7.12)
  * - 약속 시각을 바꿔도 추천을 새로 만들지 않고 기존 추천·후보·확정 약속역은 그대로 둡니다 (명세 7.5).
- *   TODO: 실제 연동 시 WS ROOM_UPDATED 수신 → 8.2 재조회로 isStale 갱신 (이번 범위 밖)
+ *   ROOM_UPDATED 실시간 수신은 #117 에서 구현했어요(방 상세·추천 화면이 방 정보만 바꿔요).
+ *   TODO: ROOM_UPDATED 를 받았을 때 8.2 재조회로 isStale 갱신하는 처리는 아직 없어요 (이슈 미정)
  * mock: 'error' 면 한 번 NETWORK_ERROR, 'busy' 면 한 번 ROOM_BUSY (다시 시도하면 성공)
  */
 export async function updateRoom(
@@ -697,7 +699,7 @@ const selectedStationInFlight = new Set<string>();
  * 7.11 DELETE /api/v1/rooms/{roomId}/selected-station
  *
  * #107: 서버 모드에서도 Promise<void>를 유지하며 null 성공 뒤 방 상세를 재조회해요.
- * TODO: SELECTED_STATION_CHANGED·SYSTEM 메시지 연동은 이번 범위 밖이에요.
+ * SELECTED_STATION_CHANGED 실시간 수신은 #117(방 상세·추천 화면), SYSTEM 메시지는 채팅 실시간 수신(#118, MESSAGE_CREATED)으로 받아요.
  *
  * 현재 OWNER 권한과 역의 지원 여부를 저장 직전에 확인해요.
  * 후보와 투표는 변경하지 않아요.
@@ -970,7 +972,7 @@ let membershipRowSequence = 1;
 
 /**
  * mock 서버 내부의 멤버 행 ID예요. userId와 구분해요.
- * TODO: 명세 7.8의 동률 기준 id 필드는 백엔드와 확인해요.
+ * TODO: 명세 7.8의 동률 기준 id 필드는 백엔드와 확인해요. (이슈 미정)
  * 실제 승계 결과는 서버 응답 newOwnerId를 기준으로 반영해요.
  */
 function ensureMembershipIds(roomId: string, members: RoomMember[]) {
@@ -1169,7 +1171,8 @@ function applyRoomLeave(
  * 응답 { roomDeleted, newOwnerId }와
  * 기존 Promise<LeaveRoomResult>를 유지해요.
  *
- * DB 트랜잭션·실제 SYSTEM 메시지·WebSocket 처리는 이번 범위 밖이에요.
+ * mock 은 DB 트랜잭션·SYSTEM 메시지 없이 메모리 상태만 바꿔요.
+ * 남은 멤버 화면의 MEMBER_LEFT·OWNER_CHANGED 실시간 반영은 #117(hooks/use-room-events.ts)에서 해요.
  * 실패 주입은 방별 첫 요청에만 적용해요.
  * 실패 전에 방 상태를 바꾸지 않아요.
  */

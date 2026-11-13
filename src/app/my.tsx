@@ -216,7 +216,7 @@ export default function MyScreen() {
                     </Pressable>
                 </View>
 
-                {/* TODO: 이용약관·개인정보 처리방침 링크 */}
+                {/* TODO: 이용약관·개인정보 처리방침 링크 (이슈 미정) */}
                 <View style={styles.footer}>
                     <Text style={styles.footerText}>이용약관</Text>
                     <View style={styles.footerBar} />

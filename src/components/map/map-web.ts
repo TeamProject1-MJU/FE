@@ -1,4 +1,5 @@
 import type { KakaoMapProps } from '@/components/KakaoMap';
+import { isHexColor, isValidMapLines } from '@/components/map/map-html';
 import { isCoordinate, isMapBounds, type Coordinate, type MapBounds } from '@/utils/home-map';
 
 type Point = { getLat(): number; getLng(): number };
@@ -8,12 +9,16 @@ type WebMap = {
     getCenter(): Point;
     getBounds(): { getSouthWest(): Point; getNorthEast(): Point };
     relayout(): void;
+    setBounds?(bounds: unknown, top?: number, right?: number, bottom?: number, left?: number): void;
 };
 export type MapSdk = {
     load(callback: () => void): void;
     LatLng: new (latitude: number, longitude: number) => Point;
     Map: new (container: HTMLElement, options: { center: Point; level: number }) => WebMap;
     CustomOverlay: new (options: { map: WebMap; position: Point; content: HTMLElement; yAnchor: number; zIndex: number }) => Overlay;
+    /** 선을 쓰는 지도만 필요해요. 선이 없는 홈 지도는 이 값이 없어도 동작해요. */
+    Polyline?: new (options: { map: WebMap; path: Point[]; strokeWeight: number; strokeColor: string; strokeOpacity: number; strokeStyle: string }) => Overlay;
+    LatLngBounds?: new (sw: Point, ne: Point) => unknown;
     event: {
         addListener(map: WebMap, event: string, callback: () => void): void;
         removeListener(map: WebMap, event: string, callback: () => void): void;
@@ -82,11 +87,16 @@ export function loadMapSdk(key: string, host: MapWindow = window): Promise<MapSd
     return promise;
 }
 
-type MapState = Pick<KakaoMapProps, 'center' | 'myLocation' | 'markers' | 'centerRevision'>;
+type MapState = Pick<KakaoMapProps, 'center' | 'myLocation' | 'markers' | 'centerRevision' | 'lines' | 'fitBounds' | 'fitRevision'>;
+/** 네이티브 WebView 안의 검증과 같은 규칙이에요. 하나라도 틀리면 갱신 전체를 무시해요. */
 export function validMapState(state: MapState) {
     return isCoordinate(state.center) && (state.myLocation === null || isCoordinate(state.myLocation))
         && Number.isSafeInteger(state.centerRevision ?? 0) && Array.isArray(state.markers) && state.markers.length <= 500
-        && state.markers.every(marker => isCoordinate(marker) && Number.isSafeInteger(marker.id) && typeof marker.isSupported === 'boolean');
+        && state.markers.every(marker => isCoordinate(marker) && Number.isSafeInteger(marker.id) && typeof marker.isSupported === 'boolean'
+            && (marker.color === undefined || isHexColor(marker.color)))
+        && (state.lines === undefined || isValidMapLines(state.lines))
+        && (state.fitBounds === undefined || state.fitBounds === null || isMapBounds(state.fitBounds))
+        && Number.isSafeInteger(state.fitRevision ?? 0);
 }
 
 export function mapBounds(map: WebMap): MapBounds | null {
@@ -106,6 +116,7 @@ export function createWebMap(container: HTMLElement, sdk: MapSdk, initial: MapSt
     let overlays: Overlay[] = [];
     let lastCenter: Coordinate | null = null;
     let lastRevision: number | undefined;
+    let lastFit: number | undefined;
     const clearOverlays = () => { overlays.forEach(overlay => overlay.setMap(null)); overlays = []; };
     const dot = (p: Coordinate, color: string, mine: boolean) => {
         const el = container.ownerDocument.createElement('div');
@@ -125,8 +136,19 @@ export function createWebMap(container: HTMLElement, sdk: MapSdk, initial: MapSt
             lastCenter = { ...state.center }; lastRevision = state.centerRevision ?? 0;
         }
         clearOverlays();
-        state.markers.forEach(marker => dot(marker, marker.isSupported ? '#12a77a' : '#8c93a3', false));
+        const Polyline = sdk.Polyline;
+        if (state.lines?.length && Polyline) {
+            state.lines.forEach(line => overlays.push(new Polyline({ map, path: line.points.map(point), strokeWeight: 6,
+                strokeColor: line.color, strokeOpacity: 0.9, strokeStyle: line.dashed ? 'shortdash' : 'solid' })));
+        }
+        state.markers.forEach(marker => dot(marker, marker.color ?? (marker.isSupported ? '#12a77a' : '#8c93a3'), false));
         if (state.myLocation) dot(state.myLocation, '#2879ef', true);
+        // 범위 맞춤은 번호가 바뀔 때만 해요. 같은 번호로 다시 오면 사용자가 움직인 지도를 그대로 둬요.
+        const fit = state.fitBounds; const revision = state.fitRevision ?? 0;
+        if (fit && lastFit !== revision && sdk.LatLngBounds && map.setBounds) {
+            map.setBounds(new sdk.LatLngBounds(new sdk.LatLng(fit.minLat, fit.minLng), new sdk.LatLng(fit.maxLat, fit.maxLng)), 40, 40, 40, 40);
+            lastFit = revision;
+        }
     };
     const dispose = () => {
         if (disposed) return;

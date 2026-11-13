@@ -4,7 +4,8 @@
  * room·chat·recommendation 서비스가 서로 직접 import하지 않고
  * 방 삭제와 멤버 퇴장을 반영하도록 사용해요.
  *
- * 실제 WebSocket·STOMP 이벤트는 이번 범위 밖이에요.
+ * mock 나가기에서만 보내요. 서버 모드의 실제 WebSocket·STOMP 이벤트는
+ * services/realtime.ts 와 hooks/use-room-events.ts(#117)에서 받아요.
  */
 export type RoomMockChange = {
     roomId: string;
