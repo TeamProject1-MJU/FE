@@ -13,6 +13,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import LineBadge from '@/components/route/LineBadge';
+import { DIRECTION_LABELS } from '@/components/route/format';
+import { directionRouteIssue, normalizeDirectionRoute } from '@/utils/direction-route';
 import { buildSamples, checkDirection, LINE_COLORS, type Sample, type SampleSign } from '@/services/direction';
 import { getSelectedRoute } from '@/stores/route-store';
 import {
@@ -117,16 +119,16 @@ type ServerStage = 'route' | 'picking' | 'analyzing' | 'result' | 'error' | 'pho
 function ServerDirectionScreen() {
     const insets = useSafeAreaInsets();
     const params = useLocalSearchParams<{ stationId?: string; stationName?: string; lineId?: string; lineName?: string; headsign?: string; direction?: string }>();
-    const validRoute = typeof params.stationId === 'string' && Number.isSafeInteger(Number(params.stationId)) && Number(params.stationId) > 0 &&
-        typeof params.lineId === 'string' && Number.isSafeInteger(Number(params.lineId)) && Number(params.lineId) > 0 &&
-        typeof params.headsign === 'string' && !!params.headsign.trim();
-    const route: DirectionCheckRoute = { stationId: Number(params.stationId), lineId: Number(params.lineId), headsign: typeof params.headsign === 'string' ? params.headsign : '',
-        ...(['UP', 'DOWN', 'INNER', 'OUTER', 'LOOP'].includes(params.direction ?? '') ? { direction: params.direction as DirectionCode } : {}) };
+    const routeIssue = directionRouteIssue(params);
+    const normalizedRoute = normalizeDirectionRoute(params);
+    const validRoute = normalizedRoute !== null;
+    const route: DirectionCheckRoute = normalizedRoute ?? { stationId: 0, lineId: 0 };
+    const routeKey = JSON.stringify(route);
     // 화면 표시용 값이에요. 서버로 보내는 route 에는 넣지 않아요.
     const shown = (value: unknown) => (typeof value === 'string' ? value.trim() : '');
     const lineName = shown(params.lineName);
     const line = { id: route.lineId, name: lineName || `${route.lineId}호선`, color: LINE_COLORS[route.lineId] ?? null };
-    const routeSummary = [formatStationName(shown(params.stationName)), [lineName, shown(params.headsign)].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
+    const routeSummary = [formatStationName(shown(params.stationName)), [lineName, route.headsign || (route.direction ? DIRECTION_LABELS[route.direction] : '')].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
 
     const [photo, setPhoto] = useState<DirectionPhoto | null>(null);
     const [data, setData] = useState<DirectionCheckResponse | null>(null);
@@ -148,7 +150,7 @@ function ServerDirectionScreen() {
         setBusy(null); setPhoto(null); setData(null); setError(null);
         // 화면을 떠나면 유지하던 사진의 임시 파일도 지워요. 요청 중이면 그 요청이 끝날 때 지워요.
         return () => { active.current = false; requestId.current++; if (!inFlight.current) clean(); };
-    }, [clean]));
+    }, [clean, routeKey]));
     useEffect(() => () => { if (!inFlight.current) clean(); }, [clean]);
     const goBack = () => {
         if (router.canGoBack()) router.back();
@@ -299,7 +301,7 @@ function ServerDirectionScreen() {
                     {stage === 'route' && (
                         <>
                             <StatusTitle icon="map-outline" color={NAVY} title="확인할 경로가 없어요" wrap />
-                            <Text style={styles.panelText}>방향을 확인할 경로를 먼저 선택해 주세요.</Text>
+                            <Text style={styles.panelText}>{routeIssue ?? '방향을 확인할 경로를 먼저 선택해 주세요.'}</Text>
                             <View style={styles.buttonRow}>
                                 <ServerButton icon="search" label="경로 검색" onPress={() => router.replace('/route-search')} />
                             </View>
@@ -310,6 +312,7 @@ function ServerDirectionScreen() {
                         <>
                             <Text style={styles.panelTitle}>표지판을 찍어 방향을 확인해요</Text>
                             <Text style={styles.panelText}>역 이름·노선·방면이 보이게 찍거나 갤러리에서 고르면 AI가 내 경로와 비교해요.</Text>
+                            {!route.headsign && !!route.direction && <Text style={styles.panelText}>방향 표시가 보이는 표지판을 찍어 주세요. 행선지 이름만으로는 확인하기 어려울 수 있어요.</Text>}
                             {pickButtons(true)}
                             <PrivacyNote />
                         </>
@@ -349,7 +352,7 @@ function ServerDirectionScreen() {
 
                     {stage === 'result' && data && (
                         <>
-                            <ServerResult data={data} />
+                            <ServerResult data={data} direction={route.direction} />
                             {data.result === 'CORRECT' && (
                                 <View style={styles.buttonRow}>
                                     <ServerButton icon="map-outline" label="경로 안내로 돌아가기" disabled={locked} onPress={goBack} />
@@ -400,8 +403,12 @@ function ServerDirectionScreen() {
 }
 
 /** 서버 결과: 결과 3종을 제목·색·아이콘으로 구분하고, 읽은 값과 내 경로 값을 나란히 보여줘요. */
-function ServerResult({ data }: { data: DirectionCheckResponse }) {
+function ServerResult({ data, direction }: { data: DirectionCheckResponse; direction?: DirectionCode }) {
     const look = RESULT_LOOK[data.result];
+    const directionOnly = data.expected.headsign === null && direction !== undefined;
+    const tips = directionOnly && data.reason === 'MISSING_INFO'
+        ? ['상행·하행·내선·외선·응암순환 표시가 보이게', '행선지 이름만으로는 방향을 확정할 수 없어요', '판단이 어려우면 역 안내 표지와 경로를 함께 확인해 주세요']
+        : ['표지판 전체가 네모 안에 들어오게', '글자가 흐리지 않게 가까이에서', '빛 반사가 없는 각도로'];
     return (
         <View>
             <View style={[styles.row, styles.wrapRow]}>
@@ -426,19 +433,21 @@ function ServerResult({ data }: { data: DirectionCheckResponse }) {
                     const read = data.recognized[key];
                     const want = data.expected[key];
                     const shownRead = key === 'stationName' && read ? formatStationName(read) : read;
-                    const shownWant = key === 'stationName' && want ? formatStationName(want) : want;
+                    const codeOnlyCell = key === 'headsign' && directionOnly;
+                    const shownWant = codeOnlyCell ? DIRECTION_LABELS[direction!] : key === 'stationName' && want ? formatStationName(want) : want;
                     const differs = read != null && want != null && !sameSign(read, want);
                     return [
-                        <Cell key={`${key}-read`} label={`읽은 ${label}`} value={shownRead ?? '읽지 못했어요'} muted={read == null}
-                              bad={data.result === 'WRONG' && differs} good={data.result === 'CORRECT' && read != null && !differs} wrap />,
-                        <Cell key={`${key}-want`} label={`내 경로 ${label}`} value={shownWant ?? '정보 없음'} muted={want == null} wrap />,
+                        <Cell key={`${key}-read`} label={codeOnlyCell ? '읽은 방향 표시' : `읽은 ${label}`} value={shownRead ?? '읽지 못했어요'} muted={read == null}
+                              bad={data.result === 'WRONG' && (codeOnlyCell ? data.reason === 'DIRECTION_MISMATCH' && read != null : differs)}
+                              good={data.result === 'CORRECT' && read != null && !differs} wrap />,
+                        <Cell key={`${key}-want`} label={codeOnlyCell ? '내 경로 방향' : `내 경로 ${label}`} value={shownWant ?? '정보 없음'} muted={!codeOnlyCell && want == null} wrap />,
                     ];
                 })}
             </View>
 
             {data.result === 'RETAKE' && (
                 <View style={styles.tips}>
-                    {['표지판 전체가 네모 안에 들어오게', '글자가 흐리지 않게 가까이에서', '빛 반사가 없는 각도로'].map(tip => (
+                    {tips.map(tip => (
                         <View key={tip} style={styles.tipRow}>
                             <Ionicons name="checkmark" size={15} color={MINT_DEEP} />
                             <Text style={[styles.tipText, styles.shrink]}>{tip}</Text>
