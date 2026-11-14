@@ -1,4 +1,4 @@
-import type { RouteSearchOptions, RouteTimeSelection } from '@/types/route';
+import type { RouteSearchOptions, RouteTimeBasis, RouteTimeSelection } from '@/types/route';
 
 const DAY_MS = 86400000;
 const SEOUL_OFFSET_MS = 9 * 3600000;
@@ -29,6 +29,32 @@ export function routeTimeOptions(selection: RouteTimeSelection): Pick<RouteSearc
     if (selection.mode === 'departure') return { departAt: selection.at };
     if (selection.mode === 'arrival') return { arriveAt: selection.at };
     return {};
+}
+
+/** 개인 검색의 시간 기준이에요. 검색 조건이 없으면 지금 출발이에요. */
+export function personalRouteTimeBasis(selection: RouteTimeSelection | undefined): RouteTimeBasis {
+    return selection?.mode ?? 'now';
+}
+
+/**
+ * 약속방 검색의 시간 기준이에요 (#172, 명세 6.1).
+ * appointmentAt: 검색 시점에 FE 가 아는 방의 약속 시각(null 은 약속 없음, undefined 는 확인하지 못함).
+ * 서버가 지난 약속이라고 하면(appointmentPassed) 지금 출발 기준으로 계산한 경로예요.
+ * 약속 시각이 있고 지나지 않았다고 하면 약속 기준이에요. 서버 응답의 경로·시각은 다시 계산하지 않아요.
+ */
+export function roomRouteTimeBasis(appointmentAt: string | null | undefined, appointmentPassed: boolean): RouteTimeBasis {
+    if (appointmentPassed || appointmentAt === null) return 'now';
+    if (typeof appointmentAt !== 'string' || !Number.isFinite(Date.parse(appointmentAt))) return 'unknown';
+    return 'appointment';
+}
+
+/**
+ * 경로 안내에 지금의 실시간 열차(도착정보)를 붙여도 되는지예요 (#172).
+ * 지금 출발 기준으로 계산한 경로만 true 예요. 미래 시각·약속 기준·기준을 모르는 경로는 숨겨요.
+ * timeBasis 가 없는 이전 형태의 선택 값은 개인 검색 조건으로 판단해요.
+ */
+export function shouldShowLiveTrains(selected: { timeBasis?: RouteTimeBasis; searchTime?: RouteTimeSelection }): boolean {
+    return (selected.timeBasis ?? personalRouteTimeBasis(selected.searchTime)) === 'now';
 }
 
 export function validateRouteTimeOptions(options: RouteSearchOptions, now = Date.now()): string | null {

@@ -6,7 +6,7 @@
  * 화면 이동 시에는 routeId 만 넘깁니다.
  */
 
-import type { Route, RouteSource, RouteTimeSelection, StationSummary } from '@/types/route';
+import type { Route, RouteSource, RouteTimeBasis, RouteTimeSelection, StationSummary } from '@/types/route';
 
 export type SelectedRoute = {
     route: Route;
@@ -16,6 +16,8 @@ export type SelectedRoute = {
     notice: string | null;
     /** 선택한 결과를 조회할 때 적용한 개인 경로 시각 조건이에요. */
     searchTime?: RouteTimeSelection;
+    /** 이 경로를 계산한 시간 기준이에요 (#172). 경로 안내의 실시간 열차 표시를 이 값으로 정해요. */
+    timeBasis: RouteTimeBasis;
     origin: StationSummary;
     destination: StationSummary;
 };

@@ -107,6 +107,15 @@ export type Route = {
 
 export type RouteTimeSelection = { mode: 'now' } | { mode: 'departure' | 'arrival'; at: string };
 
+/**
+ * 선택한 경로를 어떤 시간 기준으로 계산했는지예요 (#172).
+ * - now: 지금 출발(개인 지금 출발, 약속 없는 방·지난 약속방의 혼자 모드)
+ * - departure·arrival: 개인 출발·도착 시각 지정
+ * - appointment: 약속방 모드(약속 시각까지 도착하는 경로, 명세 6.1)
+ * - unknown: 약속방 경로인데 방의 약속 시각을 확인하지 못했어요. 약속 기준일 수 있어 now 로 보지 않아요.
+ */
+export type RouteTimeBasis = 'now' | 'departure' | 'arrival' | 'appointment' | 'unknown';
+
 export type RouteSearchOptions = {
     roomId?: string;
     departAt?: string;

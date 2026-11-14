@@ -1,6 +1,6 @@
 import RouteNotices from '@/components/route/RouteNotices';
 import RouteTimeNotice from '@/components/route/RouteTimeNotice';
-import { formatArrivalSlack, formatRouteDateTime } from '@/utils/route-time';
+import { formatArrivalSlack, formatRouteDateTime, shouldShowLiveTrains } from '@/utils/route-time';
 import { formatStationName } from '@/utils/station-name';
 import { formatClock, formatTotalTime } from '@/components/route/format';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -52,6 +52,11 @@ export default function RouteGuideScreen() {
     const { routeId, arrivals } = useLocalSearchParams<{ routeId?: string; arrivals?: string }>();
     const selected = getSelectedRoute(routeId);
     const firstSubway = selected?.route.steps.find(step => step.type === 'SUBWAY');
+    const showLiveTrains = !!selected && shouldShowLiveTrains(selected);
+    /** 약속 기준(또는 기준을 모르는) 약속방 경로에서 실시간 열차를 뺀 이유예요 (#172). 개인 시각 지정은 검색 조건 안내가 따로 있어요. */
+    const liveTrainsNotice = selected?.timeBasis === 'appointment'
+        ? '약속 시각 기준 경로라 현재 실시간 열차는 표시하지 않아요.'
+        : selected?.timeBasis === 'unknown' ? '약속 정보를 확인하지 못해 현재 실시간 열차는 표시하지 않아요.' : null;
     const serverMode = !isMockMode();
     const routeMap = useRouteMap(selected?.route ?? null, serverMode, currentAccount());
 
@@ -127,6 +132,12 @@ export default function RouteGuideScreen() {
                         <View style={styles.notice}>
                             <Ionicons name="alert-circle-outline" size={17} color="#c58a00" />
                             <Text style={styles.noticeText}>{selected.notice}</Text>
+                        </View>
+                    )}
+                    {!!liveTrainsNotice && (
+                        <View style={styles.notice}>
+                            <Ionicons name="information-circle-outline" size={18} color="#9a6a00" />
+                            <Text style={styles.noticeText}>{liveTrainsNotice}</Text>
                         </View>
                     )}
 
@@ -216,7 +227,7 @@ export default function RouteGuideScreen() {
                         route={selected.route}
                         onSignCheck={openSignCheck}
                         {...(selected.searchTime ? { showDates: true } : {})}
-                        nextTrains={(!selected.searchTime || selected.searchTime.mode === 'now') && firstSubway && <NextTrains step={firstSubway} mock={arrivals === 'none' || arrivals === 'fail' ? arrivals : undefined} />}
+                        nextTrains={showLiveTrains && firstSubway && <NextTrains step={firstSubway} mock={arrivals === 'none' || arrivals === 'fail' ? arrivals : undefined} />}
                     />
                 </ScrollView>
             )}

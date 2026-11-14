@@ -18,8 +18,9 @@ import { MOCK_STATIONS } from '@/mocks/stations';
 import RouteCard from '@/components/route/RouteCard';
 import RouteTimeSelector from '@/components/route/RouteTimeSelector';
 import RouteTimeNotice from '@/components/route/RouteTimeNotice';
-import { routeTimeOptions } from '@/utils/route-time';
+import { personalRouteTimeBasis, roomRouteTimeBasis, routeTimeOptions } from '@/utils/route-time';
 import { searchRoute } from '@/services/route';
+import { fetchRoomDetail, getMockRoom } from '@/services/room';
 import { fetchStation, searchStations } from '@/services/station';
 import { useMock as isMockMode } from '@/services/api/config';
 import { ApiError, isAuthError } from '@/services/api/errors';
@@ -29,6 +30,7 @@ import {
     type Route,
     type RouteErrorCode,
     type RouteSearchResponse,
+    type RouteTimeBasis,
     type RouteTimeSelection,
     type StationSummary,
 } from '@/types/route';
@@ -53,7 +55,7 @@ const SORT_TABS: { key: SortKey; label: string }[] = [
 type SearchState =
     | { status: 'idle' }
     | { status: 'loading' }
-    | { status: 'success'; data: RouteSearchResponse; searchTime?: RouteTimeSelection }
+    | { status: 'success'; data: RouteSearchResponse; searchTime?: RouteTimeSelection; timeBasis: RouteTimeBasis }
     | { status: 'error'; code: RouteErrorCode; message: string };
 
 /** 역 검색 화면(#33)의 Station 을 경로 검색에서 쓰는 형태로 바꿉니다. */
@@ -64,6 +66,21 @@ function toStationSummary(station: Station): StationSummary {
         lines: station.lines.map(line => line.lineId),
         isSupported: station.isSupported,
     };
+}
+
+/**
+ * 약속방 경로의 시간 기준을 정할 방의 약속 시각이에요 (#172).
+ * 방 캐시(mock 은 mock 방 목록)에 있으면 그 값을 쓰고, 없으면 7.4 방 상세로 확인해요.
+ * null 은 약속 없음, undefined 는 확인하지 못함(조회 실패 등)이에요.
+ */
+async function roomAppointmentAt(roomId: string): Promise<string | null | undefined> {
+    const cached = getMockRoom(roomId);
+    if (cached) return cached.appointmentAt;
+    try {
+        return (await fetchRoomDetail(roomId)).appointmentAt;
+    } catch {
+        return undefined;
+    }
 }
 
 /** 탭 기준 정렬. 같으면 소요 시간 → 환승 순으로 비교합니다. */
@@ -174,10 +191,15 @@ export default function RouteSearchScreen() {
         setSearch({ status: 'loading' });
 
         try {
-            const usedTime = params.roomId ? undefined : searchTime;
-            const data = await searchRoute(from, to, params.roomId ? { roomId: params.roomId } : routeTimeOptions(searchTime));
+            const roomId = params.roomId;
+            const usedTime = roomId ? undefined : searchTime;
+            const [data, appointmentAt] = await Promise.all([
+                searchRoute(from, to, roomId ? { roomId } : routeTimeOptions(searchTime)),
+                roomId ? roomAppointmentAt(roomId) : Promise.resolve(undefined),
+            ]);
             if (id !== requestId.current) return;
-            setSearch({ status: 'success', data, searchTime: usedTime });
+            const timeBasis = roomId ? roomRouteTimeBasis(appointmentAt, data.appointmentPassed) : personalRouteTimeBasis(usedTime);
+            setSearch({ status: 'success', data, searchTime: usedTime, timeBasis });
         } catch (error) {
             if (id !== requestId.current) return;
             if (error instanceof ApiError && (error.code.startsWith('TOKEN_') || isAuthError(error))) {
@@ -231,6 +253,7 @@ export default function RouteSearchScreen() {
             appointmentPassed: search.data.appointmentPassed,
             notice: search.data.notice,
             ...(search.searchTime ? { searchTime: search.searchTime } : {}),
+            timeBasis: search.timeBasis,
             origin: departure,
             destination,
         });
