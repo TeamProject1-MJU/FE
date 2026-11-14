@@ -1882,6 +1882,53 @@ test('닉네임은 이모지 포함 코드 포인트 1·2·20·21자 경계를 �
     for (const value of ['', '  ']) await assert.rejects(service.updateNickname(value), { code: 'VALIDATION_ERROR' });
 });
 
+test('174 Java strip 공백과 보존 문자, NUL을 서버·mock에 동일하게 적용해요', async () => {
+    const spaces = [0x20, 9, 10, 11, 12, 13, 0x1c, 0x1d, 0x1e, 0x1f,
+        0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006,
+        0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x205f, 0x3000].map(code => String.fromCodePoint(code));
+    const r = authRuntime(); await r.auth.loginWithKakao();
+    const service = r.load('src/services/user.ts');
+    const mock = authRuntime(true); const mockService = mock.load('src/services/user.ts');
+    const run = async pending => { mock.advance(700); await flush(); return pending; };
+    const cases = spaces.map(space => [space + '가 나' + space, '가 나']);
+    cases.push([spaces.join('') + '가나' + spaces.join(''), '가나']);
+    for (const code of [0x00a0, 0x2007, 0x202f, 0xfeff, 0x85, 0x200b]) {
+        const char = String.fromCodePoint(code);
+        cases.push([' \t' + char + '가' + char + '\n ', char + '가' + char]);
+        assert.equal(service.nicknameLength(char + '가'.repeat(19) + char), 21);
+        assert.notEqual(service.validateNickname(char + '가'.repeat(19) + char), null);
+    }
+    for (const [input, expected] of cases) {
+        assert.equal(service.stripNickname(input), expected);
+        assert.equal(service.nicknameLength(input), Array.from(expected).length);
+        assert.equal(service.validateNickname(input), null);
+        r.respond(async () => ok({ id: 'user-1', nickname: expected }));
+        await service.updateNickname(input);
+        assert.deepEqual(JSON.parse(r.calls.at(-1).options.body), { nickname: expected });
+        assert.equal((await run(mockService.updateNickname(input))).nickname, expected);
+        assert.equal((await run(mockService.fetchMe())).nickname, expected);
+    }
+    for (const input of ['', ' ', spaces.join('')]) {
+        assert.equal(service.nicknameLength(input), 0);
+        assert.equal(service.validateNickname(input), '닉네임을 입력해주세요.');
+        const count = r.calls.length;
+        await assert.rejects(service.updateNickname(input), { code: 'VALIDATION_ERROR' });
+        assert.equal(r.calls.length, count);
+    }
+    for (const input of ['\u0000가나', '가\u0000나', '가나\u0000', ' \u0000 ', '\u0000' + '가'.repeat(21)]) {
+        const message = '닉네임에 사용할 수 없는 문자가 있어요.';
+        assert.equal(service.validateNickname(input), message);
+        const count = r.calls.length;
+        await assert.rejects(service.updateNickname(input), { code: 'VALIDATION_ERROR', message });
+        assert.equal(r.calls.length, count);
+        const before = (await run(mockService.fetchMe())).nickname;
+        const rejected = assert.rejects(mockService.updateNickname(input), { code: 'VALIDATION_ERROR', message });
+        mock.advance(700); await rejected;
+        assert.equal((await run(mockService.fetchMe())).nickname, before);
+    }
+    assert.equal(mock.calls.length, 0);
+});
+
 test('사용자 API는 VALIDATION_ERROR·ROOM_BUSY·TOKEN_INVALID 코드를 그대로 전달해요', async () => {
     for (const [method, invoke] of [
         ['GET', service => service.fetchMe()],
