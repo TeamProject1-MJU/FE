@@ -9277,3 +9277,143 @@ test('140 mock 방(room-1, 확정 건대입구·내 출발 홍대입구)에서�
     assert.deepEqual(plain(pushes.at(-1).params), { departureId: id('홍대입구'), departure: '홍대입구', destinationId: id('건대입구'), destination: '건대입구', roomId: 'room-1' });
     r.unmount();
 });
+
+/* ---------- #173 다음 열차 남은 시간: 앱 수신 시각 기준 ---------- */
+// BE 가 secondsUntil 을 요청 시점 기준으로 보정해서 내려줘요. receivedAt(서버 캐시 시각)만큼 또 빼면 안 돼요.
+
+/** 화면 이탈·복귀를 흉내 내요. focus() 를 부르면 다음 렌더에서 이전 효과를 정리하고 다시 실행해요(useFocusEffect). */
+function nextTrains173Runtime(env = serverEnv) {
+    const r = nextTrainsRuntime(env);
+    let focusKey = 0;
+    r.external['expo-router'].useFocusEffect = callback => r.external.react.useEffect(callback, [callback, focusKey]);
+    const ago = seconds => new Date(ARRIVALS_BASE_MS + r.now() - seconds * 1000).toISOString();
+    return { ...r, ago, refocus: () => { focusKey++; } };
+}
+
+test('173 기준 시각 함수: 응답을 받은 순간의 앱 시각이고, 지난 초는 1초 단위·0 이상', () => {
+    const r = createRuntime();
+    const format = r.load('src/components/route/format.ts');
+    vm.runInContext('Date', r.context).now = () => 1234567;
+    assert.equal(format.arrivalsCountdownBase(), 1234567);
+    assert.equal(format.arrivalsElapsedSec(1000, 1000), 0);
+    assert.equal(format.arrivalsElapsedSec(1000, 1999), 0);
+    assert.equal(format.arrivalsElapsedSec(1000, 2000), 1);
+    assert.equal(format.arrivalsElapsedSec(1000, 31500), 30);
+    assert.equal(format.arrivalsElapsedSec(5000, 1000), 0, '시계가 뒤로 가도 0 아래로 내려가지 않아요');
+    // 표시 계산 자리에서 receivedAt 을 쓰지 않아요.
+    const source = fs.readFileSync(path.join(root, 'src/components/route/NextTrains.tsx'), 'utf8');
+    assert.doesNotMatch(source, /Date\.parse\(|receivedAt\)/);
+});
+
+test('173 응답 직후: receivedAt 이 30초 전이어도 secondsUntil 그대로 보이고 1초 단위로 줄어요', async () => {
+    const r = nextTrains173Runtime();
+    r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(30), trains: [arrivalTrain({ secondsUntil: 125 }), arrivalTrain({ secondsUntil: 365 })] })));
+    r.text(); await flush();
+    assert.equal(r.text(), '다음 열차 · 성수행 2분 5초 · 성수행 6분 5초', '30초가 빠지면 안 돼요');
+    r.advance(999); assert.equal(r.text(), '다음 열차 · 성수행 2분 5초 · 성수행 6분 5초');
+    r.advance(1); assert.equal(r.text(), '다음 열차 · 성수행 2분 4초 · 성수행 6분 4초');
+    r.advance(1000); assert.equal(r.text(), '다음 열차 · 성수행 2분 3초 · 성수행 6분 3초');
+    r.advance(5000); assert.equal(r.text(), '다음 열차 · 성수행 1분 58초 · 성수행 5분 58초');
+    // 더 오래된 receivedAt(5분 전)도 마찬가지예요. 줄을 숨기지도 않아요.
+    r.unmount();
+    const old = nextTrains173Runtime();
+    old.respond(async () => ok(arrivalsData({ receivedAt: old.ago(300), trains: [arrivalTrain({ secondsUntil: 200 })] })));
+    old.text(); await flush();
+    assert.equal(old.text(), '다음 열차 · 성수행 3분 20초');
+    old.unmount();
+});
+
+test('173 폴링 재조회: 새 secondsUntil 과 새 기준 시각으로 갱신하고, 응답이 늦게 와도 받은 순간부터 세요', async () => {
+    const r = nextTrains173Runtime();
+    r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(15), trains: [arrivalTrain({ secondsUntil: 300 })] })));
+    r.text(); await flush();
+    r.advance(19000); assert.equal(r.text(), '다음 열차 · 성수행 4분 41초');
+    // 20초 폴링: 서버가 요청 시점으로 보정한 새 값 290초, receivedAt 은 캐시라 20초 전
+    const slow = deferred();
+    r.respond(() => slow.promise);
+    r.advance(1000); await flush();
+    assert.equal(r.calls.length, 2);
+    assert.equal(r.text(), '다음 열차 · 성수행 4분 40초', '응답 전에는 이전 값으로 계속 세요');
+    r.advance(3000); await flush();
+    assert.equal(r.text(), '다음 열차 · 성수행 4분 37초');
+    slow.resolve(ok(arrivalsData({ receivedAt: r.ago(20), trains: [arrivalTrain({ secondsUntil: 290 }), arrivalTrain({ secondsUntil: 61 })] })));
+    await flush();
+    assert.equal(r.text(), '다음 열차 · 성수행 4분 50초 · 성수행 1분 1초', '새 값 그대로, receivedAt·요청 지연만큼 빼지 않아요');
+    r.advance(1000); assert.equal(r.text(), '다음 열차 · 성수행 4분 49초 · 성수행 1분 0초');
+    r.advance(1000); assert.equal(r.text(), '다음 열차 · 성수행 4분 48초 · 성수행 곧 도착');
+    r.unmount();
+    assert.equal(r.timers.size, 0);
+});
+
+test('173 화면 복귀: 재조회 결과와 새 기준 시각으로 갱신하고 이전 기준을 이어 쓰지 않아요', async () => {
+    const r = nextTrains173Runtime();
+    r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(10), trains: [arrivalTrain({ secondsUntil: 400 })] })));
+    r.text(); await flush();
+    r.advance(15000); assert.equal(r.text(), '다음 열차 · 성수행 6분 25초');
+    r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(18), trains: [arrivalTrain({ secondsUntil: 380 })] })));
+    r.refocus();
+    r.text(); // 이 렌더 뒤에 이전 효과 정리 + 다시 조회가 돌아요.
+    assert.equal(r.text(), '다음 열차 확인 중', '복귀하면 이전 값을 지우고 다시 불러요');
+    await flush();
+    assert.equal(r.calls.length, 2);
+    assert.equal(r.text(), '다음 열차 · 성수행 6분 20초');
+    r.advance(2000); assert.equal(r.text(), '다음 열차 · 성수행 6분 18초');
+    // 복귀 후 폴링도 복귀 시점부터 20초예요(이전 타이머는 정리됨).
+    r.advance(17999); await flush(); assert.equal(r.calls.length, 2);
+    r.advance(1); await flush(); assert.equal(r.calls.length, 3);
+    r.unmount();
+    assert.equal(r.timers.size, 0);
+});
+
+test('173 조회 실패: 인증 오류는 이전 값·이전 기준 시각으로 이어 세고, 그 밖의 실패는 숨긴 뒤 다음 성공에서 새 기준', async () => {
+    const r = nextTrains173Runtime();
+    r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(30), trains: [arrivalTrain({ secondsUntil: 600 })] })));
+    r.text(); await flush();
+    r.respond(async () => fail('TOKEN_INVALID'));
+    r.advance(20000); await flush();
+    assert.equal(r.text(), '다음 열차 · 성수행 9분 40초', '실패 시 기준 시각을 지금으로 바꾸지 않아요');
+    r.advance(5000); assert.equal(r.text(), '다음 열차 · 성수행 9분 35초');
+    r.respond(async () => jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR' } }, 500));
+    r.advance(15000); await flush();
+    assert.equal(r.text(), null);
+    r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(25), trains: [arrivalTrain({ secondsUntil: 500 })] })));
+    r.advance(20000); await flush();
+    assert.equal(r.text(), '다음 열차 · 성수행 8분 20초');
+    r.unmount();
+});
+
+test('173 표시 규칙 유지: null 은 message, 0초·60초 미만은 곧 도착, 0 아래로 내려가지 않아요', async () => {
+    const r = nextTrains173Runtime();
+    r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(40), trains: [
+            arrivalTrain({ secondsUntil: null, stopsAway: 3, message: '[3]번째 전역 (남영)' }),
+            arrivalTrain({ secondsUntil: 0, message: '전역 도착' }),
+        ] })));
+    r.text(); await flush();
+    assert.equal(r.text(), '다음 열차 · 성수행 · 3번째 전역 (남영) · 성수행 곧 도착');
+    r.advance(10000);
+    assert.equal(r.text(), '다음 열차 · 성수행 · 3번째 전역 (남영) · 성수행 곧 도착');
+    r.unmount();
+    for (const [seconds, shown] of [[60, '성수행 1분 0초'], [59, '성수행 곧 도착'], [1, '성수행 곧 도착']]) {
+        const one = nextTrains173Runtime();
+        one.respond(async () => ok(arrivalsData({ receivedAt: one.ago(50), trains: [arrivalTrain({ secondsUntil: seconds })] })));
+        one.text(); await flush();
+        assert.equal(one.text(), `다음 열차 · ${shown}`, String(seconds));
+        one.advance(19000);
+        assert.equal(one.text(), '다음 열차 · 성수행 곧 도착', `${seconds} 0 아래로 내려가지 않아요`);
+        one.unmount();
+    }
+});
+
+test('173 mock 모드: receivedAt 이 지금이라 결과가 그대로이고 폴링 후에도 같은 열차 시각을 세요', async () => {
+    const r = nextTrains173Runtime({});
+    r.text(); r.advance(400); await flush();
+    assert.equal(r.text(), '다음 열차 · 성수행 3분 2초 · 성수행 7분 2초');
+    // 표시는 1초 틱(0·1000·…ms)에 바뀌어요. 400ms 에 받은 값이라 5400ms 에는 5000ms 틱 기준 4초가 지난 값이에요(기존과 같음).
+    r.advance(5000); assert.equal(r.text(), '다음 열차 · 성수행 2분 58초 · 성수행 6분 58초');
+    r.advance(600); assert.equal(r.text(), '다음 열차 · 성수행 2분 57초 · 성수행 6분 57초');
+    // 20초 폴링(mock 400ms 지연) 뒤: 열차 도착 시각은 그대로라 182 − 20.4 → 162초
+    r.advance(14400); r.advance(400); await flush();
+    assert.equal(r.text(), '다음 열차 · 성수행 2분 42초 · 성수행 6분 42초');
+    assert.equal(r.calls.length, 0);
+    r.unmount();
+});
