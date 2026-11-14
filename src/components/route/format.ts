@@ -37,9 +37,25 @@ export function formatDestination(name: string) {
 }
 
 /**
+ * 도착정보 카운트다운의 기준 시각(ms). 기준을 정하는 곳은 여기 한 군데예요.
+ * BE 가 secondsUntil 을 요청 시점 기준으로 보정해서 내려줘요(#173). 명세 6.3 의 receivedAt 기준 문구와 다르며 BE 확인에 따름.
+ * 그래서 receivedAt(서버 캐시 시각)은 쓰지 않고, 응답을 받은 순간 앱 시각을 기준으로 해요.
+ * 응답을 받은 순간에 한 번 불러 그 값을 응답과 함께 보관해요.
+ */
+export function arrivalsCountdownBase(): number {
+    return Date.now();
+}
+
+/** 기준 시각 이후 지난 초(0 이상). formatNextTrain 의 둘째 인자로 넘겨요. */
+export function arrivalsElapsedSec(baseMs: number, nowMs: number) {
+    return Math.max(0, Math.floor((nowMs - baseMs) / 1000));
+}
+
+/**
  * "다음 열차" 한 대의 문구 (#95, 명세 6.3)
  * - secondsUntil 이 숫자이면 message 와 상관없이 카운트다운해요.
- *   남은 초 = max(0, secondsUntil − receivedAt 이후 지난 초). 60초 미만이면 "성수행 곧 도착", 그 밖에는 "성수행 N분 N초"
+ *   남은 초 = max(0, secondsUntil − 기준 시각(arrivalsCountdownBase, 앱이 응답을 받은 시각) 이후 지난 초).
+ *   60초 미만이면 "성수행 곧 도착", 그 밖에는 "성수행 N분 N초"
  * - secondsUntil 이 null 일 때만 message(서버 arvlMsg2 원문)를 시간 대신 보여줘요: "성수행 · 2번째 전역"
  *   message 맨 앞 "[N]" 은 대괄호만 빼요(#103). "[3]번째 전역 (남영)" → "3번째 전역 (남영)". 나머지 글자는 원문 그대로예요.
  *   message 가 이미 "성수행"으로 시작하면 행선지를 한 번만 보여줘요. message 도 비어 있으면 행선지만 보여줘요.
