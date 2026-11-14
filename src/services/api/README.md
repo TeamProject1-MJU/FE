@@ -329,3 +329,21 @@ await setSelectedStation(roomId, null); // DELETE …/selected-station, body 없
 - sessionGeneration:userId 범위를 요청 전후 검사하고, 같은 계정·방의 나가기/약속역 변경 연타를 막아요. 나가기 전에 시작한 목록·상세·멤버 조회는 제거한 방을 캐시에 되살리지 못해요. 계정·방 변경·화면 이탈 뒤 늦은 응답은 이전 화면의 성공 문구·이동을 실행하지 않아요. 화면 복귀 시 처리 중 버튼도 해제해요.
 - 서버 성공 뒤 상세 GET만 실패하면 '변경은 저장했지만 최신 정보를 불러오지 못했어요'라고 안내해요. 자동 재전송은 추가하지 않아요. 재저장 시 같은 역의 confirmedAt이 다시 갱신될 수 있어요.
 - BE 실시간 이벤트·SYSTEM 메시지·WebSocket, 후보·투표 API 변경은 범위 밖이에요. 기존 채팅의 mock SYSTEM 메시지가 실제 서버 이벤트를 수신한 것은 아니에요.
+
+## AI 표지판 방향 확인 (#151, 명세 9.1)
+
+```ts
+import { checkDirection } from '@/services/direction';
+
+await checkDirection(photo, { stationId, lineId, direction: 'INNER' });
+await checkDirection(photo, { stationId, lineId, headsign: '사당 방면' });
+// POST /ai/direction-check: image + route(JSON 문자열), 요청당 30초
+```
+
+- 역·노선 ID는 양의 정수이며, 알려진 `headsign` 또는 유효한 `direction` 중 하나가 필요해요. `direction`은 경로 SUBWAY 단계의 `directionCode`를 UP/DOWN/INNER/OUTER/LOOP 그대로 보내요. 잘못된 코드는 headsign 유무와 관계없이 거절해요.
+- `headsign`의 생략·null·공백은 방면 미상으로 처리하고 전송에서는 생략해요. 방향 코드로 종착역·행선지·방면 이름을 만들지 않아요. 알려진 방면 이름만 있는 기존 요청도 유지해요.
+- 경로 안내는 구간별 승차역·노선·방향으로 진입해요. 역·노선 정보가 없거나 방향·방면이 모두 없는 구간에는 버튼 대신 이유를 표시하고, 직접 사진 화면을 열어도 사진 선택·업로드를 막아요. mock의 기존 예시 흐름은 유지해요.
+- `expected.headsign`의 명시적 null은 정상이고, 그 밖의 필수 필드 누락·타입 오류는 기존처럼 `UNKNOWN_ERROR`예요. 요청에 사용한 코드는 결과 화면에서 **내 경로 방향**으로 표시하며 응답의 headsign에 채워 넣지 않아요.
+- CORRECT·WRONG·RETAKE와 사유는 서버 판독 결과를 따르고 FE에서 다시 추측하지 않아요. RETAKE/MISSING_INFO는 유효한 200 판독 결과이며 400 VALIDATION_ERROR와 구분해요. 방향 단독 요청에서 행선지 이름만 보이면 판정이 어려울 수 있다는 안내를 제공해요.
+- 사진 검증·축소·30초 제한·중복 제출 방지·같은 사진 재시도·인증 갱신·임시 파일 정리는 유지해요. 경로·계정·화면이 바뀐 뒤 늦은 판독은 표시하지 않아요.
+- 계약 기준: [BE 방향 단독 요청·응답 계약](https://github.com/TeamProject1-MJU/BE/blob/c6f793eff5e27e9f776144d905a695fc797192ea/docs/sign-75.md). 실제 역·노선·승차 방향 조합과 사진의 명시적 방향 근거는 BE가 검증해요.
