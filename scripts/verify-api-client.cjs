@@ -9417,3 +9417,168 @@ test('173 mock 모드: receivedAt 이 지금이라 결과가 그대로이고 폴
     assert.equal(r.calls.length, 0);
     r.unmount();
 });
+
+/* ---------- #172 약속방 경로의 시간 기준과 실시간 열차 표시 ---------- */
+
+const APPOINTMENT172 = '2099-11-20T19:00:00+09:00';
+const PASSED_NOTICE172 = '이미 지난 약속이에요. 지금 출발 기준 경로를 보여줘요.';
+
+/** 안내 화면을 펼쳐 NextTrains 가 있으면 실제로 구동하고, 60초 동안 도착정보 요청·폴링을 세요. */
+async function liveTrains172(selected, mock = false) {
+    const g = mock ? guide129({ mock: true, route: selected.route }) : route147Guide(selected);
+    if (mock) g.load('src/stores/route-store.ts').setSelectedRoute(selected);
+    g.external['expo-router'].useFocusEffect = callback => g.external.react.useEffect(callback, [callback]);
+    const arrivals = g.load('src/services/arrivals.ts'); const original = arrivals.fetchArrivals; const calls = [];
+    arrivals.fetchArrivals = (...args) => { calls.push(args[0]); return original(...args); };
+    const fetched = [];
+    g.context.fetch = async url => { fetched.push(url); return ok(arrivalsData()); };
+    const view = g.render();
+    const timeline = findElement(view, element => element.type === g.Timeline);
+    assert.ok(timeline, '경로 목록은 그대로 보여요');
+    g.renderComponent(timeline);
+    const next = timeline.props.nextTrains;
+    if (next && typeof next === 'object') { g.renderComponent(next); await settle(); }
+    g.advance(60000); await settle();
+    if (next && typeof next === 'object') { g.renderComponent(next); await settle(); }
+    const polling = [...g.timers.values()].some(timer => timer.repeat && timer.ms === 20000);
+    const notice = ['약속 시각 기준 경로라 현재 실시간 열차는 표시하지 않아요.', '약속 정보를 확인하지 못해 현재 실시간 열차는 표시하지 않아요.']
+        .find(text => findText(view, text)) ?? null;
+    g.unmount();
+    return { shown: !!next, calls: calls.length, arrivalsFetches: fetched.filter(url => url.includes('/arrivals')).length, polling, notice };
+}
+
+/** 서버 모드 약속방 경로 검색. cache: 방 캐시에 미리 넣을지, detail: 캐시에 없을 때 7.4 방 상세 응답이에요. */
+async function roomSearch172({ appointmentAt = APPOINTMENT172, passed = false, cache = true, detail = 'ok' } = {}) {
+    const room = { ...roomQueryDetail(), appointmentAt };
+    const r = routeScreenRuntime({ departure: '강남', destination: '사당', roomId: room.id });
+    r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_ME, nickname: '서버 나' });
+    const roomCache = r.load('src/services/room-cache.ts');
+    if (cache) roomCache.cacheRoomDetail({ ...room, memberCount: room.members.length }, roomCache.getRoomCacheScope());
+    r.calls172 = [];
+    r.context.fetch = async (url, options) => {
+        r.calls172.push(url);
+        if (url.endsWith('/routes/search')) {
+            const body = JSON.parse(options.body); assert.equal(body.roomId, room.id); assert.equal('departAt' in body || 'arriveAt' in body, false);
+            const data = routeData(); data.appointmentPassed = passed; data.notice = passed ? PASSED_NOTICE172 : null; return ok(data);
+        }
+        if (url.endsWith(`/rooms/${room.id}`)) {
+            if (detail === 'network') throw new TypeError('Network request failed');
+            if (detail === 'fail') return jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR' } }, 500);
+            return ok(room);
+        }
+        return ok(stationSearchData([url.includes(encodeURIComponent('강남')) ? serverRouteStation(88001, '강남') : serverRouteStation(99002, '사당')]));
+    };
+    for (let i = 0; i < 6; i++) { r.render(); await settle(); }
+    const card = findElement(r.render(), element => element.type === r.load('src/components/route/RouteCard.tsx').default);
+    assert.ok(card, '약속방 경로 결과가 보여요');
+    const before = plain(card.props.route);
+    card.props.onStart();
+    const selected = r.load('src/stores/route-store.ts').getSelectedRoute();
+    assert.deepEqual(plain(selected.route), before, '서버가 계산한 경로·시각을 그대로 넘겨요');
+    r.unmount();
+    return { r, selected, roomRequests: r.calls172.filter(url => url.endsWith(`/rooms/${room.id}`)).length };
+}
+
+test('172 시간 기준 정의: 개인은 검색 조건, 약속방은 약속 시각·appointmentPassed 로 정하고 now 일 때만 실시간을 보여요', () => {
+    const r = createRuntime(); const time = r.load('src/utils/route-time.ts');
+    assert.equal(time.personalRouteTimeBasis(undefined), 'now');
+    assert.equal(time.personalRouteTimeBasis({ mode: 'now' }), 'now');
+    assert.equal(time.personalRouteTimeBasis({ mode: 'departure', at: APPOINTMENT172 }), 'departure');
+    assert.equal(time.personalRouteTimeBasis({ mode: 'arrival', at: APPOINTMENT172 }), 'arrival');
+    assert.equal(time.roomRouteTimeBasis(APPOINTMENT172, false), 'appointment');
+    assert.equal(time.roomRouteTimeBasis(APPOINTMENT172, true), 'now');
+    assert.equal(time.roomRouteTimeBasis(null, false), 'now');
+    assert.equal(time.roomRouteTimeBasis(null, true), 'now');
+    assert.equal(time.roomRouteTimeBasis(undefined, false), 'unknown');
+    assert.equal(time.roomRouteTimeBasis(undefined, true), 'now', '서버가 지난 약속이라고 하면 지금 출발 기준이에요');
+    assert.equal(time.roomRouteTimeBasis('잘못된 시각', false), 'unknown');
+    for (const [basis, shown] of [['now', true], ['departure', false], ['arrival', false], ['appointment', false], ['unknown', false]]) {
+        assert.equal(time.shouldShowLiveTrains({ timeBasis: basis }), shown, basis);
+    }
+    // 시간 기준이 없는 이전 형태의 값은 개인 검색 조건으로 판단해요(기존 동작).
+    assert.equal(time.shouldShowLiveTrains({}), true);
+    assert.equal(time.shouldShowLiveTrains({ searchTime: { mode: 'arrival', at: APPOINTMENT172 } }), false);
+});
+
+test('172 미래 약속이 있는 방 경로: 안내 화면에 실시간 열차가 없고 도착정보 요청·20초 폴링이 0번, 안내 한 줄을 보여요', async () => {
+    const { selected, roomRequests } = await roomSearch172();
+    assert.equal(selected.timeBasis, 'appointment'); assert.equal(selected.searchTime, undefined);
+    assert.equal(roomRequests, 0, '방 캐시에 약속 시각이 있으면 방 상세를 다시 부르지 않아요');
+    const live = await liveTrains172(selected);
+    assert.deepEqual(live, { shown: false, calls: 0, arrivalsFetches: 0, polling: false, notice: '약속 시각 기준 경로라 현재 실시간 열차는 표시하지 않아요.' });
+});
+
+test('172 약속 없는 방·약속이 지난 방(appointmentPassed true)은 지금 출발 기준이라 실시간 열차를 보여요', async () => {
+    for (const [label, options] of [['약속 없는 방', { appointmentAt: null }], ['지난 약속방', { appointmentAt: '2026-01-01T19:00:00+09:00', passed: true }]]) {
+        const { selected } = await roomSearch172(options);
+        assert.equal(selected.timeBasis, 'now', label);
+        assert.equal(selected.appointmentPassed, !!options.passed, label);
+        const live = await liveTrains172(selected);
+        assert.equal(live.shown, true, label); assert.ok(live.calls >= 2, `${label}: 처음 조회 + 20초 폴링`);
+        assert.ok(live.arrivalsFetches >= 2, label); assert.equal(live.polling, true, label); assert.equal(live.notice, null, label);
+        if (options.passed) {
+            const g = route147Guide(selected); assert.ok(findText(g.render(), PASSED_NOTICE172), '지난 약속 안내는 그대로예요'); g.unmount();
+        }
+    }
+});
+
+test('172 방 캐시에 없으면 방 상세로 약속 시각을 확인하고, 확인하지 못하면 실시간을 숨기고 이유를 한 줄 보여요', async () => {
+    const future = await roomSearch172({ cache: false });
+    assert.equal(future.roomRequests, 1); assert.equal(future.selected.timeBasis, 'appointment');
+    const none = await roomSearch172({ cache: false, appointmentAt: null });
+    assert.equal(none.roomRequests, 1); assert.equal(none.selected.timeBasis, 'now');
+    for (const detail of ['fail', 'network']) {
+        const unknown = await roomSearch172({ cache: false, detail });
+        assert.equal(unknown.selected.timeBasis, 'unknown', detail);
+        const live = await liveTrains172(unknown.selected);
+        assert.deepEqual(live, { shown: false, calls: 0, arrivalsFetches: 0, polling: false, notice: '약속 정보를 확인하지 못해 현재 실시간 열차는 표시하지 않아요.' }, detail);
+        // 지난 약속이라고 서버가 알려 주면 약속 정보를 몰라도 지금 출발 기준이에요.
+        const passed = await roomSearch172({ cache: false, detail, passed: true });
+        assert.equal(passed.selected.timeBasis, 'now', detail);
+    }
+});
+
+test('172 개인 지금 출발은 실시간을 보여 주고, 개인 출발·도착 시각 지정은 기존처럼 숨기며 기준이 안내 화면까지 유지돼요', async () => {
+    const r = await screen152();
+    for (const [value, basis, shown] of [[{ mode: 'now' }, 'now', true], [{ mode: 'departure', at: DEPART152 }, 'departure', false], [{ mode: 'arrival', at: ARRIVE152 }, 'arrival', false]]) {
+        if (value.mode !== 'now') { r.selector152().props.onChange(value); await pump152(r); }
+        r.card152().props.onStart();
+        const selected = r.load('src/stores/route-store.ts').getSelectedRoute();
+        assert.equal(selected.timeBasis, basis);
+        // 안내 화면은 저장소에서 같은 선택 값을 다시 읽어요.
+        const g = route147Guide(selected);
+        assert.equal(g.load('src/stores/route-store.ts').getSelectedRoute(selected.route.routeId).timeBasis, basis); g.unmount();
+        const live = await liveTrains172(selected);
+        assert.equal(live.shown, shown, basis); assert.equal(live.calls > 0, shown, basis); assert.equal(live.polling, shown, basis);
+        assert.equal(live.notice, null, '개인 시각 지정은 검색 조건 안내가 따로 있어 추가 문구를 넣지 않아요');
+    }
+    r.unmount();
+});
+
+test('172 경로 검색 결과 카드에는 실시간 열차 표시가 없어요(같은 규칙을 적용할 곳 없음)', () => {
+    for (const file of ['src/app/route-search.tsx', 'src/components/route/RouteCard.tsx']) {
+        const source = fs.readFileSync(path.join(root, file), 'utf8');
+        assert.doesNotMatch(source, /NextTrains|fetchArrivals/, file);
+    }
+});
+
+test('172 mock 모드: 약속 있는 mock 방은 실시간을 숨기고 약속 없는 mock 방은 보여요(서버 미호출)', async () => {
+    for (const [roomId, basis, shown] of [['room-1', 'appointment', false], ['room-3', 'now', true]]) {
+        const r = routeScreenRuntime({ departure: '건대입구', destination: '사당', roomId }, true);
+        let calls = 0; r.context.fetch = async () => { calls++; throw Error('mock 모드는 서버를 부르지 않아요'); };
+        for (let i = 0; i < 5; i++) { r.render(); await settle(); r.advance(800); await settle(); }
+        const card = findElement(r.render(), element => element.type === r.load('src/components/route/RouteCard.tsx').default);
+        assert.ok(card, roomId); card.props.onStart();
+        const selected = r.load('src/stores/route-store.ts').getSelectedRoute();
+        assert.equal(selected.timeBasis, basis, roomId); assert.equal(calls, 0); r.unmount();
+        const live = await liveTrains172(selected, true);
+        assert.equal(live.shown, shown, roomId); assert.equal(live.calls > 0, shown, roomId);
+        assert.equal(live.arrivalsFetches, 0, 'mock 도착정보도 서버를 부르지 않아요');
+        assert.equal(live.notice, shown ? null : '약속 시각 기준 경로라 현재 실시간 열차는 표시하지 않아요.', roomId);
+    }
+    // mock 목록에 없는 방은 mock 방 상세도 실패해서 기준을 알 수 없어요.
+    const r = routeScreenRuntime({ departure: '건대입구', destination: '사당', roomId: 'room-none' }, true);
+    for (let i = 0; i < 5; i++) { r.render(); await settle(); r.advance(800); await settle(); }
+    findElement(r.render(), element => element.type === r.load('src/components/route/RouteCard.tsx').default).props.onStart();
+    assert.equal(r.load('src/stores/route-store.ts').getSelectedRoute().timeBasis, 'unknown'); r.unmount();
+});
