@@ -1,3 +1,4 @@
+import { formatRouteDateTime } from '@/utils/route-time';
 import { formatClock, formatDirection, formatWait, formatWalkingStep } from '@/components/route/format';
 import { type ReactNode, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -41,6 +42,7 @@ function stopLabel(step: RouteStep, stopIndex: number) {
 type Props = {
     route: Route;
     nextTrains?: ReactNode;
+    showDates?: boolean;
     /** 승차 구간의 '표지판으로 방향 확인' 버튼 */
     onSignCheck: (step: RouteStep) => void;
 };
@@ -50,14 +52,14 @@ type Props = {
  * 명세 6.1 route.steps 를 순서대로 그립니다: 승차 → (중간역) → 하차 → 환승 → … → 도착
  * WALKING 은 "도보 N분"이고, 다음 열차 대기가 따로 표시되지 않는 환승 단계만 "환승 소요 N분"이에요(#146, format.ts formatWalkingStep).
  */
-export default function RouteTimeline({ route, onSignCheck, nextTrains }: Props) {
+export default function RouteTimeline({ route, onSignCheck, nextTrains, showDates = false }: Props) {
     const [openSteps, setOpenSteps] = useState<Record<number, boolean>>({});
 
     const lastSubwayIndex = route.steps.reduce(
         (last, step, index) => (step.type === 'SUBWAY' ? index : last),
         -1,
     );
-    const arrival = formatClock(route.summary.arrivalAt);
+    const arrival = showDates ? formatRouteDateTime(route.summary.arrivalAt) : formatClock(route.summary.arrivalAt);
 
     const toggle = (index: number) => {
         setOpenSteps(prev => ({ ...prev, [index]: !prev[index] }));

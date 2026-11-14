@@ -16,6 +16,9 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { openStationPicker, type Station } from '@/app/station-search';
 import { MOCK_STATIONS } from '@/mocks/stations';
 import RouteCard from '@/components/route/RouteCard';
+import RouteTimeSelector from '@/components/route/RouteTimeSelector';
+import RouteTimeNotice from '@/components/route/RouteTimeNotice';
+import { routeTimeOptions } from '@/utils/route-time';
 import { searchRoute } from '@/services/route';
 import { fetchStation, searchStations } from '@/services/station';
 import { useMock as isMockMode } from '@/services/api/config';
@@ -26,6 +29,7 @@ import {
     type Route,
     type RouteErrorCode,
     type RouteSearchResponse,
+    type RouteTimeSelection,
     type StationSummary,
 } from '@/types/route';
 
@@ -49,8 +53,8 @@ const SORT_TABS: { key: SortKey; label: string }[] = [
 type SearchState =
     | { status: 'idle' }
     | { status: 'loading' }
-    | { status: 'success'; data: RouteSearchResponse }
-    | { status: 'error'; code: RouteErrorCode };
+    | { status: 'success'; data: RouteSearchResponse; searchTime?: RouteTimeSelection }
+    | { status: 'error'; code: RouteErrorCode; message: string };
 
 /** 역 검색 화면(#33)의 Station 을 경로 검색에서 쓰는 형태로 바꿉니다. */
 function toStationSummary(station: Station): StationSummary {
@@ -94,6 +98,8 @@ export default function RouteSearchScreen() {
     const [destination, setDestination] = useState<StationSummary | null>(null);
     const [search, setSearch] = useState<SearchState>({ status: 'idle' });
     const [sortKey, setSortKey] = useState<SortKey>('FASTEST');
+    const [searchTime, setSearchTime] = useState<RouteTimeSelection>({ mode: 'now' });
+    const [timePickerOpen, setTimePickerOpen] = useState(false);
     const [expandedId, setExpandedId] = useState<string | null>(null);
     const sameStation = !!departure && !!destination && departure.id === destination.id;
 
@@ -168,9 +174,10 @@ export default function RouteSearchScreen() {
         setSearch({ status: 'loading' });
 
         try {
-            const data = await searchRoute(from, to, params.roomId ? { roomId: params.roomId } : {});
+            const usedTime = params.roomId ? undefined : searchTime;
+            const data = await searchRoute(from, to, params.roomId ? { roomId: params.roomId } : routeTimeOptions(searchTime));
             if (id !== requestId.current) return;
-            setSearch({ status: 'success', data });
+            setSearch({ status: 'success', data, searchTime: usedTime });
         } catch (error) {
             if (id !== requestId.current) return;
             if (error instanceof ApiError && (error.code.startsWith('TOKEN_') || isAuthError(error))) {
@@ -178,9 +185,9 @@ export default function RouteSearchScreen() {
                 return;
             }
             const code = error instanceof RouteSearchError ? error.code : 'EXTERNAL_API_ERROR';
-            setSearch({ status: 'error', code });
+            setSearch({ status: 'error', code, message: error instanceof RouteSearchError ? error.message : '경로를 불러오지 못했어요.' });
         }
-    }, [params.roomId]);
+    }, [params.roomId, searchTime]);
 
     // 두 역이 정해지면 바로 검색합니다 (별도 검색 버튼 없음).
     useEffect(() => {
@@ -223,6 +230,7 @@ export default function RouteSearchScreen() {
             routeSource: search.data.routeSource,
             appointmentPassed: search.data.appointmentPassed,
             notice: search.data.notice,
+            ...(search.searchTime ? { searchTime: search.searchTime } : {}),
             origin: departure,
             destination,
         });
@@ -291,6 +299,18 @@ export default function RouteSearchScreen() {
                     </Pressable>
                 </View>
 
+                {!params.roomId && (
+                    <RouteTimeSelector value={searchTime} open={timePickerOpen} onOpen={() => setTimePickerOpen(true)} onClose={() => setTimePickerOpen(false)}
+                        onChange={value => {
+                            requestId.current++;
+                            setSearch(departure && destination ? { status: 'loading' } : { status: 'idle' });
+                            setSearchTime(value);
+                        }} />
+                )}
+                {search.status === 'success' && search.searchTime && (
+                    <RouteTimeNotice selection={search.searchTime} routes={sameStation ? [] : search.data.routes} mock={isMockMode()} />
+                )}
+
                 {search.status === 'success' && search.data.appointmentPassed && !!search.data.notice && (
                     <View style={styles.notice}>
                         <Ionicons name="alert-circle-outline" size={17} color="#c58a00" />
@@ -354,6 +374,8 @@ export default function RouteSearchScreen() {
                 {search.status === 'error' && (
                     <ErrorMessage
                         code={search.code}
+                        message={search.message}
+                        onChangeTime={params.roomId ? undefined : () => setTimePickerOpen(true)}
                         onRetry={() => runSearch(departure, destination)}
                         onRoomList={() => router.replace('/rooms')}
                     />
@@ -382,6 +404,7 @@ export default function RouteSearchScreen() {
                         <RouteCard
                             key={route.routeId}
                             route={route}
+                            showDates={!params.roomId}
                             expanded={route.routeId === expandedId}
                             badgeLabel={index === 0 ? badgeLabel : undefined}
                             onPress={() => setExpandedId(route.routeId)}
@@ -455,11 +478,20 @@ function Message({
     );
 }
 
-function ErrorMessage({ code, onRetry, onRoomList }: {
+function ErrorMessage({ code, message, onRetry, onRoomList, onChangeTime }: {
     code: RouteErrorCode;
+    message: string;
+    onChangeTime?: () => void;
     onRetry: () => void;
     onRoomList: () => void;
 }) {
+    if (code === 'VALIDATION_ERROR' || code === 'NO_SERVICE_TIME' || code === 'ARRIVAL_UNREACHABLE') {
+        return (
+            <Message icon={<Ionicons name="time-outline" size={30} color={SECONDARY} />} iconBackground="#eef1f5"
+                title={code === 'VALIDATION_ERROR' ? '검색 시각을 확인해 주세요' : code === 'NO_SERVICE_TIME' ? '선택한 시각에는 열차가 없어요' : '그 시각까지 도착하기 어려워요'}
+                description={message} actionLabel={onChangeTime ? '시각 바꾸기' : undefined} onAction={onChangeTime} />
+        );
+    }
     if (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND') {
         return (
             <Message

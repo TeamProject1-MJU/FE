@@ -6,7 +6,7 @@
  * 화면 이동 시에는 routeId 만 넘깁니다.
  */
 
-import type { Route, RouteSource, StationSummary } from '@/types/route';
+import type { Route, RouteSource, RouteTimeSelection, StationSummary } from '@/types/route';
 
 export type SelectedRoute = {
     route: Route;
@@ -14,6 +14,8 @@ export type SelectedRoute = {
     /** API 6.1 응답 최상위의 지난 약속 여부와 서버 안내예요. */
     appointmentPassed: boolean;
     notice: string | null;
+    /** 선택한 결과를 조회할 때 적용한 개인 경로 시각 조건이에요. */
+    searchTime?: RouteTimeSelection;
     origin: StationSummary;
     destination: StationSummary;
 };

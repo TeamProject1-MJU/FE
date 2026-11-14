@@ -2393,7 +2393,7 @@ test('경로 오류 매핑 422·404·403·400·5xx와 TOKEN 계열 원본 보존
         ['STATION_UNSUPPORTED', 422, 'STATION_UNSUPPORTED'], ['ROUTE_NOT_FOUND', 404, 'ROUTE_NOT_FOUND'],
         ['STATION_NOT_FOUND', 404, 'STATION_NOT_FOUND'], ['NOT_ROOM_MEMBER', 403, 'NOT_ROOM_MEMBER'],
         ['ROOM_NOT_FOUND', 404, 'ROOM_NOT_FOUND'],
-        ['VALIDATION_ERROR', 400, 'EXTERNAL_API_ERROR'], ['EXTERNAL_API_ERROR', 502, 'EXTERNAL_API_ERROR'],
+        ['VALIDATION_ERROR', 400, 'VALIDATION_ERROR'], ['EXTERNAL_API_ERROR', 502, 'EXTERNAL_API_ERROR'],
         ['UNKNOWN_ERROR', 500, 'EXTERNAL_API_ERROR'], ['TOKEN_EXPIRED', 401, 'TOKEN_EXPIRED'],
         ['TOKEN_INVALID', 401, 'TOKEN_INVALID'], ['TOKEN_FUTURE', 401, 'TOKEN_FUTURE'], ['AUTH_REQUIRED', 401, 'AUTH_REQUIRED'],
     ]) {
@@ -8749,6 +8749,242 @@ test('142 방에서 개인 검색으로 바꾸면 이전 방 오류를 지우고
         const calls = r.calls141.filter(call => call.options.method === 'POST'); assert.equal(calls.length, 2);
         assert.equal(Object.hasOwn(JSON.parse(calls[1].options.body), 'roomId'), false); r.unmount();
     }
+});
+
+/* ---------- 개인 경로 시각 선택·시각표 계약 (#152, BE #130) ---------- */
+const NOW152 = Date.parse('2026-11-14T12:34:56.900+09:00');
+const DEPART152 = '2026-11-14T23:50:00+09:00';
+const ARRIVE152 = '2026-11-15T00:08:00+09:00';
+function clock152(r) {
+    r.context.Date = class extends Date {
+        constructor(...args) { super(...(args.length ? args : [NOW152])); }
+        static now() { return NOW152; }
+    };
+    return r;
+}
+function data152() {
+    const data = routeData(); data.routeSource = 'INTERNAL';
+    Object.assign(data.routes[0].summary, { departureAt: '2026-11-14T23:35:00+09:00', arrivalAt: '2026-11-15T00:05:00+09:00',
+        totalTimeSec: 1800, waitSec: null, waitKind: null, totalWithWaitSec: null, slackSeconds: 180,
+        noService: false, serviceNotice: null, arrivesAfterAppointment: false });
+    return data;
+}
+async function pump152(r) { for (let i = 0; i < 5; i++) { r.render(); await settle(); } return r.render(); }
+async function screen152(response = () => jsonResponse({ success: true, data: data152() }), params = { departure: '강남', destination: '사당' }) {
+    const r = clock152(routeScreenRuntime(params)); r.calls152 = []; r.params152 = params;
+    r.context.fetch = async (url, options) => {
+        if (url.endsWith('/routes/search')) { const body = JSON.parse(options.body); r.calls152.push(body); return response(body); }
+        return jsonResponse({ success: true, data: stationSearchData([url.includes(encodeURIComponent('사당')) ? serverRouteStation(99002, '사당') : serverRouteStation(88001, '강남')]) });
+    };
+    r.selector152 = () => findElement(r.render(), element => element.type === r.load('src/components/route/RouteTimeSelector.tsx').default);
+    r.card152 = () => findElement(r.render(), element => element.type === r.load('src/components/route/RouteCard.tsx').default);
+    await pump152(r); return r;
+}
+
+test('152 지금 출발은 두 시각을 생략하고 출발·도착 지정은 선택한 필드 하나와 서버 역 ID를 그대로 보내요', async () => {
+    for (const options of [{}, { departAt: DEPART152 }, { arriveAt: ARRIVE152 }, { departAt: '2026-11-13T10:00:00+09:00' }, { roomId: 'room-152', arriveAt: ARRIVE152 }]) {
+        const r = clock152(createRuntime(serverEnv)); const calls = [];
+        r.context.fetch = async (url, request) => { calls.push({ url, request }); return jsonResponse({ success: true, data: data152() }); };
+        await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination, options);
+        assert.equal(calls.length, 1); assert.equal(calls[0].url, 'https://example.test/api/v1/routes/search');
+        assert.deepEqual(JSON.parse(calls[0].request.body), { originStationId: routeOrigin.id, destinationStationId: routeDestination.id, ...options });
+    }
+});
+
+test('152 동시 입력·오프셋 누락·과거 도착·서울 날짜 상한 초과는 서버·mock 모두 요청 전에 거절해요', async () => {
+    for (const mock of [false, true]) {
+        const r = clock152(createRuntime(mock ? {} : serverEnv)); let calls = 0;
+        r.context.fetch = async () => { calls++; return jsonResponse({ success: true, data: data152() }); };
+        for (const options of [{ departAt: DEPART152, arriveAt: ARRIVE152 }, { departAt: '2026-11-14T23:50:00' }, { arriveAt: '' },
+            { arriveAt: '2026-11-14T12:34:55+09:00' }, { arriveAt: '2027-11-15T00:00:00+09:00' },
+            { departAt: '2026-02-30T12:00:00+09:00' }, { departAt: '2026-11-14T24:00:00+09:00' }, { departAt: '2026-11-14T12:00:00+18:30' }]) {
+            await assert.rejects(r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination, options), { code: 'VALIDATION_ERROR' });
+        }
+        assert.equal(calls, 0);
+    }
+});
+
+test('152 서울 시간 변환은 자정·연말·윤일을 보정 없이 처리하고 도착 범위는 초 단위 현재부터 365일의 날짜 끝까지예요', () => {
+    const r = clock152(createRuntime()); const time = r.load('src/utils/route-time.ts');
+    assert.deepEqual(plain(time.seoulDateTime('2026-11-13T16:05:00Z')), { date: '2026-11-14', time: '01:05' });
+    assert.equal(time.formatRouteDateTime('2026-12-31T15:01:00Z'), '2027.01.01 00:01');
+    assert.equal(time.toRouteTimeInstant('2028-02-29', '00:01'), '2028-02-29T00:01:00+09:00');
+    for (const [date, value] of [['2026-02-29', '12:00'], ['2026-11-31', '12:00'], ['2026-11-14', '24:00'], ['2026-11-14', '12:60']]) assert.equal(time.toRouteTimeInstant(date, value), null);
+    assert.equal(time.validateRouteTimeOptions({ arriveAt: '2026-11-14T12:34:56+09:00' }), null);
+    assert.equal(time.validateRouteTimeOptions({ arriveAt: '2027-11-14T23:59:59+09:00' }), null);
+    assert.ok(time.validateRouteTimeOptions({ arriveAt: '2027-11-15T00:00:00+09:00' }));
+    assert.equal(time.validateRouteTimeOptions({ departAt: '2020-01-01T00:00:00Z' }), null);
+    assert.equal(time.arrivalLastDate(Date.parse('2026-11-13T23:30:00Z')), '2027-11-14');
+});
+
+test('152 시각 오류 400·운행 없음·도착 불가 422를 구분하고 설정된 범위 안내와 인증 원본을 유지해요', async () => {
+    const r = clock152(createRuntime(serverEnv)); const service = r.load('src/services/route.ts');
+    for (const [code, status] of [['VALIDATION_ERROR', 400], ['NO_SERVICE_TIME', 422], ['ARRIVAL_UNREACHABLE', 422]]) {
+        r.context.fetch = async () => jsonResponse({ success: false, error: { code, details: { arriveAt: '도착 날짜는 오늘부터 30일 이내여야 해요.' } } }, status);
+        await assert.rejects(service.searchRoute(routeOrigin, routeDestination, { arriveAt: ARRIVE152 }), error => error.code === code
+            && (code !== 'VALIDATION_ERROR' || error.message === '도착 날짜는 오늘부터 30일 이내여야 해요.'));
+    }
+    for (const code of ['TOKEN_EXPIRED', 'TOKEN_INVALID', 'TOKEN_FUTURE', 'AUTH_REQUIRED']) {
+        r.context.fetch = async () => jsonResponse({ success: false, error: { code } }, 401);
+        await assert.rejects(service.searchRoute(routeOrigin, routeDestination, { departAt: DEPART152 }), error => error instanceof r.load('src/services/api/errors.ts').ApiError && error.code === code);
+    }
+});
+
+test('152 여유 시간은 null·생략·0·양의 정수를 보존하고 잘못된 값은 거절하며 서버 출발·도착·총시간을 재계산하지 않아요', async () => {
+    const r = clock152(createRuntime(serverEnv)); const parse = r.load('src/services/route.ts').__parseRouteSearch;
+    for (const value of [undefined, null, 0, 180]) {
+        const data = data152(); if (value === undefined) delete data.routes[0].summary.slackSeconds; else data.routes[0].summary.slackSeconds = value;
+        r.context.fetch = async () => jsonResponse({ success: true, data });
+        const summary = (await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination, { arriveAt: ARRIVE152 })).routes[0].summary;
+        assert.equal(Object.hasOwn(summary, 'slackSeconds'), value !== undefined); assert.equal(summary.slackSeconds, value);
+        for (const key of ['departureAt', 'arrivalAt', 'totalTimeSec', 'totalWithWaitSec']) assert.equal(summary[key], data.routes[0].summary[key]);
+    }
+    for (const invalid of [-1, 1.5, '180', false, {}, Number.NaN]) {
+        const data = data152(); data.routes[0].summary.slackSeconds = invalid; assert.throws(() => parse(data), { code: 'UNKNOWN_ERROR' });
+    }
+});
+
+function selector152(value = { mode: 'now' }) {
+    const r = clock152(createScreenRuntime(serverEnv, 'src/components/route/RouteTimeSelector.tsx', runtime => { runtime.native.ScrollView = 'ScrollView'; }));
+    const Selector = r.screen.default; const changes = [];
+    const props = { value, open: false, onOpen() { props.open = true; }, onClose() { props.open = false; }, onChange(next) { changes.push(next); props.value = next; } };
+    r.screen.default = () => Selector(props);
+    r.pump152 = () => { r.render(); return r.render(); };
+    r.button152 = label => findElement(r.pump152(), element => element.type === 'Pressable' && (element.props.accessibilityLabel === label || textOf(element) === label));
+    r.child152 = name => findElement(r.pump152(), element => element.type?.name === name);
+    return Object.assign(r, { props152: props, changes152: changes });
+}
+
+test('152 시각 선택은 적용 전에 검색하지 않고 날짜·시각 취소와 모달 닫기는 이전 조건을 유지해요', () => {
+    const r = selector152(); r.button152('검색 시각 선택').props.onPress(); r.pump152();
+    r.button152('도착 시각 지정').props.onPress(); r.button152('검색 날짜 선택').props.onPress();
+    let calendar = r.child152('CalendarModal'); assert.equal(calendar.props.visible, true);
+    assert.equal(calendar.props.minDate, '2026-11-14'); assert.equal(calendar.props.maxDate, '2027-11-14');
+    calendar.props.onClose(); r.button152('검색 시간 선택').props.onPress();
+    r.child152('TimeWheelModal').props.onClose(); assert.equal(r.changes152.length, 0);
+    const modal = findElement(r.pump152(), element => element.type === 'Modal' && element.props.visible);
+    modal.props.onRequestClose(); r.pump152(); assert.equal(r.changes152.length, 0); assert.deepEqual(r.props152.value, { mode: 'now' });
+    r.button152('검색 시각 선택').props.onPress(); const view = r.pump152();
+    assert.equal(findElement(view, element => element.props?.accessibilityRole === 'radio' && element.props.accessibilityState.checked).props.children[1].props.children, '지금 출발');
+    r.unmount();
+});
+
+test('152 날짜·시각을 고르고 적용하면 한 모드만 전달하고 과거 도착은 모달에서 수정하도록 안내해요', () => {
+    for (const mode of ['departure', 'arrival']) {
+        const r = selector152(); r.button152('검색 시각 선택').props.onPress(); r.pump152();
+        r.button152(mode === 'departure' ? '출발 시각 지정' : '도착 시각 지정').props.onPress();
+        r.button152('검색 날짜 선택').props.onPress(); let child = r.child152('CalendarModal'); child.props.onConfirm('2026-11-15'); child.props.onClose();
+        r.button152('검색 시간 선택').props.onPress(); child = r.child152('TimeWheelModal'); child.props.onConfirm('00:08'); child.props.onClose();
+        assert.equal(r.changes152.length, 0); r.button152('적용하고 검색').props.onPress();
+        assert.deepEqual(plain(r.changes152), [{ mode, at: ARRIVE152 }]); assert.equal(r.props152.open, false); r.unmount();
+    }
+    const r = selector152({ mode: 'arrival', at: '2026-11-14T12:00:00+09:00' });
+    r.button152('검색 시각 선택').props.onPress(); r.pump152(); r.button152('적용하고 검색').props.onPress();
+    assert.equal(r.changes152.length, 0); assert.ok(findText(r.pump152(), '도착 시각은 현재 이후로 선택해 주세요.')); r.unmount();
+});
+
+test('152 공용 달력의 기본 약속 문구를 유지하고 개인 경로의 제목·최소·최대 날짜를 적용해요', () => {
+    const r = selector152(); const Calendar = r.load('src/components/rooms/appointment-picker.tsx').CalendarModal;
+    let view = r.renderComponent({ type: Calendar, props: { visible: true, value: '2026-11-14', onConfirm() {}, onClose() {} } });
+    assert.ok(findText(view, '약속 날짜 선택'));
+    const props = { visible: true, value: '2026-11-14', title: '도착 날짜 선택', minDate: '2026-11-14', maxDate: '2026-11-20', onConfirm() {}, onClose() {} };
+    view = r.renderComponent({ type: Calendar, props }); view = r.renderComponent({ type: Calendar, props });
+    assert.ok(findText(view, '도착 날짜 선택'));
+    const day = n => findElement(view, element => element.type === 'Pressable' && textOf(element) === String(n));
+    assert.equal(day(13).props.disabled, true); assert.equal(day(14).props.disabled, false); assert.equal(day(21).props.disabled, true); r.unmount();
+});
+
+test('152 개인 화면의 지금·출발·도착 모드는 요청을 구분하고 약속방에서는 선택 UI와 개인 조건을 제거해요', async () => {
+    const r = await screen152(); assert.deepEqual(r.calls152, [{ originStationId: 88001, destinationStationId: 99002 }]);
+    r.selector152().props.onOpen(); await pump152(r); r.selector152().props.onClose(); await pump152(r); assert.equal(r.calls152.length, 1);
+    for (const value of [{ mode: 'departure', at: DEPART152 }, { mode: 'arrival', at: ARRIVE152 }, { mode: 'now' }]) {
+        r.selector152().props.onChange(value); await pump152(r);
+        const expected = value.mode === 'departure' ? { departAt: value.at } : value.mode === 'arrival' ? { arriveAt: value.at } : {};
+        assert.deepEqual(r.calls152.at(-1), { originStationId: 88001, destinationStationId: 99002, ...expected });
+    }
+    r.selector152().props.onChange({ mode: 'arrival', at: ARRIVE152 }); await pump152(r);
+    r.params152.roomId = 'room-152'; await pump152(r);
+    assert.equal(r.selector152(), null); assert.deepEqual(r.calls152.at(-1), { originStationId: 88001, destinationStationId: 99002, roomId: 'room-152' });
+    r.card152().props.onStart(); assert.equal(r.load('src/stores/route-store.ts').getSelectedRoute().searchTime, undefined); r.unmount();
+});
+
+test('152 시각 변경 전의 늦은 성공·실패는 새 검색 조건과 결과를 덮지 않아요', async () => {
+    for (const rejected of [false, true]) {
+        let resolveOld;
+        const r = await screen152(body => !body.departAt ? new Promise(resolve => { resolveOld = resolve; }) : jsonResponse({ success: true, data: data152() }));
+        assert.ok(resolveOld); r.selector152().props.onChange({ mode: 'departure', at: DEPART152 });
+        resolveOld(rejected ? jsonResponse({ success: false, error: { code: 'NO_SERVICE_TIME' } }, 422) : jsonResponse({ success: true, data: route141Data(true) }));
+        await pump152(r); assert.ok(r.card152()); assert.equal(findElement(r.render(), element => element.props?.code), null);
+        r.card152().props.onStart(); assert.deepEqual(plain(r.load('src/stores/route-store.ts').getSelectedRoute().searchTime), { mode: 'departure', at: DEPART152 }); r.unmount();
+    }
+});
+
+test('152 결과·안내는 검색한 조건과 자정 다음 날의 서버 날짜·여유 시간을 그대로 표시해요', async () => {
+    const r = await screen152(); r.selector152().props.onChange({ mode: 'arrival', at: ARRIVE152 }); await pump152(r);
+    const card = r.card152(); const view = card.type(card.props);
+    assert.ok(findText(view, '2026.11.14 23:35 출발')); assert.ok(findText(view, '2026.11.15 00:05 도착'));
+    assert.ok(findText(view, '지정한 도착 시각보다 3분 일찍 도착해요.'));
+    const notice = findElement(r.render(), element => element.type === r.load('src/components/route/RouteTimeNotice.tsx').default);
+    assert.ok(findText(notice.type(notice.props), '검색 조건 · 2026.11.15 00:08까지 도착'));
+    card.props.onStart(); const selected = r.load('src/stores/route-store.ts').getSelectedRoute(); const guide = route147Guide(selected);
+    const guideView = guide.render(); assert.ok(findText(guideView, '2026.11.15 00:05 도착 예정'));
+    const guideNotice = findElement(guideView, element => element.type === guide.load('src/components/route/RouteTimeNotice.tsx').default);
+    assert.equal(guideNotice.props.selection.at, ARRIVE152);
+    const timeline = findElement(guideView, element => element.type === guide.Timeline); assert.equal(timeline.props.showDates, true);
+    assert.equal(timeline.props.nextTrains, false, '시각 지정 경로에 현재의 실시간 도착정보를 섞지 않아요');
+    assert.ok(findText(guide.renderComponent(timeline), '2026.11.15 00:05 도착 예정'));
+    assert.equal(r.load('src/utils/route-time.ts').formatArrivalSlack(0), '지정한 도착 시각에 도착해요.'); r.unmount(); guide.unmount();
+});
+
+test('152 첫차 전·막차 후 응답의 출발 날짜·대기 포함 시간·첫차 및 지각 안내를 서버 값 그대로 유지해요', async () => {
+    for (const at of ['2026-11-14T03:00:00+09:00', '2026-11-15T00:50:00+09:00']) {
+        const data = data152(); Object.assign(data.routes[0].summary, { departureAt: '2026-11-15T05:36:00+09:00', arrivalAt: '2026-11-15T05:51:13+09:00',
+            noService: true, serviceNotice: '서버가 안내한 다음 운행일 첫차예요.', arrivesAfterAppointment: true, waitKind: 'TIMETABLE', waitSec: 17160, totalWithWaitSec: 18073, slackSeconds: null });
+        const r = await screen152(() => jsonResponse({ success: true, data })); r.selector152().props.onChange({ mode: 'departure', at }); await pump152(r);
+        const card = r.card152(); assert.deepEqual(plain(card.props.route.summary), plain(data.routes[0].summary));
+        const view = card.type(card.props); assert.ok(findText(view, '2026.11.15 05:36 출발')); assert.ok(findText(view, '대기 포함 301분'));
+        const notices = findElement(view, element => element.type === r.load('src/components/route/RouteNotices.tsx').default);
+        const shown = notices.type(notices.props); assert.ok(findText(shown, '서버가 안내한 다음 운행일 첫차예요.')); assert.ok(findText(shown, '약속 시각보다 늦게 도착해요')); r.unmount();
+    }
+});
+
+test('152 도착 불가·운행 없음·시각 검증 오류는 재시도 대신 시각 선택을 열고 입력 조건을 유지해요', async () => {
+    for (const [code, status] of [['NO_SERVICE_TIME', 422], ['ARRIVAL_UNREACHABLE', 422], ['VALIDATION_ERROR', 400]]) {
+        const r = await screen152(() => jsonResponse({ success: false, error: { code, details: { arriveAt: '설정된 날짜 범위를 확인해 주세요.' } } }, status));
+        r.selector152().props.onChange({ mode: 'arrival', at: ARRIVE152 }); await pump152(r);
+        const error = findElement(r.render(), element => element.props?.code === code); assert.ok(error);
+        const message = error.type(error.props); assert.equal(message.props.actionLabel, '시각 바꾸기');
+        assert.equal(findText(message.type(message.props), '다시 시도'), null);
+        const count = r.calls152.length; message.props.onAction(); await pump152(r);
+        assert.equal(r.calls152.length, count); assert.equal(r.selector152().props.open, true); assert.equal(r.selector152().props.value.at, ARRIVE152); r.unmount();
+    }
+});
+
+test('152 도착 적용 여부 없는 대체 결과는 미확인으로 안내하고 mock은 시각표 결과로 표현하지 않아요', () => {
+    const r = createRuntime(serverEnv); const Notice = r.load('src/components/route/RouteTimeNotice.tsx').default;
+    const selection = { mode: 'arrival', at: ARRIVE152 };
+    for (const value of [undefined, null, 0, 180]) {
+        const data = data152(); data.routes[0].summary.slackSeconds = value;
+        const view = Notice({ selection, routes: data.routes, mock: false });
+        assert.equal(!!findText(view, '지정한 도착 시각의 적용 여부를 확인할 수 없어요. 표시된 실제 출발·도착 시각을 확인해 주세요.'), value == null);
+    }
+    assert.ok(findText(Notice({ selection, routes: data152().routes, mock: true }), '예시 경로예요. 실제 열차 시각표로 계산한 결과가 아니에요.'));
+    assert.equal(findText(Notice({ selection, routes: [], mock: false }), '지정한 도착 시각의 적용 여부를 확인할 수 없어요. 표시된 실제 출발·도착 시각을 확인해 주세요.'), null);
+});
+
+test('152 mock 시간 선택은 서버 호출 없이 예시 날짜로 표시하고 기존 지금 출발과 동일 역 동작을 유지해요', async () => {
+    const r = clock152(createRuntime()); let calls = 0; r.context.fetch = async () => { calls++; throw Error(); };
+    const service = r.load('src/services/route.ts'); const stations = r.load('src/mocks/routes.ts').MOCK_STATIONS;
+    const from = stations.find(station => station.name === '건대입구'); const to = stations.find(station => station.name === '사당');
+    for (const options of [{}, { departAt: DEPART152 }, { arriveAt: ARRIVE152 }]) {
+        const pending = service.searchRoute(from, to, options); r.advance(800); const result = await pending;
+        for (const route of result.routes) {
+            if (options.departAt) assert.equal(Date.parse(route.summary.departureAt), Date.parse(DEPART152));
+            else if (options.arriveAt) { assert.equal(Date.parse(route.summary.arrivalAt), Date.parse(ARRIVE152)); assert.equal(route.summary.slackSeconds, 0); }
+            else assert.equal(route.summary.departureAt, undefined);
+        }
+    }
+    const same = service.searchRoute(from, from, { arriveAt: ARRIVE152 }); r.advance(800); assert.equal((await same).routes.length, 0); assert.equal(calls, 0);
 });
 
 /* ---------- #139 응답 유실 뒤 재시도의 중복 저장 방지 ---------- */

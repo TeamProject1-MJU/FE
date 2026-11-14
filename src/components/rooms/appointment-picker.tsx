@@ -35,13 +35,16 @@ function parseLocalDate(value?: string): Date {
 }
 
 type DatePickerProps = {
+    title?: string;
+    minDate?: string;
+    maxDate?: string;
     visible: boolean;
     value?: string;
     onClose: () => void;
     onConfirm: (date: string) => void;
 };
 
-export function CalendarModal({ visible, value, onClose, onConfirm }: DatePickerProps) {
+export function CalendarModal({ visible, value, title = '약속 날짜 선택', minDate = fromLocalDate(new Date()), maxDate, onClose, onConfirm }: DatePickerProps) {
     const [selected, setSelected] = useState(() => fromLocalDate(parseLocalDate(value)));
     const [month, setMonth] = useState(() => {
         const current = parseLocalDate(value);
@@ -63,7 +66,6 @@ export function CalendarModal({ visible, value, onClose, onConfirm }: DatePicker
         ...Array.from({ length: days }, (_, i) => i + 1),
     ];
     while (cells.length % 7 !== 0) cells.push(null);
-    const today = fromLocalDate(new Date());
 
     const changeMonth = (delta: number) => {
         setMonth(new Date(month.getFullYear(), month.getMonth() + delta, 1));
@@ -74,7 +76,7 @@ export function CalendarModal({ visible, value, onClose, onConfirm }: DatePicker
             <View style={styles.overlay}>
                 <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
                 <View style={styles.dialog}>
-                    <Text style={styles.modalTitle}>약속 날짜 선택</Text>
+                    <Text style={styles.modalTitle}>{title}</Text>
                     <View style={styles.monthBar}>
                         <Pressable style={styles.monthButton} onPress={() => changeMonth(-1)}>
                             <Text style={styles.monthArrow}>‹</Text>
@@ -95,7 +97,7 @@ export function CalendarModal({ visible, value, onClose, onConfirm }: DatePicker
                         {cells.map((day, index) => {
                             if (day === null) return <View style={styles.dayCell} key={`blank-${index}`} />;
                             const date = fromLocalDate(new Date(month.getFullYear(), month.getMonth(), day));
-                            const disabled = date < today;
+                            const disabled = (!!minDate && date < minDate) || (!!maxDate && date > maxDate);
                             const active = date === selected;
                             return (
                                 <View style={styles.dayCell} key={date}>
@@ -123,7 +125,7 @@ export function CalendarModal({ visible, value, onClose, onConfirm }: DatePicker
                         <Pressable
                             style={styles.confirmButton}
                             onPress={() => {
-                                onConfirm(selected < today ? today : selected);
+                                onConfirm(selected < minDate ? minDate : maxDate && selected > maxDate ? maxDate : selected);
                                 onClose();
                             }}
                         >
@@ -137,6 +139,7 @@ export function CalendarModal({ visible, value, onClose, onConfirm }: DatePicker
 }
 
 type TimePickerProps = {
+    title?: string;
     visible: boolean;
     value?: string;
     onClose: () => void;
@@ -205,7 +208,7 @@ function Wheel({
     );
 }
 
-export function TimeWheelModal({ visible, value = '19:00', onClose, onConfirm }: TimePickerProps) {
+export function TimeWheelModal({ visible, value = '19:00', title = '약속 시간 선택', onClose, onConfirm }: TimePickerProps) {
     const [hour, setHour] = useState(19);
     const [minute, setMinute] = useState(0);
 
@@ -222,7 +225,7 @@ export function TimeWheelModal({ visible, value = '19:00', onClose, onConfirm }:
             <View style={styles.overlay}>
                 <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
                 <View style={styles.dialog}>
-                    <Text style={styles.modalTitle}>약속 시간 선택</Text>
+                    <Text style={styles.modalTitle}>{title}</Text>
                     <Text style={styles.modalHint}>위아래로 스크롤해 시·분을 선택하세요.</Text>
                     {visible && (
                         <View style={styles.wheels}>
