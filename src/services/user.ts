@@ -46,17 +46,24 @@ function syncProfile(profile: UserProfile, generation: number) {
 }
 
 /**
- * 닉네임 글자 수 (백엔드와 같은 기준)
- * 명세 부록 A: char_length(btrim(nickname)) → 앞뒤 공백을 빼고 '글자' 단위로 셉니다.
- * JS 의 length 는 이모지 등을 2로 세므로 Array.from 으로 셉니다.
+ * 닉네임 앞뒤 공백 제거 (백엔드와 같은 기준)
+ * Java String.strip()과 같은 기준으로 앞뒤 공백을 제거합니다.
  */
+export function stripNickname(value: string): string {
+    // Java Character.isWhitespace; preserves NBSP, U+2007, U+202F and BOM.
+    return value.replace(/^[\u0009-\u000D\u001C-\u0020\u1680\u2000-\u2006\u2008-\u200A\u2028\u2029\u205F\u3000]+|[\u0009-\u000D\u001C-\u0020\u1680\u2000-\u2006\u2008-\u200A\u2028\u2029\u205F\u3000]+$/g, '');
+}
+
+/** Counts code points after Java-compatible stripping. */
 export function nicknameLength(value: string): number {
-    return Array.from(value.trim()).length;
+    return Array.from(stripNickname(value)).length;
 }
 
 /** 닉네임 검사 (명세 4.5: 2~20자, 중복 허용 → 중복 검사는 하지 않음) */
 export function validateNickname(value: string): string | null {
-    const length = nicknameLength(value);
+    const stripped = stripNickname(value);
+    if (stripped.includes('\u0000')) return '닉네임에 사용할 수 없는 문자가 있어요.';
+    const length = nicknameLength(stripped);
     if (length === 0) return '닉네임을 입력해주세요.';
     if (length < NICKNAME_MIN || length > NICKNAME_MAX) {
         return `닉네임은 ${NICKNAME_MIN}~${NICKNAME_MAX}자로 입력해주세요.`;
@@ -86,14 +93,14 @@ export async function updateNickname(nickname: string, failForTest = false): Pro
     if (!useMock()) {
         if (message) throw new UserError('VALIDATION_ERROR', message);
         const generation = getSessionGeneration();
-        const profile = parseProfile(await patch<unknown>('/users/me', { nickname: nickname.trim() }));
+        const profile = parseProfile(await patch<unknown>('/users/me', { nickname: stripNickname(nickname) }));
         syncProfile(profile, generation);
         return profile;
     }
     await wait(MOCK_DELAY_MS);
     if (failForTest) throw new UserError('NETWORK_ERROR', '저장하지 못했어요. 잠시 후 다시 시도해 주세요.');
     if (message) throw new UserError('VALIDATION_ERROR', message);
-    setMockUser({ ...mockUser, nickname: nickname.trim() });
+    setMockUser({ ...mockUser, nickname: stripNickname(nickname) });
     return mockUser;
 }
 
