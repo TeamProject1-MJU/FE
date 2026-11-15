@@ -6680,8 +6680,8 @@ test('130 마이 권한: 조회 중에는 가짜 값 없이 확인 중, 4가지 
         assert.deepEqual(plain(r.shown(label)), { texts: [label], label: `${label} 권한 확인 중`, spinner: true, disabled: true });
     }
     finish(); await flush();
-    for (const [status, text, hint, color] of [['granted', '허용', null, '#12a77a'], ['denied', '허용 안 함', '설정에서 바꿀 수 있어요', '#e5484d'],
-        ['undetermined', '아직 묻지 않음', '눌러서 허용할 수 있어요', '#6b7488'], [Error('조회 실패'), '확인할 수 없음', '눌러서 다시 확인해요', '#6b7488']]) {
+    for (const [status, text, hint, color] of [['granted', '허용', null, '#5C3F78'], ['denied', '허용 안 함', '설정에서 바꿀 수 있어요', '#D4505A'],
+        ['undetermined', '아직 묻지 않음', '눌러서 허용할 수 있어요', '#83808B'], [Error('조회 실패'), '확인할 수 없음', '눌러서 다시 확인해요', '#83808B']]) {
         const v = myPermission130(); v.permissions.camera = typeof status === 'string' ? permission130State(status) : status;
         v.render(); await flush();
         const shown = v.shown('카메라');
