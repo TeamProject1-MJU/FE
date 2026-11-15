@@ -15,9 +15,11 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { openStationPicker, type Station } from '@/app/station-search';
 import { MOCK_STATIONS } from '@/mocks/stations';
-import RouteCard from '@/components/route/RouteCard';
+import RouteCard, { RouteResultSummary } from '@/components/route/RouteCard';
 import RouteTimeSelector from '@/components/route/RouteTimeSelector';
 import RouteTimeNotice from '@/components/route/RouteTimeNotice';
+import BottomTabBar, { useTabBarHeight } from '@/components/bottom-tab-bar';
+import TrainBlock from '@/components/train-block';
 import { personalRouteTimeBasis, roomRouteTimeBasis, routeTimeOptions } from '@/utils/route-time';
 import { searchRoute } from '@/services/route';
 import { fetchRoomDetail, getMockRoom } from '@/services/room';
@@ -35,13 +37,18 @@ import {
     type StationSummary,
 } from '@/types/route';
 
-const NAVY = '#0f1c3f';
-const MINT = '#2bcf9a';
-const BACKGROUND = '#f3f5f8';
-const WHITE = '#ffffff';
-const SECONDARY = '#6b7488';
-const BORDER = '#e6e9ef';
-const AI = '#6a5ae0';
+// 라벤더 시안(#184) — 상단 제목·출발/도착 입력·빈 상태·결과 영역에 써요.
+const LV_BACKGROUND = '#F7F5FA';
+const LV_CARD = '#FFFFFF';
+const LV_CARD_BORDER = '#EEEAF2';
+const LV_TEXT = '#25212D';
+const LV_SECONDARY = '#83808B';
+const LV_MAIN = '#5C3F78';
+const LV_POINT_LINE = '#E2DDE8';
+const LV_FIELD_DIVIDER = '#F1EEF4';
+const LV_SWAP_BACKGROUND = '#F4F1F7';
+const LV_SUB = '#4A4553';
+const LV_SOFT = '#EDE8F3';
 
 type Field = 'departure' | 'destination';
 type SortKey = 'FASTEST' | 'FEWER_TRANSFERS' | 'CHEAPEST';
@@ -98,6 +105,7 @@ function sortRoutes(routes: Route[], key: SortKey) {
 
 export default function RouteSearchScreen() {
     const insets = useSafeAreaInsets();
+    const tabBarHeight = useTabBarHeight();
 
     // 홈 화면 등에서 넘겨받은 초기값 (#32)
     // departureId·destinationId(#140)가 있으면 이름 재검색 없이 그 역 ID 로 요청해요. 이름은 표시용 대체값이에요.
@@ -267,6 +275,10 @@ export default function RouteSearchScreen() {
         });
     };
 
+    // 다른 화면에서 값을 넘겨 열었을 때만 뒤로 버튼을 보여요. 탭 바에서 바로 열면 숨겨요.
+    const hasBack = [params.roomId, params.departure, params.destination, params.departureId, params.destinationId, params.focus]
+        .some(value => !!value);
+
     const badgeLabel = SORT_TABS.find(tab => tab.key === sortKey)?.label ?? '';
 
     return (
@@ -274,26 +286,22 @@ export default function RouteSearchScreen() {
             <StatusBar style="dark" />
 
             {/* 상단 헤더 */}
-            <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-                <Pressable style={styles.backButton} onPress={goBack} accessibilityLabel="뒤로 가기">
-                    <Ionicons name="chevron-back" size={25} color={NAVY} />
-                </Pressable>
+            <View style={[styles.header, { marginTop: insets.top }]}>
+                {hasBack && (
+                    <Pressable style={styles.backButton} onPress={goBack} accessibilityLabel="뒤로 가기">
+                        <Ionicons name="chevron-back" size={24} color={LV_TEXT} />
+                    </Pressable>
+                )}
 
-                <Text style={styles.headerTitle}>경로 탐색</Text>
-
-                <View style={styles.headerRight} />
+                <Text style={styles.headerTitle}>경로 검색</Text>
             </View>
 
-            <ScrollView
-                style={styles.scrollView}
-                contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}
-                showsVerticalScrollIndicator={false}
-            >
-                {/* 출발 / 도착역 (누르면 역 검색 화면) */}
+            {/* 출발 / 도착역 (누르면 역 검색 화면) */}
+            <View style={styles.stationArea}>
                 <View style={styles.stationCard}>
                     <View style={styles.pointColumn}>
                         <View style={styles.startPoint} />
-                        <View style={styles.pointDash} />
+                        <View style={styles.pointLine} />
                         <View style={styles.endPoint} />
                     </View>
 
@@ -301,14 +309,14 @@ export default function RouteSearchScreen() {
                         <StationField
                             label="출발"
                             station={departure}
-                            placeholder="출발역을 검색하세요"
+                            placeholder="출발역"
                             onPress={() => openPicker('departure', departure)}
                         />
                         <View style={styles.stationDivider} />
                         <StationField
                             label="도착"
                             station={destination}
-                            placeholder="도착역을 검색하세요"
+                            placeholder="도착역"
                             onPress={() => openPicker('destination', destination)}
                         />
                     </View>
@@ -318,10 +326,16 @@ export default function RouteSearchScreen() {
                         onPress={swapStations}
                         accessibilityLabel="출발역과 도착역 바꾸기"
                     >
-                        <Ionicons name="swap-vertical" size={22} color={NAVY} />
+                        <Ionicons name="swap-vertical" size={20} color={LV_MAIN} />
                     </Pressable>
                 </View>
+            </View>
 
+            <ScrollView
+                style={styles.scrollView}
+                contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + 32 }]}
+                showsVerticalScrollIndicator={false}
+            >
                 {!params.roomId && (
                     <RouteTimeSelector value={searchTime} open={timePickerOpen} onOpen={() => setTimePickerOpen(true)} onClose={() => setTimePickerOpen(false)}
                         onChange={value => {
@@ -336,7 +350,7 @@ export default function RouteSearchScreen() {
 
                 {search.status === 'success' && search.data.appointmentPassed && !!search.data.notice && (
                     <View style={styles.notice}>
-                        <Ionicons name="alert-circle-outline" size={17} color="#c58a00" />
+                        <Ionicons name="alert-circle-outline" size={17} color={LV_MAIN} />
                         <Text style={styles.noticeText}>{search.data.notice}</Text>
                     </View>
                 )}
@@ -344,20 +358,25 @@ export default function RouteSearchScreen() {
                 {/* INTERNAL은 계산 출처이며 조회 실패 여부를 뜻하지 않아요. */}
                 {search.status === 'success' && search.data.routeSource === 'INTERNAL' && (
                     <View style={styles.notice}>
-                        <Ionicons name="information-circle-outline" size={17} color="#c58a00" />
+                        <Ionicons name="information-circle-outline" size={17} color={LV_MAIN} />
                         <Text style={styles.noticeText}>자체 계산한 경로예요.</Text>
                     </View>
                 )}
 
+                {/* 결과 요약 (탭 기준 맨 위 경로) */}
+                {search.status === 'success' && !sameStation && !!sortedRoutes[0] && (
+                    <RouteResultSummary topRoute={sortedRoutes[0]} showDates={!params.roomId} />
+                )}
+
                 {/* 정렬 탭 */}
                 {!sameStation && (search.status === 'loading' || search.status === 'success') && (
-                    <View style={styles.tabs}>
+                    <View style={[styles.tabs, search.status !== 'success' && styles.tabsSpaced]}>
                         {SORT_TABS.map(tab => {
                             const active = tab.key === sortKey;
                             return (
                                 <Pressable
                                     key={tab.key}
-                                    style={styles.tab}
+                                    style={[styles.tab, active && styles.tabActive]}
                                     onPress={() => setSortKey(tab.key)}
                                     accessibilityRole="tab"
                                     accessibilityState={{ selected: active }}
@@ -365,30 +384,23 @@ export default function RouteSearchScreen() {
                                     <Text style={[styles.tabText, active && styles.tabTextActive]}>
                                         {tab.label}
                                     </Text>
-                                    {active && <View style={styles.tabUnderline} />}
                                 </Pressable>
                             );
                         })}
-
-                        <View style={styles.aiLabel}>
-                            <Ionicons name="sparkles-outline" size={17} color={AI} />
-                            <Text style={styles.aiLabelText}>혼잡도{'\n'}예측</Text>
-                        </View>
                     </View>
                 )}
 
                 {search.status === 'idle' && (
-                    <Message
-                        icon={<Ionicons name="git-commit-outline" size={34} color={NAVY} />}
-                        iconBackground="#e8f8f1"
-                        title={'출발역과 도착역을 선택하면\n경로를 찾아드려요'}
-                        description="소요시간 · 요금 · 환승 · 예상 혼잡도"
-                    />
+                    <View style={styles.empty}>
+                        <TrainBlock line={2} size={56} />
+                        <Text style={styles.emptyTitle}>{'출발역과 도착역을 선택하면\n경로를 찾아드려요'}</Text>
+                        <Text style={styles.emptyText}>소요시간 요금 환승 예상 혼잡도</Text>
+                    </View>
                 )}
 
                 {search.status === 'loading' && (
                     <View style={styles.loading}>
-                        <ActivityIndicator size="large" color={MINT} />
+                        <ActivityIndicator size="large" color={LV_MAIN} />
                         <Text style={styles.loadingTitle}>경로를 찾고 있어요</Text>
                         <Text style={styles.loadingText}>잠시만 기다려 주세요</Text>
                     </View>
@@ -406,8 +418,8 @@ export default function RouteSearchScreen() {
 
                 {search.status === 'success' && sameStation && (
                     <Message
-                        icon={<Ionicons name="train-outline" size={34} color={NAVY} />}
-                        iconBackground="#e8f8f1"
+                        icon={<Ionicons name="train-outline" size={30} color={LV_MAIN} />}
+                        iconBackground={LV_SOFT}
                         title="지하철 이동이 필요 없어요"
                         description="선택한 출발역과 도착역이 같아요. 역을 바꾸면 경로를 다시 찾아요."
                     />
@@ -415,8 +427,8 @@ export default function RouteSearchScreen() {
 
                 {search.status === 'success' && !sameStation && sortedRoutes.length === 0 && (
                     <Message
-                        icon={<Ionicons name="git-commit-outline" size={34} color={NAVY} />}
-                        iconBackground="#e8f8f1"
+                        icon={<Ionicons name="git-commit-outline" size={30} color={LV_MAIN} />}
+                        iconBackground={LV_SOFT}
                         title="이 조건으로 찾은 경로가 없어요"
                         description="출발역이나 도착역을 바꿔 다시 찾아 주세요."
                     />
@@ -434,7 +446,15 @@ export default function RouteSearchScreen() {
                             onStart={() => startGuide(route)}
                         />
                     ))}
+
+                {search.status === 'idle' && (
+                    <Text style={styles.supportNote}>
+                        서울교통공사 1~8호선 역을 지원해요. 그 밖의 역은 <Text style={styles.supportNoteStrong}>미제공</Text>으로 표시되고 선택할 수 없어요.
+                    </Text>
+                )}
             </ScrollView>
+
+            <BottomTabBar active="route" />
         </View>
     );
 }
@@ -457,7 +477,6 @@ function StationField({
             accessibilityRole="button"
             accessibilityLabel={`${label}역 ${station ? formatStationName(station.name) : '선택'}`}
         >
-            <Text style={styles.stationLabel}>{label}</Text>
             {station ? (
                 <Text style={styles.stationName} numberOfLines={1}>{formatStationName(station.name)}</Text>
             ) : (
@@ -510,7 +529,7 @@ function ErrorMessage({ code, message, onRetry, onRoomList, onChangeTime }: {
 }) {
     if (code === 'VALIDATION_ERROR' || code === 'NO_SERVICE_TIME' || code === 'ARRIVAL_UNREACHABLE') {
         return (
-            <Message icon={<Ionicons name="time-outline" size={30} color={SECONDARY} />} iconBackground="#eef1f5"
+            <Message icon={<Ionicons name="time-outline" size={30} color={LV_MAIN} />} iconBackground={LV_SOFT}
                 title={code === 'VALIDATION_ERROR' ? '검색 시각을 확인해 주세요' : code === 'NO_SERVICE_TIME' ? '선택한 시각에는 열차가 없어요' : '그 시각까지 도착하기 어려워요'}
                 description={message} actionLabel={onChangeTime ? '시각 바꾸기' : undefined} onAction={onChangeTime} />
         );
@@ -518,8 +537,8 @@ function ErrorMessage({ code, message, onRetry, onRoomList, onChangeTime }: {
     if (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND') {
         return (
             <Message
-                icon={<Ionicons name="lock-closed-outline" size={30} color={SECONDARY} />}
-                iconBackground="#eef1f5"
+                icon={<Ionicons name="lock-closed-outline" size={30} color={LV_MAIN} />}
+                iconBackground={LV_SOFT}
                 title={code === 'NOT_ROOM_MEMBER' ? '이 약속방에 접근할 수 없어요' : '약속방을 찾을 수 없어요'}
                 description={code === 'NOT_ROOM_MEMBER'
                     ? '참여 중인 약속방이 아니에요. 약속방 목록에서 확인해 주세요.'
@@ -533,8 +552,8 @@ function ErrorMessage({ code, message, onRetry, onRoomList, onChangeTime }: {
     if (code === 'ROUTE_NOT_FOUND') {
         return (
             <Message
-                icon={<Ionicons name="search-outline" size={30} color={SECONDARY} />}
-                iconBackground="#eef1f5"
+                icon={<Ionicons name="search-outline" size={30} color={LV_MAIN} />}
+                iconBackground={LV_SOFT}
                 title="지하철 경로를 찾지 못했어요"
                 description="다른 출발역이나 도착역을 선택해 보세요"
             />
@@ -544,8 +563,8 @@ function ErrorMessage({ code, message, onRetry, onRoomList, onChangeTime }: {
     if (code === 'STATION_UNSUPPORTED' || code === 'STATION_NOT_FOUND') {
         return (
             <Message
-                icon={<Ionicons name="ban-outline" size={30} color={SECONDARY} />}
-                iconBackground="#eef1f5"
+                icon={<Ionicons name="ban-outline" size={30} color={LV_MAIN} />}
+                iconBackground={LV_SOFT}
                 title="서비스에서 지원하지 않는 역이에요"
                 description="서울 내 1~8호선 역을 선택해 주세요"
             />
@@ -554,8 +573,8 @@ function ErrorMessage({ code, message, onRetry, onRoomList, onChangeTime }: {
 
     return (
         <Message
-            icon={<Ionicons name="alert-circle-outline" size={32} color="#e5484d" />}
-            iconBackground="#fdecec"
+            icon={<Ionicons name="alert-circle-outline" size={30} color={LV_MAIN} />}
+            iconBackground={LV_SOFT}
             title="경로를 불러오지 못했어요"
             description={'네트워크 상태를 확인하고\n다시 시도해 주세요'}
             actionLabel="다시 시도"
@@ -567,35 +586,28 @@ function ErrorMessage({ code, message, onRetry, onRoomList, onChangeTime }: {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: BACKGROUND,
+        backgroundColor: LV_BACKGROUND,
     },
 
     header: {
-        paddingHorizontal: 16,
-        paddingBottom: 16,
-        backgroundColor: WHITE,
+        height: 48,
+        paddingHorizontal: 12,
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        borderBottomWidth: 1,
-        borderBottomColor: BORDER,
     },
 
     backButton: {
-        width: 36,
-        height: 36,
+        width: 44,
+        height: 44,
         justifyContent: 'center',
         alignItems: 'center',
     },
 
     headerTitle: {
-        fontSize: 18,
+        paddingLeft: 8,
+        fontSize: 20,
         fontWeight: '700',
-        color: NAVY,
-    },
-
-    headerRight: {
-        width: 36,
+        color: LV_TEXT,
     },
 
     scrollView: {
@@ -604,95 +616,124 @@ const styles = StyleSheet.create({
 
     content: {
         paddingHorizontal: 20,
-        paddingTop: 16,
+        paddingTop: 8,
+    },
+
+    stationArea: {
+        paddingTop: 8,
+        paddingHorizontal: 20,
     },
 
     stationCard: {
-        minHeight: 92,
-        paddingVertical: 10,
-        paddingLeft: 14,
-        paddingRight: 12,
+        paddingTop: 6,
+        paddingRight: 6,
+        paddingBottom: 6,
+        paddingLeft: 16,
         flexDirection: 'row',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: BORDER,
-        borderRadius: 16,
-        backgroundColor: WHITE,
+        borderColor: LV_CARD_BORDER,
+        borderRadius: 18,
+        backgroundColor: LV_CARD,
     },
 
     pointColumn: {
-        width: 22,
+        marginRight: 12,
         alignItems: 'center',
-        alignSelf: 'stretch',
-        paddingVertical: 8,
+        gap: 3,
     },
 
     startPoint: {
         width: 10,
         height: 10,
-        borderWidth: 2,
-        borderColor: NAVY,
         borderRadius: 5,
+        backgroundColor: LV_MAIN,
     },
 
-    pointDash: {
-        flex: 1,
-        marginVertical: 4,
-        borderLeftWidth: 2,
-        borderStyle: 'dotted',
-        borderColor: '#c3c9d4',
+    pointLine: {
+        width: 2,
+        height: 30,
+        backgroundColor: LV_POINT_LINE,
     },
 
     endPoint: {
-        width: 9,
-        height: 9,
+        width: 10,
+        height: 10,
+        borderWidth: 2.5,
+        borderColor: LV_MAIN,
         borderRadius: 5,
-        backgroundColor: MINT,
+        backgroundColor: LV_CARD,
     },
 
     stationFields: {
         flex: 1,
-        marginLeft: 6,
-        marginRight: 10,
+        minWidth: 0,
     },
 
     stationField: {
-        paddingVertical: 3,
-    },
-
-    stationLabel: {
-        color: SECONDARY,
-        fontSize: 11,
-        fontWeight: '600',
+        height: 46,
+        justifyContent: 'center',
     },
 
     stationName: {
-        marginTop: 1,
-        color: NAVY,
-        fontSize: 18.5,
-        fontWeight: '800',
+        color: LV_TEXT,
+        fontSize: 16.5,
+        fontWeight: '600',
     },
 
     stationPlaceholder: {
-        marginTop: 2,
-        color: SECONDARY,
-        fontSize: 15.5,
-        fontWeight: '500',
+        color: LV_SECONDARY,
+        fontSize: 16.5,
+        fontWeight: '600',
     },
 
     stationDivider: {
         height: 1,
-        marginVertical: 4,
-        backgroundColor: BORDER,
+        backgroundColor: LV_FIELD_DIVIDER,
     },
 
     swapButton: {
-        width: 36,
-        height: 36,
-        borderRadius: 10,
+        width: 44,
+        height: 44,
+        marginLeft: 6,
+        borderRadius: 12,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: BACKGROUND,
+        backgroundColor: LV_SWAP_BACKGROUND,
+    },
+
+    empty: {
+        paddingTop: 36,
+        paddingBottom: 12,
+        alignItems: 'center',
+    },
+
+    emptyTitle: {
+        marginTop: 14,
+        textAlign: 'center',
+        color: LV_TEXT,
+        fontSize: 16,
+        fontWeight: '700',
+        lineHeight: 23,
+    },
+
+    emptyText: {
+        marginTop: 6,
+        textAlign: 'center',
+        color: LV_SECONDARY,
+        fontSize: 13,
+    },
+
+    // 시안(#184)의 아래 안내 문구 자리 — 글자만 있어요.
+    supportNote: {
+        marginTop: 22,
+        color: LV_SECONDARY,
+        fontSize: 12,
+        lineHeight: 19.2,
+    },
+
+    supportNoteStrong: {
+        fontWeight: '700',
     },
 
     notice: {
@@ -702,129 +743,118 @@ const styles = StyleSheet.create({
         alignItems: 'flex-start',
         gap: 8,
         borderWidth: 1,
-        borderColor: '#f6e3b0',
+        borderColor: LV_CARD_BORDER,
         borderRadius: 12,
-        backgroundColor: '#fff8e6',
+        backgroundColor: LV_CARD,
     },
 
     noticeText: {
         flex: 1,
-        color: '#8a5a00',
+        color: LV_SUB,
         fontSize: 12.5,
         fontWeight: '600',
         lineHeight: 18,
     },
 
+    // 시안 "03 경로 결과"의 정렬 탭
     tabs: {
-        marginTop: 18,
+        marginBottom: 12,
+        padding: 3,
         flexDirection: 'row',
-        alignItems: 'center',
+        borderRadius: 12,
+        backgroundColor: LV_SOFT,
+    },
+
+    tabsSpaced: {
+        marginTop: 16,
     },
 
     tab: {
-        marginRight: 16,
-        paddingBottom: 6,
+        flex: 1,
+        height: 36,
+        borderRadius: 9,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+
+    tabActive: {
+        backgroundColor: LV_CARD,
+        boxShadow: '0px 1px 3px rgba(60,40,90,0.12)',
     },
 
     tabText: {
-        color: SECONDARY,
-        fontSize: 14.5,
-        fontWeight: '600',
+        color: LV_SECONDARY,
+        fontSize: 13,
+        fontWeight: '500',
     },
 
     tabTextActive: {
-        color: NAVY,
-        fontWeight: '800',
-    },
-
-    tabUnderline: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        bottom: 0,
-        height: 2.5,
-        borderRadius: 2,
-        backgroundColor: MINT,
-    },
-
-    aiLabel: {
-        marginLeft: 'auto',
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 3,
-    },
-
-    aiLabelText: {
-        color: AI,
-        fontSize: 11,
+        color: LV_TEXT,
         fontWeight: '700',
-        lineHeight: 12,
     },
 
     loading: {
-        marginTop: 40,
+        paddingVertical: 48,
         alignItems: 'center',
     },
 
     loadingTitle: {
         marginTop: 12,
-        color: NAVY,
+        color: LV_TEXT,
         fontSize: 15,
-        fontWeight: '800',
+        fontWeight: '700',
     },
 
     loadingText: {
         marginTop: 4,
-        color: SECONDARY,
+        color: LV_SECONDARY,
         fontSize: 13,
-        fontWeight: '600',
     },
 
+    // 시안의 결과 없음 문구: 가운데 15 #83808B, 위아래 60
     message: {
-        marginTop: 90,
+        paddingVertical: 60,
         alignItems: 'center',
     },
 
     messageIcon: {
-        width: 64,
-        height: 64,
+        width: 56,
+        height: 56,
         borderRadius: 18,
         alignItems: 'center',
         justifyContent: 'center',
     },
 
     messageTitle: {
-        marginTop: 16,
+        marginTop: 14,
         textAlign: 'center',
-        color: NAVY,
-        fontSize: 17,
-        fontWeight: '800',
-        lineHeight: 24,
+        color: LV_SECONDARY,
+        fontSize: 15,
+        lineHeight: 22,
     },
 
     messageText: {
-        marginTop: 8,
+        marginTop: 6,
         textAlign: 'center',
-        color: SECONDARY,
-        fontSize: 13.5,
-        fontWeight: '600',
+        color: LV_SECONDARY,
+        fontSize: 13,
         lineHeight: 19,
     },
 
     retryButton: {
         width: 150,
-        height: 48,
-        marginTop: 20,
+        height: 46,
+        marginTop: 18,
         borderRadius: 13,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: NAVY,
+        backgroundColor: LV_MAIN,
     },
 
     retryText: {
-        color: WHITE,
-        fontSize: 15.5,
-        fontWeight: '700',
+        color: LV_CARD,
+        fontSize: 14.5,
+        fontWeight: '600',
     },
 
     pressed: {

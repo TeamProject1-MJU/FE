@@ -33,7 +33,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { searchStations as fetchStationSearch, STATION_KEYWORD_MAX_LENGTH } from '@/services/station';
 import { useMock as isMockMode } from '@/services/api/config';
-import { MOCK_STATIONS, normalizeStationName, searchStations } from '@/mocks/stations';
+import { MOCK_STATIONS, searchStations } from '@/mocks/stations';
 import { ApiError, isAuthError } from '@/services/api/errors';
 import type { Station, StationLine } from '@/types/station';
 
@@ -271,19 +271,21 @@ const badgeStyles = StyleSheet.create({
 
 /* ═══════════════ 4. 화면 ═══════════════ */
 
-const NAVY = '#0f1c3f';
-const MINT = '#2bcf9a';
-const MINT_DEEP = '#12a77a';
-const MINT_SOFT = '#e6f8f1';
-const MINT_TEXT = '#0f6b4f';
-const PURPLE = '#4d3fc7';
-const PURPLE_SOFT = '#ece9fb';
-const BG = '#f3f5f8';
-const WHITE = '#ffffff';
-const SECONDARY = '#6b7488';
-const DISABLED = '#9aa3b2';
-const BORDER = '#e6e9ef';
-const ROW_DIVIDER = '#eef0f4';
+// 시안(#184 라벤더) 색 — design-ref/template.html "02 경로 검색" 의 역 검색 상태 값이에요.
+const LV_BACKGROUND = '#F7F5FA';
+const LV_CARD = '#FFFFFF';
+const LV_CARD_BORDER = '#EEEAF2';
+const LV_TEXT = '#25212D';
+const LV_SECONDARY = '#83808B';
+const LV_MAIN = '#5C3F78';
+const LV_ROW_DIVIDER = '#EFEBF3';
+const LV_ROW_ICON = '#B4AFBC';
+const LV_BADGE_BACKGROUND = '#F1EEF4';
+const LV_SOFT = '#F4F1F7';
+const LV_PLACEHOLDER = '#B4AFBC';
+const LV_CLEAR = '#C9C3D1';
+const LV_PRESSED = '#F1EEF4';
+const LV_DIM = 'rgba(37,33,45,0.42)';
 
 type Params = {
     purpose?: StationPickerPurpose;
@@ -393,40 +395,28 @@ export default function StationSearchScreen() {
     const showRecent = trimmed.length === 0;
     const data = showRecent ? recent : results;
 
+
+    // 시안 문구: 출발역·도착역은 "출발역 검색"/"도착역 검색", 그 밖의 용도는 지금 칩 문구를 써요(가운데 점은 공백으로).
+    const fieldLabel = purpose === 'origin'
+        ? '출발역'
+        : purpose === 'destination'
+            ? '도착역'
+            : copy.chip.replace(/\s*·\s*/g, ' ');
+    const placeholder = purpose === 'origin' ? '출발역' : purpose === 'destination' ? '도착역' : '역 이름을 입력하세요';
+    // 출발 쪽은 채운 점, 도착(만날 역) 쪽은 테두리 점
+    const filledPoint = purpose === 'origin' || purpose === 'departure';
+    // 약속방 용도는 시안에 없는 방 이름 맥락이 있어서 기존 제목을 남겨요.
+    const showTitle = purpose !== 'origin' && purpose !== 'destination';
+
     return (
         <View style={styles.container}>
             <StatusBar style="dark" />
 
-            {/* 헤더: 뒤로가기 + 용도 칩 + 질문형 제목 */}
-            <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-                <View style={styles.headerRow}>
-                    <Pressable
-                        style={styles.backButton}
-                        onPress={goBack}
-                        accessibilityRole="button"
-                        accessibilityLabel="뒤로 가기"
-                        hitSlop={8}
-                    >
-                        <Ionicons name="chevron-back" size={26} color={NAVY} />
-                    </Pressable>
-
-                    <View style={[styles.chip, purpose === 'departure' ? styles.chipPurple : styles.chipMint]}>
-                        <Text style={[styles.chipText, purpose === 'departure' ? styles.chipTextPurple : styles.chipTextMint]}>
-                            {copy.chip}
-                        </Text>
-                    </View>
-                </View>
-
-                <Text style={styles.title}>{copy.title}</Text>
-            </View>
-
-            {/* 검색창 */}
-            <View style={styles.searchWrap}>
-                <Pressable
-                    style={[styles.search, focused && styles.searchFocused]}
-                    onPress={() => inputRef.current?.focus()}
-                >
-                    <Ionicons name="search" size={20} color={focused ? NAVY : SECONDARY} />
+            {/* 입력 카드 (1단계 경로 검색 입력 카드와 같은 톤) */}
+            <View style={[styles.searchWrap, { paddingTop: insets.top + 8 }]}>
+                {showTitle && <Text style={styles.title}>{copy.title}</Text>}
+                <Pressable style={styles.search} onPress={() => inputRef.current?.focus()}>
+                    <View style={[styles.point, filledPoint ? styles.pointFilled : styles.pointOutline]} />
                     <TextInput
                         ref={inputRef}
                         style={styles.input}
@@ -434,14 +424,14 @@ export default function StationSearchScreen() {
                         onChangeText={setQuery}
                         onFocus={() => setFocused(true)}
                         onBlur={() => setFocused(false)}
-                        placeholder="역 이름을 입력하세요"
-                        placeholderTextColor="#a2a9b5"
+                        placeholder={placeholder}
+                        placeholderTextColor={LV_PLACEHOLDER}
                         returnKeyType="search"
                         // maxLength 는 UTF-16 기준이라 코드 포인트로 세는 서버보다 엄격해요(이모지는 2글자로 세요).
                         maxLength={STATION_KEYWORD_MAX_LENGTH}
                         autoCorrect={false}
                         autoCapitalize="none"
-                        selectionColor={MINT}
+                        selectionColor={LV_MAIN}
                         accessibilityLabel="역 이름 검색"
                     />
                     {query.length > 0 && (
@@ -452,9 +442,23 @@ export default function StationSearchScreen() {
                             accessibilityLabel="검색어 지우기"
                             hitSlop={8}
                         >
-                            <Ionicons name="close" size={13} color={WHITE} />
+                            <Ionicons name="close" size={13} color={LV_CARD} />
                         </Pressable>
                     )}
+                </Pressable>
+            </View>
+
+            {/* 목록 위 줄: "출발역 검색" + 취소(기존 뒤로 가기와 같은 동작) */}
+            <View style={styles.fieldRow}>
+                <Text style={styles.fieldLabel}>{fieldLabel} 검색</Text>
+                <Pressable
+                    style={styles.cancelButton}
+                    onPress={goBack}
+                    accessibilityRole="button"
+                    accessibilityLabel="취소"
+                    hitSlop={8}
+                >
+                    <Text style={styles.cancelText}>취소</Text>
                 </Pressable>
             </View>
 
@@ -464,9 +468,9 @@ export default function StationSearchScreen() {
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
             >
                 {!showRecent && (searching || searchError) ? (
-                    <View style={styles.noResults} accessibilityLiveRegion="polite">
-                        {searchError && <Text style={styles.emptyTitle}>{searchError.title}</Text>}
-                        <Text style={styles.emptyDescription}>{searchError ? searchError.description : '역을 검색하고 있어요'}</Text>
+                    <View style={styles.status} accessibilityLiveRegion="polite">
+                        {searchError && <Text style={styles.statusTitle}>{searchError.title}</Text>}
+                        <Text style={styles.statusText}>{searchError ? searchError.description : '역을 검색하고 있어요'}</Text>
                         {searchError?.retry && (
                             <Pressable style={styles.suggestChip} onPress={() => setRetryKey(value => value + 1)} accessibilityRole="button">
                                 <Text style={styles.suggestText}>다시 시도</Text>
@@ -484,25 +488,14 @@ export default function StationSearchScreen() {
                         showsVerticalScrollIndicator={false}
                         contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 24 }]}
                         ListHeaderComponent={
-                            showRecent ? (
-                                recent.length > 0 ? (
-                                    <View style={styles.sectionRow}>
-                                        <Text style={styles.sectionTitle}>최근 검색</Text>
-                                        <Pressable onPress={handleClearRecent} hitSlop={8}>
-                                            <Text style={styles.sectionAction}>전체 지우기</Text>
-                                        </Pressable>
-                                    </View>
-                                ) : null
-                            ) : (
+                            showRecent && recent.length > 0 ? (
                                 <View style={styles.sectionRow}>
-                                    <Text style={styles.sectionTitle}>
-                                        검색 결과 <Text style={styles.sectionCount}>{results.length}</Text>
-                                    </Text>
-                                    {unsupportedCount > 0 && (
-                                        <Text style={styles.sectionMuted}>미제공 {unsupportedCount}</Text>
-                                    )}
+                                    <Text style={styles.sectionTitle}>최근 검색</Text>
+                                    <Pressable style={styles.sectionAction} onPress={handleClearRecent} hitSlop={8}>
+                                        <Text style={styles.sectionActionText}>전체 지우기</Text>
+                                    </Pressable>
                                 </View>
-                            )
+                            ) : null
                         }
                         ListEmptyComponent={
                             showRecent ? <RecentEmpty /> : null
@@ -514,14 +507,12 @@ export default function StationSearchScreen() {
                                 </Text>
                             ) : null
                         }
-                        renderItem={({ item, index }) => (
-                            <View style={[styles.card, index === 0 && styles.cardTop, index === data.length - 1 && styles.cardBottom]}>
+                        renderItem={({ item }) => (
+                            <View>
                                 <StationRow
                                     station={item}
-                                    keyword={showRecent ? '' : trimmed}
                                     recent={showRecent}
                                     selected={item.id === selectedStationId}
-                                    last={index === data.length - 1}
                                     onPress={() => choose(item)}
                                 />
                             </View>
@@ -546,30 +537,21 @@ export default function StationSearchScreen() {
 
 function StationRow({
                         station,
-                        keyword,
                         recent,
                         selected,
-                        last,
                         onPress,
                     }: {
     station: Station;
-    keyword: string;
     recent: boolean;
     selected: boolean;
-    last: boolean;
     onPress: () => void;
 }) {
     const supported = station.isSupported;
-    const lineNames = station.lines.map((line) => line.lineName).join(' · ');
-    const subtitle = supported
-        ? station.lines.length > 1 ? `${lineNames} · 환승역` : lineNames
-        : `${lineNames} · 데이터 미제공 구간`;
 
     return (
         <Pressable
             style={({ pressed }) => [
                 styles.row,
-                !last && styles.rowDivider,
                 !supported && styles.rowUnsupported,
                 pressed && styles.rowPressed,
             ]}
@@ -577,109 +559,73 @@ function StationRow({
             accessibilityRole="button"
             accessibilityLabel={supported ? formatStationName(station.name) : `${formatStationName(station.name)}, 미제공 역`}
         >
-            {/* 노선색 레일 (환승역은 분할, 미제공은 점선) */}
-            <View style={styles.rail}>
-                {supported ? (
-                    station.lines.map((line) => (
-                        <View key={line.lineId} style={[styles.railSegment, { backgroundColor: line.color }]} />
-                    ))
-                ) : (
-                    <DashedRail />
-                )}
-            </View>
+            <Ionicons name={recent ? 'time-outline' : 'search'} size={16} color={LV_ROW_ICON} />
 
-            {recent && (
-                <View style={styles.recentIcon}>
-                    <Ionicons name="time-outline" size={18} color="#8b95a4" />
+            <StationName name={station.name} />
+
+            {station.lines.length > 0 && (
+                <View style={styles.lines}>
+                    {station.lines.map((line) => (
+                        <LineDot key={line.lineId} line={line} />
+                    ))}
                 </View>
             )}
 
-            <View style={styles.rowBody}>
-                <View style={styles.nameRow}>
-                    <HighlightedName name={station.name} keyword={keyword} muted={!supported} />
-                    {!supported && (
-                        <View style={styles.naBadge}>
-                            <Text style={styles.naBadgeText}>미제공</Text>
-                        </View>
-                    )}
+            {!supported && (
+                <View style={styles.naBadge}>
+                    <Text style={styles.naBadgeText}>미제공</Text>
                 </View>
-                <Text style={[styles.subtitle, !supported && styles.subtitleMuted]} numberOfLines={1}>
-                    {subtitle}
-                </Text>
-            </View>
-
-            <View style={styles.badges}>
-                {station.lines.map((line) => (
-                    <LineBadge key={line.lineId} line={line} muted={!supported} />
-                ))}
-            </View>
+            )}
 
             {selected && (
-                <Ionicons name="checkmark-circle" size={22} color={MINT_DEEP} style={styles.check} />
-            )}
-            {recent && !selected && (
-                <Ionicons name="chevron-forward" size={18} color="#c0c6d1" />
+                <Ionicons
+                    name="checkmark-circle"
+                    size={20}
+                    color={LV_MAIN}
+                    style={supported ? styles.checkEnd : styles.check}
+                />
             )}
         </Pressable>
     );
 }
 
-function DashedRail() {
+/** 시안 목록의 노선 원(18, 글자 10.5/700). 숫자가 아닌 노선은 알약형으로 늘려요. */
+function LineDot({ line }: { line: StationLine }) {
+    const short = line.lineName.replace(/호선$/, '');
+    const isNumeric = /^\d+$/.test(short);
+    const label = isNumeric ? short : line.lineName.replace(/선$/, '');
+
     return (
-        <View style={styles.dashedRail}>
-            {Array.from({ length: 7 }).map((_, i) => (
-                <View key={i} style={styles.dash} />
-            ))}
+        <View
+            style={[styles.lineDot, !isNumeric && styles.lineDotWide, { backgroundColor: line.color }]}
+            accessibilityLabel={line.lineName}
+        >
+            <Text style={styles.lineDotText} numberOfLines={1}>{label}</Text>
         </View>
     );
 }
 
-/** 검색어와 일치하는 부분을 민트로 강조 */
-function HighlightedName({ name, keyword, muted }: { name: string; keyword: string; muted: boolean }) {
-    const base = [styles.name, muted && styles.nameMuted];
-    name = name.trim();
-    const suffix = formatStationName(name).slice(name.length);
-    const q = normalizeStationName(keyword);
-    const lower = name.toLowerCase();
-    const index = q ? lower.indexOf(q) : -1;
-
-    if (index < 0) {
-        return <Text style={base} numberOfLines={1}>{name}{suffix}</Text>;
-    }
-
-    return (
-        <Text style={base} numberOfLines={1}>
-            {name.slice(0, index)}
-            <Text style={muted ? undefined : styles.nameHit}>{name.slice(index, index + q.length)}</Text>
-            {name.slice(index + q.length)}
-            {suffix}
-        </Text>
-    );
+/** 역 이름 (한 가지 스타일) */
+function StationName({ name }: { name: string }) {
+    return <Text style={styles.name} numberOfLines={1}>{formatStationName(name.trim())}</Text>;
 }
 
 /* ───────────────────────── 상태 뷰 ───────────────────────── */
 
 function RecentEmpty() {
     return (
-        <View style={styles.recentEmpty}>
-            <View style={styles.emptyIcon}>
-                <Ionicons name="time-outline" size={30} color="#b0b6c2" />
-            </View>
-            <Text style={styles.emptyTitle}>최근 검색한 역이 없어요</Text>
-            <Text style={styles.emptyDescription}>역 이름을 검색해 이동을 시작해보세요</Text>
+        <View style={styles.status}>
+            <Text style={styles.statusText}>최근 검색한 역이 없어요</Text>
         </View>
     );
 }
 
 function SupportNotice() {
     return (
-        <View style={styles.notice}>
-            <Ionicons name="information-circle-outline" size={18} color={MINT_DEEP} style={styles.noticeIcon} />
-            <Text style={styles.noticeText}>
-                서울교통공사 1~8호선 역을 지원해요. 그 밖의 역은{' '}
-                <Text style={styles.noticeBold}>미제공</Text>으로 표시되고 선택할 수 없어요.
-            </Text>
-        </View>
+        <Text style={styles.supportNote}>
+            서울교통공사 1~8호선 역을 지원해요. 그 밖의 역은{' '}
+            <Text style={styles.supportNoteStrong}>미제공</Text>으로 표시되고 선택할 수 없어요.
+        </Text>
     );
 }
 
@@ -697,17 +643,13 @@ function NoResults({ keyword, onRetry }: { keyword: string; onRetry: (text: stri
     }, [keyword, mock]);
 
     return (
-        <View style={styles.noResults}>
-            <View style={styles.emptyIcon}>
-                <Ionicons name="search-outline" size={32} color="#b0b6c2" />
-            </View>
-            <Text style={styles.emptyTitle}>‘{keyword}’와 일치하는{'\n'}역이 없어요</Text>
-            <Text style={styles.emptyDescription}>역 이름만 짧게 입력해 보세요.{'\n'}‘역’ 글자는 빼도 돼요.</Text>
+        <View style={styles.status}>
+            <Text style={styles.statusText}>일치하는 역이 없어요</Text>
             {suggestions.length > 0 && (
                 <View style={styles.suggestRow}>
                     {suggestions.map((text) => (
                         <Pressable key={text} style={styles.suggestChip} onPress={() => onRetry(text)}>
-                            <Ionicons name="search" size={13} color={NAVY} />
+                            <Ionicons name="search" size={13} color={LV_MAIN} />
                             <Text style={styles.suggestText}>{text}</Text>
                         </Pressable>
                     ))}
@@ -733,7 +675,7 @@ function UnsupportedSheet({
     onPickNearby: (station: Station) => void;
 }) {
     const visible = station !== null;
-    const lineNames = station?.lines.map((line) => line.lineName).join(' · ') ?? '';
+    const lineNames = station?.lines.map((line) => line.lineName).join(' ') ?? '';
 
     return (
         <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -743,23 +685,23 @@ function UnsupportedSheet({
 
                 <View style={styles.sheetStation}>
                     <View style={styles.sheetStationIcon}>
-                        <Ionicons name="train-outline" size={22} color={DISABLED} />
+                        <Ionicons name="train-outline" size={22} color={LV_ROW_ICON} />
                     </View>
                     <View style={styles.sheetStationBody}>
-                        <View style={styles.nameRow}>
+                        <View style={styles.sheetNameRow}>
                             <Text style={styles.sheetStationName}>{formatStationName(station?.name)}</Text>
                             <View style={styles.naBadge}>
                                 <Text style={styles.naBadgeText}>미제공</Text>
                             </View>
                         </View>
-                        <Text style={styles.subtitle}>{lineNames} · 데이터 미제공 구간</Text>
+                        <Text style={styles.sheetSubtitle}>{lineNames} 데이터 미제공 구간</Text>
                     </View>
                 </View>
 
                 <Text style={styles.sheetTitle}>이 역은 아직 선택할 수 없어요</Text>
                 <Text style={styles.sheetDescription}>
-                    LinkRo는 지금 <Text style={styles.sheetBold}>서울교통공사 1~8호선</Text> 역의 경로·혼잡도 데이터를 제공해요.
-                    코레일·신분당선 등 다른 운영사 구간은 준비 중이에요.
+                    LinkRo는 지금 <Text style={styles.sheetBold}>서울교통공사 1~8호선</Text> 역의 경로 혼잡도 데이터를 제공해요.
+                    코레일 신분당선 등 다른 운영사 구간은 준비 중이에요.
                 </Text>
 
                 {nearby.length > 0 && (
@@ -797,102 +739,71 @@ function UnsupportedSheet({
 
 /* ───────────────────────── 스타일 ───────────────────────── */
 
-const RAIL_WIDTH = 6;
-const ROW_HEIGHT = 70;
-
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: BG,
+        backgroundColor: LV_BACKGROUND,
     },
 
     moreNotice: {
         marginTop: 14,
-        color: SECONDARY,
+        color: LV_SECONDARY,
         fontSize: 13,
         lineHeight: 19,
         textAlign: 'center',
     },
 
-    // 헤더
-    header: {
-        paddingHorizontal: 20,
-        paddingBottom: 14,
-        gap: 12,
-    },
-
-    headerRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-    },
-
-    backButton: {
-        width: 44,
-        height: 44,
-        marginLeft: -10,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-
-    chip: {
-        paddingHorizontal: 11,
-        paddingVertical: 6,
-        borderRadius: 999,
-    },
-
-    chipMint: { backgroundColor: MINT_SOFT },
-    chipPurple: { backgroundColor: PURPLE_SOFT },
-
-    chipText: {
-        fontSize: 12,
-        fontWeight: '700',
-    },
-
-    chipTextMint: { color: MINT_DEEP },
-    chipTextPurple: { color: PURPLE },
-
+    // 약속방 용도에서만 보이는 제목
     title: {
-        fontSize: 26,
-        lineHeight: 33,
-        fontWeight: '800',
-        color: NAVY,
-        letterSpacing: -0.6,
+        marginBottom: 14,
+        fontSize: 20,
+        lineHeight: 27,
+        fontWeight: '700',
+        color: LV_TEXT,
     },
 
-    // 검색창
+    // 입력 카드
     searchWrap: {
         paddingHorizontal: 20,
-        paddingTop: 4,
     },
 
     search: {
-        height: 54,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
-        paddingHorizontal: 16,
-        borderRadius: 16,
-        backgroundColor: WHITE,
-        borderWidth: 2,
-        borderColor: BORDER,
+        paddingTop: 6,
+        paddingRight: 6,
+        paddingBottom: 6,
+        paddingLeft: 16,
+        borderRadius: 18,
+        borderWidth: 1,
+        borderColor: LV_CARD_BORDER,
+        backgroundColor: LV_CARD,
     },
 
-    searchFocused: {
-        borderColor: NAVY,
-        shadowColor: NAVY,
-        shadowOpacity: 0.08,
-        shadowRadius: 12,
-        shadowOffset: { width: 0, height: 6 },
-        elevation: 3,
+    point: {
+        width: 10,
+        height: 10,
+        marginRight: 12,
+        borderRadius: 5,
+    },
+
+    pointFilled: {
+        backgroundColor: LV_MAIN,
+    },
+
+    pointOutline: {
+        borderWidth: 2.5,
+        borderColor: LV_MAIN,
+        backgroundColor: LV_CARD,
     },
 
     input: {
         flex: 1,
         minWidth: 0,
-        fontSize: 16,
+        height: 46,
+        fontSize: 16.5,
         fontWeight: '600',
-        color: NAVY,
+        color: LV_TEXT,
         paddingVertical: 0,
         ...Platform.select({ web: { outlineStyle: 'none' } as object }),
     },
@@ -900,10 +811,38 @@ const styles = StyleSheet.create({
     clearButton: {
         width: 22,
         height: 22,
+        marginRight: 10,
+        marginLeft: 6,
         borderRadius: 11,
-        backgroundColor: '#c8cdd6',
+        backgroundColor: LV_CLEAR,
         alignItems: 'center',
         justifyContent: 'center',
+    },
+
+    // 목록 위 줄
+    fieldRow: {
+        height: 40,
+        marginTop: 8,
+        paddingHorizontal: 20,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+    },
+
+    fieldLabel: {
+        fontSize: 13,
+        color: LV_SECONDARY,
+    },
+
+    cancelButton: {
+        height: 40,
+        justifyContent: 'center',
+    },
+
+    cancelText: {
+        fontSize: 13.5,
+        fontWeight: '600',
+        color: LV_MAIN,
     },
 
     // 목록
@@ -913,217 +852,119 @@ const styles = StyleSheet.create({
 
     listContent: {
         paddingHorizontal: 20,
-        paddingTop: 22,
     },
 
     sectionRow: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: 2,
-        marginBottom: 10,
+        marginTop: 22,
+        marginBottom: 4,
     },
 
     sectionTitle: {
-        fontSize: 13,
+        fontSize: 14,
         fontWeight: '700',
-        color: SECONDARY,
-    },
-
-    sectionCount: {
-        color: NAVY,
-        fontWeight: '800',
+        color: LV_TEXT,
     },
 
     sectionAction: {
-        fontSize: 12,
-        fontWeight: '700',
-        color: '#9ca3b2',
-        paddingVertical: 4,
+        height: 32,
+        justifyContent: 'center',
     },
 
-    sectionMuted: {
-        fontSize: 12,
-        fontWeight: '600',
-        color: '#9ca3b2',
-    },
-
-    card: {
-        backgroundColor: WHITE,
-        borderLeftWidth: 1,
-        borderRightWidth: 1,
-        borderColor: BORDER,
-        overflow: 'hidden',
-    },
-
-    cardTop: {
-        borderTopWidth: 1,
-        borderTopLeftRadius: 18,
-        borderTopRightRadius: 18,
-    },
-
-    cardBottom: {
-        borderBottomWidth: 1,
-        borderBottomLeftRadius: 18,
-        borderBottomRightRadius: 18,
+    sectionActionText: {
+        fontSize: 12.5,
+        color: LV_SECONDARY,
     },
 
     row: {
-        minHeight: ROW_HEIGHT,
+        height: 50,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
-        paddingRight: 16,
-    },
-
-    rowDivider: {
+        gap: 10,
         borderBottomWidth: 1,
-        borderBottomColor: ROW_DIVIDER,
+        borderBottomColor: LV_ROW_DIVIDER,
     },
 
     rowUnsupported: {
-        backgroundColor: '#fafbfc',
+        opacity: 0.5,
     },
 
     rowPressed: {
-        backgroundColor: '#f6f8fa',
-    },
-
-    rail: {
-        width: RAIL_WIDTH,
-        alignSelf: 'stretch',
-        flexDirection: 'column',
-    },
-
-    railSegment: {
-        flex: 1,
-    },
-
-    dashedRail: {
-        flex: 1,
-        justifyContent: 'space-evenly',
-    },
-
-    dash: {
-        width: RAIL_WIDTH,
-        height: 6,
-        backgroundColor: '#d5d9e1',
-    },
-
-    recentIcon: {
-        width: 36,
-        height: 36,
-        borderRadius: 12,
-        backgroundColor: BG,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginLeft: 4,
-    },
-
-    rowBody: {
-        flex: 1,
-        minWidth: 0,
-        gap: 3,
-        paddingLeft: 4,
-    },
-
-    nameRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
+        backgroundColor: LV_PRESSED,
     },
 
     name: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: NAVY,
-        letterSpacing: -0.3,
         flexShrink: 1,
+        fontSize: 15.5,
+        color: LV_TEXT,
     },
 
-    nameMuted: {
-        color: DISABLED,
+    lines: {
+        flexDirection: 'row',
+        gap: 3,
     },
 
-    nameHit: {
-        color: MINT_DEEP,
+    lineDot: {
+        height: 18,
+        minWidth: 18,
+        borderRadius: 9,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
 
-    subtitle: {
-        fontSize: 12,
-        fontWeight: '500',
-        color: SECONDARY,
+    lineDotWide: {
+        paddingHorizontal: 6,
     },
 
-    subtitleMuted: {
-        color: '#a1a8b8',
+    lineDotText: {
+        fontSize: 10.5,
+        fontWeight: '700',
+        color: '#FFFFFF',
+        includeFontPadding: false,
     },
 
     naBadge: {
-        paddingHorizontal: 7,
+        marginLeft: 'auto',
         paddingVertical: 3,
+        paddingHorizontal: 7,
         borderRadius: 6,
-        backgroundColor: '#eceff3',
+        backgroundColor: LV_BADGE_BACKGROUND,
     },
 
     naBadgeText: {
-        fontSize: 10.5,
-        fontWeight: '800',
-        color: SECONDARY,
-        letterSpacing: 0.2,
-    },
-
-    badges: {
-        flexDirection: 'row',
-        gap: 4,
+        fontSize: 11,
+        color: LV_SECONDARY,
     },
 
     check: {
         marginLeft: 2,
     },
 
-    // 빈 상태 / 결과 없음
-    recentEmpty: {
-        alignItems: 'center',
-        paddingTop: 70,
-        paddingBottom: 30,
+    checkEnd: {
+        marginLeft: 'auto',
     },
 
-    noResults: {
-        flex: 1,
+    // 불러오는 중 / 오류 / 결과 없음 / 최근 없음
+    status: {
+        paddingVertical: 30,
+        paddingHorizontal: 20,
         alignItems: 'center',
-        justifyContent: 'center',
-        paddingHorizontal: 40,
-        paddingBottom: 60,
     },
 
-    emptyIcon: {
-        width: 76,
-        height: 76,
-        borderRadius: 24,
-        backgroundColor: WHITE,
-        borderWidth: 1,
-        borderColor: BORDER,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-
-    emptyTitle: {
-        marginTop: 18,
-        fontSize: 16,
-        lineHeight: 22,
-        fontWeight: '800',
-        color: NAVY,
+    statusTitle: {
+        marginBottom: 6,
+        fontSize: 15,
+        fontWeight: '700',
+        color: LV_TEXT,
         textAlign: 'center',
-        letterSpacing: -0.3,
     },
 
-    emptyDescription: {
-        marginTop: 8,
-        fontSize: 13,
+    statusText: {
+        fontSize: 14,
         lineHeight: 20,
-        fontWeight: '500',
-        color: SECONDARY,
+        color: LV_SECONDARY,
         textAlign: 'center',
     },
 
@@ -1132,62 +973,47 @@ const styles = StyleSheet.create({
         flexWrap: 'wrap',
         justifyContent: 'center',
         gap: 8,
-        marginTop: 22,
     },
 
     suggestChip: {
         height: 36,
+        marginTop: 16,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 6,
         paddingHorizontal: 14,
         borderRadius: 999,
-        backgroundColor: WHITE,
+        backgroundColor: LV_CARD,
         borderWidth: 1,
-        borderColor: BORDER,
+        borderColor: LV_CARD_BORDER,
     },
 
     suggestText: {
         fontSize: 13,
-        fontWeight: '700',
-        color: NAVY,
+        fontWeight: '600',
+        color: LV_MAIN,
     },
 
-    notice: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        gap: 10,
-        marginTop: 18,
-        padding: 14,
-        paddingHorizontal: 16,
-        borderRadius: 14,
-        backgroundColor: MINT_SOFT,
+    // 시안(#184)의 아래 안내 문구 자리 — 글자만 있어요.
+    supportNote: {
+        marginTop: 22,
+        color: LV_SECONDARY,
+        fontSize: 12,
+        lineHeight: 19.2,
     },
 
-    noticeIcon: {
-        marginTop: 1,
-    },
-
-    noticeText: {
-        flex: 1,
-        fontSize: 12.5,
-        lineHeight: 19,
-        fontWeight: '500',
-        color: MINT_TEXT,
-    },
-
-    noticeBold: {
+    supportNoteStrong: {
         fontWeight: '700',
     },
 
     // 바텀시트
     dim: {
         flex: 1,
-        backgroundColor: 'rgba(15,28,63,0.42)',
+        backgroundColor: LV_DIM,
     },
 
     sheet: {
-        backgroundColor: WHITE,
+        backgroundColor: LV_CARD,
         borderTopLeftRadius: 28,
         borderTopRightRadius: 28,
         paddingHorizontal: 20,
@@ -1199,7 +1025,7 @@ const styles = StyleSheet.create({
         width: 40,
         height: 4,
         borderRadius: 2,
-        backgroundColor: '#d9dde4',
+        backgroundColor: LV_CARD_BORDER,
         alignSelf: 'center',
     },
 
@@ -1209,16 +1035,16 @@ const styles = StyleSheet.create({
         gap: 14,
         padding: 14,
         borderRadius: 16,
-        backgroundColor: BG,
+        backgroundColor: LV_BACKGROUND,
     },
 
     sheetStationIcon: {
         width: 44,
         height: 44,
         borderRadius: 14,
-        backgroundColor: WHITE,
+        backgroundColor: LV_CARD,
         borderWidth: 1,
-        borderColor: BORDER,
+        borderColor: LV_CARD_BORDER,
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -1228,46 +1054,53 @@ const styles = StyleSheet.create({
         gap: 3,
     },
 
+    sheetNameRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+
     sheetStationName: {
         fontSize: 17,
-        fontWeight: '800',
-        color: NAVY,
-        letterSpacing: -0.3,
+        fontWeight: '700',
+        color: LV_TEXT,
+    },
+
+    sheetSubtitle: {
+        fontSize: 12,
+        color: LV_SECONDARY,
     },
 
     sheetTitle: {
         fontSize: 19,
         lineHeight: 25,
-        fontWeight: '800',
-        color: NAVY,
-        letterSpacing: -0.5,
+        fontWeight: '700',
+        color: LV_TEXT,
     },
 
     sheetDescription: {
         marginTop: -10,
         fontSize: 14,
         lineHeight: 22,
-        fontWeight: '500',
-        color: SECONDARY,
+        color: LV_SECONDARY,
     },
 
     sheetBold: {
         fontWeight: '700',
-        color: NAVY,
+        color: LV_TEXT,
     },
 
     nearbyBox: {
         padding: 14,
         paddingHorizontal: 16,
         borderRadius: 14,
-        backgroundColor: MINT_SOFT,
+        backgroundColor: LV_SOFT,
     },
 
     nearbyTitle: {
         fontSize: 12,
-        fontWeight: '800',
-        color: MINT_TEXT,
-        letterSpacing: 0.2,
+        fontWeight: '700',
+        color: LV_MAIN,
     },
 
     nearbyRow: {
@@ -1284,27 +1117,26 @@ const styles = StyleSheet.create({
         gap: 6,
         paddingHorizontal: 12,
         borderRadius: 999,
-        backgroundColor: WHITE,
+        backgroundColor: LV_CARD,
     },
 
     nearbyWalk: {
         fontSize: 13,
-        fontWeight: '500',
-        color: SECONDARY,
+        color: LV_SECONDARY,
     },
 
     sheetButton: {
         height: 54,
         borderRadius: 16,
-        backgroundColor: NAVY,
+        backgroundColor: LV_MAIN,
         alignItems: 'center',
         justifyContent: 'center',
     },
 
     sheetButtonText: {
         fontSize: 15,
-        fontWeight: '800',
-        color: WHITE,
+        fontWeight: '700',
+        color: LV_CARD,
     },
 
     pressed: {

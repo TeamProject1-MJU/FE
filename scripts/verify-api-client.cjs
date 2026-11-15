@@ -46,6 +46,7 @@ function createRuntime(env = {}, react = require('react')) {
         'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
         '@expo/vector-icons/Ionicons': 'Ionicons',
         'react-native-webview': { WebView: 'WebView' },
+        'expo-image': { Image: 'Image' },
         'expo-location': {
             Accuracy: { Balanced: 3 },
             getForegroundPermissionsAsync: async () => ({ granted: false }),
@@ -53,7 +54,6 @@ function createRuntime(env = {}, react = require('react')) {
             getCurrentPositionAsync: async () => { throw Error('위치 응답을 지정하세요'); },
         },
         'expo-image-picker': { requestCameraPermissionsAsync: async () => ({ granted: false }) },
-        'expo-image': { Image: 'Image' },
         // #187 공용 글자 컴포넌트는 화면 검사에서 react-native 의 Text·TextInput 과 같은 가짜 요소로 연결해요.
         '@/components/app-text': { Text: 'Text', TextInput: 'TextInput' },
     };
@@ -7420,7 +7420,7 @@ test('146 도보 1분 + 대기 10분 환승: 어디에도 "도보 11분" 없이 
     for (const texts of [detail, expanded, collapsed]) assert.ok(!texts.some(text => /도보 11분|환승 도보/.test(text)), texts.join(' / '));
     assert.ok(detail.some(text => text.startsWith('서버 환승 안내 · 환승 소요 11분')));
     assert.ok(expanded.some(text => text.trim() === '환승 소요 11분'));
-    assert.ok(expanded.some(text => text.includes('환승 2회 · 도보 1분')));
+    assert.ok(expanded.some(text => text.includes('환승 2회, 도보 1분')));
     // 경로 안내 화면 요약도 서버 값 그대로예요.
     const r = guide129({ route }); const view = r.render();
     assert.ok(findElement(view, element => element.type === 'Text' && textOf(element).includes('환승 2회 · 도보 1분')));
@@ -7441,7 +7441,7 @@ test('146 환승 여러 번: 펼친 카드와 경로 상세가 환승마다 같�
         assert.ok(expanded.some(text => text.trim() === '도보 2분'));
         assert.ok(detail.some(text => text.startsWith('출발역까지 걷기 · 도보 2분'))); assert.ok(detail.some(text => text.startsWith('도착지까지 걷기 · 도보 3분')));
         // 요약 도보는 서버 값 그대로, 환승 횟수는 환승 단계 수와 같아요.
-        assert.ok(expanded.some(text => text.includes(`환승 2회 · 도보 ${walkingMinutes}분`)));
+        assert.ok(expanded.some(text => text.includes(`환승 2회, 도보 ${walkingMinutes}분`)));
         assert.equal(cardTransfers.length, route.summary.transferCount);
         assert.ok(!expanded.some(text => text.includes('환승 도보')) && !detail.some(text => text.includes('환승 도보')));
         // 접힌 카드는 단계 시간을 보여주지 않고 환승 횟수만 보여줘요.
@@ -7511,7 +7511,7 @@ test('146 보완: 대기가 따로 오지 않는 660초 환승은 "환승 소요
     assert.ok(detail.some(text => text.startsWith('고속터미널역 7호선 승강장으로 환승 · 도보 1분')));
     assert.ok(expanded.some(text => text.trim() === '도보 2분')); // 첫 열차 전 걷기는 그대로 "도보"
     for (const texts of [expanded, detail, card146(mixed, false)]) assert.ok(!texts.some(text => text.includes('도보 11분')), texts.join(' / '));
-    assert.ok(expanded.some(text => text.includes('환승 2회 · 도보 1분')));
+    assert.ok(expanded.some(text => text.includes('환승 2회, 도보 1분')));
     // 펼친 카드와 경로 상세의 숫자가 환승마다 같아요.
     const numbers = texts => texts.map(text => /환승 (?:소요|도보) (\d+)분|· (?:환승 소요|도보) (\d+)분/.exec(text)).filter(Boolean).map(match => match[1] ?? match[2]);
     assert.deepEqual(numbers(expanded.filter(text => /^\s*환승 (소요|도보)/.test(text))), ['11', '1']);
@@ -8904,7 +8904,7 @@ function selector152(value = { mode: 'now' }) {
 
 test('152 시각 선택은 적용 전에 검색하지 않고 날짜·시각 취소와 모달 닫기는 이전 조건을 유지해요', () => {
     const r = selector152(); r.button152('검색 시각 선택').props.onPress(); r.pump152();
-    r.button152('도착 시각 지정').props.onPress(); r.button152('검색 날짜 선택').props.onPress();
+    findElement(r.pump152(), element => element.type === 'Pressable' && element.props.accessibilityRole === 'switch' && element.props.accessibilityLabel === '도착 시각 설정').props.onPress(); r.button152('검색 날짜 선택').props.onPress();
     let calendar = r.child152('CalendarModal'); assert.equal(calendar.props.visible, true);
     assert.equal(calendar.props.minDate, '2026-11-14'); assert.equal(calendar.props.maxDate, '2027-11-14');
     calendar.props.onClose(); r.button152('검색 시간 선택').props.onPress();
@@ -8912,21 +8912,21 @@ test('152 시각 선택은 적용 전에 검색하지 않고 날짜·시각 취�
     const modal = findElement(r.pump152(), element => element.type === 'Modal' && element.props.visible);
     modal.props.onRequestClose(); r.pump152(); assert.equal(r.changes152.length, 0); assert.deepEqual(r.props152.value, { mode: 'now' });
     r.button152('검색 시각 선택').props.onPress(); const view = r.pump152();
-    assert.equal(findElement(view, element => element.props?.accessibilityRole === 'radio' && element.props.accessibilityState.checked).props.children[1].props.children, '지금 출발');
+    for (const label of ['출발 시각 설정', '도착 시각 설정']) assert.equal(findElement(view, element => element.props?.accessibilityRole === 'switch' && element.props.accessibilityLabel === label).props.accessibilityState.checked, false);
     r.unmount();
 });
 
 test('152 날짜·시각을 고르고 적용하면 한 모드만 전달하고 과거 도착은 모달에서 수정하도록 안내해요', () => {
     for (const mode of ['departure', 'arrival']) {
         const r = selector152(); r.button152('검색 시각 선택').props.onPress(); r.pump152();
-        r.button152(mode === 'departure' ? '출발 시각 지정' : '도착 시각 지정').props.onPress();
+        findElement(r.pump152(), element => element.type === 'Pressable' && element.props.accessibilityRole === 'switch' && element.props.accessibilityLabel === (mode === 'departure' ? '출발 시각 설정' : '도착 시각 설정')).props.onPress();
         r.button152('검색 날짜 선택').props.onPress(); let child = r.child152('CalendarModal'); child.props.onConfirm('2026-11-15'); child.props.onClose();
         r.button152('검색 시간 선택').props.onPress(); child = r.child152('TimeWheelModal'); child.props.onConfirm('00:08'); child.props.onClose();
-        assert.equal(r.changes152.length, 0); r.button152('적용하고 검색').props.onPress();
+        assert.equal(r.changes152.length, 0); r.button152('확인').props.onPress();
         assert.deepEqual(plain(r.changes152), [{ mode, at: ARRIVE152 }]); assert.equal(r.props152.open, false); r.unmount();
     }
     const r = selector152({ mode: 'arrival', at: '2026-11-14T12:00:00+09:00' });
-    r.button152('검색 시각 선택').props.onPress(); r.pump152(); r.button152('적용하고 검색').props.onPress();
+    r.button152('검색 시각 선택').props.onPress(); r.pump152(); r.button152('확인').props.onPress();
     assert.equal(r.changes152.length, 0); assert.ok(findText(r.pump152(), '도착 시각은 현재 이후로 선택해 주세요.')); r.unmount();
 });
 
@@ -9800,6 +9800,41 @@ test('151 분석 중 경로가 바뀌면 이전 결과와 사진을 버리고 �
     assert.equal(texts125(view).includes('서버 판독 결과 CORRECT'), false); assert.ok(deletedCount125(r));
     await r.press('표지판 촬영'); r.respond(async () => jsonResponse({ success: true, data: response151() })); await r.press('AI로 확인하기');
     assert.equal(r.sent.at(-1).route.direction, 'DOWN'); r.unmount();
+});
+
+test('184 3D 아이콘: Passenger·TrainBlock·CongestionBlocks가 넣은 색으로 SVG를 그려요', () => {
+    const r = createScreenRuntime({}, 'src/components/passenger.tsx');
+    const svgOf = image => decodeURIComponent(image.props.source.uri.replace('data:image/svg+xml;utf8,', ''));
+    const Passenger = r.load('src/components/passenger.tsx').default;
+    const Train = r.load('src/components/train-block.tsx').default;
+    const Congestion = r.load('src/components/congestion-blocks.tsx').default;
+
+    const passenger = r.renderComponent({ type: Passenger, props: { tone: 'pink', size: 40 } });
+    assert.equal(passenger.type, 'Image'); assert.ok(svgOf(passenger).includes('#F8D7DA'));
+    assert.deepEqual(plain(passenger.props.style), { width: 40, height: 44 });
+
+    const train = props => r.renderComponent({ type: Train, props });
+    const line3 = train({ line: 3 }); assert.equal(line3.type, 'Image'); assert.equal(line3.props.accessible, false);
+    assert.equal(line3.props.contentFit, 'contain'); assert.ok(svgOf(line3).includes('#EF7C1C'));
+    assert.ok(svgOf(train({ line: '8' })).includes('#E6186C'));
+    assert.ok(svgOf(train({})).includes('#00A84D'));
+    assert.deepEqual(plain(train({}).props.style), { width: 48, height: 40 });
+    for (const line of [9, '공항', 0]) { const svg = svgOf(train({ line })); assert.ok(svg.includes('#B89BC7')); assert.equal(svg.includes('#00A84D'), false); }
+    assert.deepEqual(plain(train({ line: 1, size: 24 }).props.style), { width: 24, height: 20 });
+
+    const tops = view => findAll125(view, e => e.type === 'Image').map(image => svgOf(image).match(/points="20,2 34,9 20,16 6,9" fill="(#[0-9A-F]{6})"/)[1]);
+    const congestion = level => r.renderComponent({ type: Congestion, props: { level } });
+    const GREEN = '#E1EEC2'; const OFF = '#F3F1F5'; const RED = '#F6C3C6'; const MINT = '#D2EEE2';
+    let view = congestion(2);
+    assert.equal(view.type, 'View'); assert.equal(view.props.accessibilityLabel, '혼잡도 여유');
+    assert.deepEqual(tops(view), [GREEN, GREEN, OFF, OFF, OFF]);
+    view = congestion(0); assert.equal(view.props.accessibilityLabel, '혼잡도 미제공'); assert.deepEqual(tops(view), Array(5).fill(OFF));
+    view = congestion(9); assert.equal(view.props.accessibilityLabel, '혼잡도 매우 혼잡'); assert.deepEqual(tops(view), Array(5).fill(RED));
+    view = congestion(-3); assert.equal(view.props.accessibilityLabel, '혼잡도 미제공'); assert.deepEqual(tops(view), Array(5).fill(OFF));
+    view = congestion(1); assert.equal(view.props.accessibilityLabel, '혼잡도 쾌적'); assert.deepEqual(tops(view), [MINT, OFF, OFF, OFF, OFF]);
+    const block = findAll125(view, e => e.type === 'Image')[0];
+    assert.deepEqual(plain(block.props.style), { width: 14, height: 14 * 1.1 });
+    r.unmount();
 });
 
 test('187 공용 글자 컴포넌트는 원래 style 순서·위치를 지키고 글꼴을 맨 뒤에 붙이며 fontFamily 가 있으면 그대로 둬요', () => {
