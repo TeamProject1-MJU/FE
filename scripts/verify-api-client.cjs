@@ -8901,7 +8901,7 @@ function selector152(value = { mode: 'now' }) {
 
 test('152 시각 선택은 적용 전에 검색하지 않고 날짜·시각 취소와 모달 닫기는 이전 조건을 유지해요', () => {
     const r = selector152(); r.button152('검색 시각 선택').props.onPress(); r.pump152();
-    r.button152('도착 시각 지정').props.onPress(); r.button152('검색 날짜 선택').props.onPress();
+    findElement(r.pump152(), element => element.type === 'Pressable' && element.props.accessibilityRole === 'switch' && element.props.accessibilityLabel === '도착 시각 설정').props.onPress(); r.button152('검색 날짜 선택').props.onPress();
     let calendar = r.child152('CalendarModal'); assert.equal(calendar.props.visible, true);
     assert.equal(calendar.props.minDate, '2026-11-14'); assert.equal(calendar.props.maxDate, '2027-11-14');
     calendar.props.onClose(); r.button152('검색 시간 선택').props.onPress();
@@ -8909,21 +8909,21 @@ test('152 시각 선택은 적용 전에 검색하지 않고 날짜·시각 취�
     const modal = findElement(r.pump152(), element => element.type === 'Modal' && element.props.visible);
     modal.props.onRequestClose(); r.pump152(); assert.equal(r.changes152.length, 0); assert.deepEqual(r.props152.value, { mode: 'now' });
     r.button152('검색 시각 선택').props.onPress(); const view = r.pump152();
-    assert.equal(findElement(view, element => element.props?.accessibilityRole === 'radio' && element.props.accessibilityState.checked).props.children[1].props.children, '지금 출발');
+    for (const label of ['출발 시각 설정', '도착 시각 설정']) assert.equal(findElement(view, element => element.props?.accessibilityRole === 'switch' && element.props.accessibilityLabel === label).props.accessibilityState.checked, false);
     r.unmount();
 });
 
 test('152 날짜·시각을 고르고 적용하면 한 모드만 전달하고 과거 도착은 모달에서 수정하도록 안내해요', () => {
     for (const mode of ['departure', 'arrival']) {
         const r = selector152(); r.button152('검색 시각 선택').props.onPress(); r.pump152();
-        r.button152(mode === 'departure' ? '출발 시각 지정' : '도착 시각 지정').props.onPress();
+        findElement(r.pump152(), element => element.type === 'Pressable' && element.props.accessibilityRole === 'switch' && element.props.accessibilityLabel === (mode === 'departure' ? '출발 시각 설정' : '도착 시각 설정')).props.onPress();
         r.button152('검색 날짜 선택').props.onPress(); let child = r.child152('CalendarModal'); child.props.onConfirm('2026-11-15'); child.props.onClose();
         r.button152('검색 시간 선택').props.onPress(); child = r.child152('TimeWheelModal'); child.props.onConfirm('00:08'); child.props.onClose();
-        assert.equal(r.changes152.length, 0); r.button152('적용하고 검색').props.onPress();
+        assert.equal(r.changes152.length, 0); r.button152('확인').props.onPress();
         assert.deepEqual(plain(r.changes152), [{ mode, at: ARRIVE152 }]); assert.equal(r.props152.open, false); r.unmount();
     }
     const r = selector152({ mode: 'arrival', at: '2026-11-14T12:00:00+09:00' });
-    r.button152('검색 시각 선택').props.onPress(); r.pump152(); r.button152('적용하고 검색').props.onPress();
+    r.button152('검색 시각 선택').props.onPress(); r.pump152(); r.button152('확인').props.onPress();
     assert.equal(r.changes152.length, 0); assert.ok(findText(r.pump152(), '도착 시각은 현재 이후로 선택해 주세요.')); r.unmount();
 });
 
