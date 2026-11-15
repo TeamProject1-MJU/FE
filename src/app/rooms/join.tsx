@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { router } from 'expo-router';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Text, TextInput } from '@/components/app-text';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -12,13 +12,13 @@ import { ApiError, isAuthError } from '@/services/api/errors';
 import { getMockRoom, isValidRoomCode, joinRoom, normalizeRoomCode } from '@/services/room';
 import { RoomError, type RoomErrorCode } from '@/types/room';
 
-const NAVY = '#0f1c3f';
-const MINT = '#2bcf9a';
-const SECONDARY = '#6b7488';
-const BORDER = '#e6e9ef';
+const NAVY = '#25212D';
+const MINT = '#5C3F78';
+const SECONDARY = '#83808B';
+const BORDER = '#E8E4ED';
 const WHITE = '#ffffff';
-const BG = '#f3f5f8';
-const RED = '#e5484d';
+const BG = '#F7F5FA';
+const RED = '#C64F65';
 const CODE_LENGTH = 6;
 
 /**
@@ -112,6 +112,7 @@ export default function JoinRoomScreen() {
                             key={index}
                             style={[
                                 styles.codeBox,
+                                !!code[index] && styles.codeBoxFilled,
                                 index === code.length && styles.codeBoxActive,
                                 !!error && styles.codeBoxError,
                             ]}
@@ -188,7 +189,7 @@ export default function JoinRoomScreen() {
                     onPress={() => router.replace('/rooms/new')}
                     accessibilityRole="button"
                 >
-                    <Ionicons name="add" size={20} color={NAVY} />
+                    <Ionicons name="add" size={20} color={MINT} />
                     <Text style={styles.outlineText}>새 약속방 만들기</Text>
                 </Pressable>
             </View>
@@ -200,30 +201,31 @@ const styles = StyleSheet.create({
     root: { flex: 1, backgroundColor: BG },
     header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 12 },
     backButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-    headerText: { color: NAVY, fontSize: 18, fontWeight: '800' },
+    headerText: { color: NAVY, fontSize: 15, fontWeight: '600' },
     content: { paddingHorizontal: 20, paddingTop: 16 },
     hero: { alignItems: 'center', marginBottom: 30 },
     heroIcon: { width: 58, height: 58, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: MINT },
-    title: { marginTop: 16, color: NAVY, fontSize: 22, fontWeight: '800', lineHeight: 30, textAlign: 'center' },
-    caption: { marginTop: 8, color: SECONDARY, fontSize: 13, fontWeight: '600' },
-    label: { color: NAVY, fontSize: 13, fontWeight: '800', marginBottom: 10 },
+    title: { marginTop: 16, color: NAVY, fontSize: 24, fontWeight: '800', letterSpacing: -0.5, lineHeight: 32, textAlign: 'center' },
+    caption: { marginTop: 8, color: SECONDARY, fontSize: 13.5, textAlign: 'center' },
+    label: { color: NAVY, fontSize: 13, fontWeight: '700', marginBottom: 10 },
     codeRow: { flexDirection: 'row', gap: 8 },
-    codeBox: { flex: 1, height: 52, borderRadius: 12, borderWidth: 1.5, borderColor: BORDER, backgroundColor: WHITE, alignItems: 'center', justifyContent: 'center' },
-    codeBoxActive: { borderColor: NAVY },
+    codeBox: { flex: 1, height: 56, borderRadius: 14, borderWidth: 1.5, borderColor: BORDER, backgroundColor: WHITE, alignItems: 'center', justifyContent: 'center' },
+    codeBoxFilled: { borderColor: '#D9CCE4' },
+    codeBoxActive: { borderColor: MINT },
     codeBoxError: { borderColor: RED },
-    codeChar: { color: NAVY, fontSize: 20, fontWeight: '800' },
+    codeChar: { color: NAVY, fontSize: 24, fontWeight: '800', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
     // 6칸 위를 덮는 실제 입력창. iOS 는 opacity 0 인 뷰를 터치하지 못하므로 글자만 투명하게 둡니다.
     hiddenInput: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, color: 'transparent', backgroundColor: 'transparent', fontSize: 1 },
     errorRow: { marginTop: 9, flexDirection: 'row', alignItems: 'center', gap: 5 },
     error: { flex: 1, color: RED, fontSize: 12.5, fontWeight: '600' },
     help: { marginTop: 9, color: SECONDARY, fontSize: 12.5, fontWeight: '600' },
-    primaryButton: { marginTop: 16, height: 52, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: NAVY },
-    primaryDisabled: { backgroundColor: '#a5acba' },
-    primaryText: { color: WHITE, fontSize: 15, fontWeight: '800' },
+    primaryButton: { marginTop: 16, height: 54, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: MINT },
+    primaryDisabled: { backgroundColor: '#CFC6DA' },
+    primaryText: { color: WHITE, fontSize: 16, fontWeight: '700' },
     dividerRow: { marginVertical: 22, flexDirection: 'row', alignItems: 'center', gap: 10 },
-    divider: { flex: 1, height: 1, backgroundColor: BORDER },
-    dividerText: { color: SECONDARY, fontSize: 12, fontWeight: '600' },
-    outlineButton: { height: 52, borderRadius: 13, borderWidth: 1.5, borderColor: NAVY, backgroundColor: WHITE, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-    outlineText: { color: NAVY, fontSize: 15, fontWeight: '800' },
+    divider: { flex: 1, height: 1, backgroundColor: '#EAE6EF' },
+    dividerText: { color: '#A8A3B0', fontSize: 12.5 },
+    outlineButton: { height: 50, borderRadius: 14, borderWidth: 1, borderColor: '#D9CCE4', backgroundColor: WHITE, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+    outlineText: { color: MINT, fontSize: 15, fontWeight: '700' },
     pressed: { opacity: 0.72 },
 });

@@ -4223,7 +4223,8 @@ test('서버 생성 화면은 연타를 한 번만 보내고 생성 응답의 �
     resolve(jsonResponse({ success: true, data: createdRoomData() }, 201)); await Promise.all([first, second]);
     const completed = r.render(); const content = r.renderComponent(completed);
     assert.ok(findElement(content, element => element.props?.children === '서버가 저장한 모임'));
-    assert.ok(findElement(content, element => element.props?.children === 'A3K9PZ'));
+    const codeBox = findElement(content, element => element.props?.accessibilityLabel?.startsWith('초대 코드 A'));
+    assert.deepEqual(Array.from(codeBox.props.children, cell => textOf(cell)), 'A3K9PZ'.split(''));
     await findElement(content, element => element.props?.accessibilityLabel?.startsWith('초대 코드 A')).props.onPress();
     assert.deepEqual(copied, ['A3K9PZ']); r.unmount();
 });

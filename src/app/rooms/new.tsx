@@ -1,6 +1,7 @@
+import Passenger from '@/components/passenger';
 import { useEffect, useRef, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ActivityIndicator, Pressable, ScrollView, Share, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, Share, StyleSheet, View } from 'react-native';
 import { Text, TextInput } from '@/components/app-text';
 import * as Clipboard from 'expo-clipboard';
 import { StatusBar } from 'expo-status-bar';
@@ -13,15 +14,15 @@ import { ApiError, isAuthError } from '@/services/api/errors';
 import { createRoom, isRoomCreateOutcomeUnknown, ROOM_CREATE_UNKNOWN_NOTICE, ROOM_NAME_MAX, roomNameLength, validateRoomName } from '@/services/room';
 import { RoomError, type CreatedRoom } from '@/types/room';
 
-const NAVY = '#0f1c3f';
-const SECONDARY = '#6b7488';
-const BORDER = '#e6e9ef';
+const NAVY = '#25212D';
+const SECONDARY = '#83808B';
+const BORDER = '#E8E4ED';
 const WHITE = '#ffffff';
-const BG = '#f3f5f8';
-const RED = '#e5484d';
-const MINT = '#2bcf9a';
-const MINT_DEEP = '#12a77a';
-const MINT_SOFT = '#e8f8f1';
+const BG = '#F7F5FA';
+const RED = '#C64F65';
+const MINT = '#5C3F78';
+const MINT_DEEP = '#5C3F78';
+const MINT_SOFT = '#EDE8F3';
 
 /**
  * 새 약속방 만들기 (#42·#43, 상세설계서 그림 26 ❸·그림 27 ❺, API 명세 7.1 POST /rooms)
@@ -42,6 +43,7 @@ export default function NewRoomScreen() {
     const [failNext, setFailNext] = useState(mock === 'error');
     const [created, setCreated] = useState<{ room: CreatedRoom; at: Date | null } | null>(null);
     const [roomName, setRoomName] = useState('');
+    const [nameFocused, setNameFocused] = useState(false);
     const [date, setDate] = useState('');
     const [time, setTime] = useState('');
     const [calendarOpen, setCalendarOpen] = useState(false);
@@ -128,9 +130,11 @@ export default function NewRoomScreen() {
                         </Text>
                     </View>
                     <TextInput
-                        style={[styles.input, nameLength > ROOM_NAME_MAX && styles.inputError]}
+                        onFocus={() => setNameFocused(true)}
+                        onBlur={() => setNameFocused(false)}
+                        style={[styles.input, nameFocused && styles.inputFocused, nameLength > ROOM_NAME_MAX && styles.inputError]}
                         placeholder="예: 금요일 저녁"
-                        placeholderTextColor="#a1a8b8"
+                        placeholderTextColor="#A8A3B0"
                         value={roomName}
                         editable={!saving}
                         onChangeText={value => {
@@ -142,7 +146,7 @@ export default function NewRoomScreen() {
                         약속 날짜 <Text style={styles.optional}>(선택)</Text>
                     </Text>
                     <Pressable style={styles.selectBox} onPress={() => setCalendarOpen(true)}>
-                        <Ionicons name="calendar-outline" size={21} color={NAVY} />
+                        <Ionicons name="calendar-outline" size={21} color={MINT_DEEP} />
                         <Text style={[styles.selectText, !date && styles.placeholder]}>{date || '달력에서 날짜 선택'}</Text>
                         <Ionicons name="chevron-down" size={17} color={SECONDARY} />
                     </Pressable>
@@ -150,13 +154,13 @@ export default function NewRoomScreen() {
                         약속 시간 <Text style={styles.optional}>(선택)</Text>
                     </Text>
                     <Pressable style={styles.selectBox} onPress={() => setTimeOpen(true)}>
-                        <Ionicons name="time-outline" size={21} color={NAVY} />
+                        <Ionicons name="time-outline" size={21} color={MINT_DEEP} />
                         <Text style={[styles.selectText, !time && styles.placeholder]}>{time || '스크롤하여 시간 선택'}</Text>
                         <Ionicons name="chevron-down" size={17} color={SECONDARY} />
                     </Pressable>
                     {date || time ? (
                         <Pressable onPress={clearAppointment} style={styles.clearLink} accessibilityRole="button">
-                            <Ionicons name="close-circle" size={15} color={SECONDARY} />
+                            <Ionicons name="close-circle" size={15} color={MINT_DEEP} />
                             <Text style={styles.clearText}>약속 시각 지우기</Text>
                         </Pressable>
                     ) : (
@@ -164,7 +168,7 @@ export default function NewRoomScreen() {
                     )}
 
                     <View style={styles.infoRow}>
-                        <Ionicons name="people-outline" size={17} color={SECONDARY} />
+                        <Ionicons name="information-circle-outline" size={17} color={MINT_DEEP} />
                         <Text style={styles.infoText}>최대 4명까지 함께할 수 있고, 만든 사람이 방장이 돼요.</Text>
                     </View>
 
@@ -266,15 +270,17 @@ function CreatedView({
                 <Text style={styles.doneCaption}>초대 코드를 보내 친구들을 불러 보세요</Text>
 
                 <View style={styles.roomCard}>
-                    <Text style={styles.roomName} numberOfLines={1}>
-                        {room.name}
-                    </Text>
-                    <Text style={styles.roomMeta}>
-                        {at ? `${formatMonthDay(at)} ${formatTime(at)}` : '약속 시각 미정'} · {room.memberCount}/{room.maxMembers}명 ·
-                        방장
-                    </Text>
+                    <View style={styles.roomCardTop}><Passenger tone="me" size={38} /></View>
+                    <View style={styles.roomCardBody}>
+                        <Text style={styles.roomName} numberOfLines={1}>
+                            {room.name}
+                        </Text>
+                        <Text style={styles.roomMeta}>
+                            {at ? `${formatMonthDay(at)} ${formatTime(at)}` : '약속 시각 미정'} · {room.memberCount}/{room.maxMembers}명 ·
+                            방장
+                        </Text>
+                    </View>
                 </View>
-
                 <Text style={styles.codeLabel}>초대 코드</Text>
                 <Pressable
                     style={({ pressed }) => [styles.codeBox, pressed && styles.pressed]}
@@ -282,16 +288,18 @@ function CreatedView({
                     accessibilityRole="button"
                     accessibilityLabel={`초대 코드 ${room.roomCode.split('').join(' ')}, 눌러서 복사`}
                 >
-                    <Text style={styles.codeText}>{room.roomCode}</Text>
-                    <View style={styles.copyChip}>
-                        <Ionicons name={copied ? 'checkmark' : 'copy-outline'} size={14} color={MINT_DEEP} />
-                        <Text style={styles.copyText}>{copied ? '복사됨' : '복사'}</Text>
-                    </View>
+                    {room.roomCode.split('').map((character, index) => (
+                        <View key={index} style={styles.codeCell}><Text style={styles.codeText}>{character}</Text></View>
+                    ))}
+                </Pressable>
+                <Pressable style={({ pressed }) => [styles.copyChip, pressed && styles.pressed]} onPress={copy} accessibilityRole="button">
+                    <Ionicons name={copied ? 'checkmark' : 'copy-outline'} size={14} color={MINT_DEEP} />
+                    <Text style={styles.copyText}>{copied ? '복사됨' : '복사'}</Text>
                 </Pressable>
                 <Text style={styles.codeHint}>초대 코드는 방장에게만 보여요. 최대 4명까지 들어올 수 있어요.</Text>
 
                 <Pressable style={({ pressed }) => [styles.shareButton, pressed && styles.pressed]} onPress={share}>
-                    <Ionicons name="share-outline" size={18} color={NAVY} />
+                    <Ionicons name="share-outline" size={18} color={MINT_DEEP} />
                     <Text style={styles.shareText}>친구에게 공유</Text>
                 </Pressable>
             </View>
@@ -309,48 +317,52 @@ function CreatedView({
 
 const styles = StyleSheet.create({
     doneContent: { flex: 1, alignItems: 'center', paddingHorizontal: 20 },
-    doneIcon: { width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center', backgroundColor: MINT },
-    doneTitle: { marginTop: 16, color: NAVY, fontSize: 22, fontWeight: '800' },
-    doneCaption: { marginTop: 6, color: SECONDARY, fontSize: 13.5, fontWeight: '600' },
-    roomCard: { alignSelf: 'stretch', marginTop: 24, padding: 16, borderRadius: 16, borderWidth: 1, borderColor: BORDER, backgroundColor: WHITE },
-    roomName: { color: NAVY, fontSize: 17, fontWeight: '800' },
-    roomMeta: { marginTop: 5, color: SECONDARY, fontSize: 13, fontWeight: '600' },
-    codeLabel: { alignSelf: 'flex-start', marginTop: 22, marginBottom: 8, color: NAVY, fontSize: 13, fontWeight: '800' },
-    codeBox: { alignSelf: 'stretch', height: 64, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 16, borderWidth: 1.5, borderColor: MINT, backgroundColor: MINT_SOFT },
-    codeText: { color: NAVY, fontSize: 26, fontWeight: '800', letterSpacing: 6 },
-    copyChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 9, backgroundColor: WHITE },
-    copyText: { color: MINT_DEEP, fontSize: 12.5, fontWeight: '800' },
-    codeHint: { alignSelf: 'flex-start', marginTop: 8, color: SECONDARY, fontSize: 12, fontWeight: '600' },
-    shareButton: { alignSelf: 'stretch', marginTop: 16, height: 48, borderRadius: 13, borderWidth: 1, borderColor: BORDER, backgroundColor: WHITE, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-    shareText: { color: NAVY, fontSize: 14.5, fontWeight: '800' },
+    doneIcon: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center', backgroundColor: MINT },
+    doneTitle: { marginTop: 16, color: NAVY, fontSize: 24, fontWeight: '800', textAlign: 'center' },
+    doneCaption: { marginTop: 6, color: SECONDARY, fontSize: 13.5, textAlign: 'center' },
+    roomCard: { alignSelf: 'stretch', marginTop: 24, borderRadius: 20, borderWidth: 1, borderColor: '#EEEAF2', backgroundColor: WHITE, overflow: 'hidden' },
+    roomCardTop: { height: 70, backgroundColor: '#F4F0F8', alignItems: 'center', justifyContent: 'flex-end', paddingBottom: 6 },
+    roomCardBody: { padding: 16 },
+    codeCell: { flex: 1, minWidth: 0, height: 60, backgroundColor: WHITE, borderWidth: 1.5, borderColor: '#D9CCE4', borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+    roomName: { color: NAVY, fontSize: 17, fontWeight: '700' },
+    roomMeta: { marginTop: 5, color: SECONDARY, fontSize: 13 },
+    codeLabel: { marginTop: 22, marginBottom: 8, color: NAVY, fontSize: 13, fontWeight: '700', textAlign: 'center' },
+    codeBox: { alignSelf: 'stretch', flexDirection: 'row', gap: 8 },
+    codeText: { color: MINT_DEEP, fontSize: 26, fontWeight: '800', fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
+    copyChip: { height: 34, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 16, marginTop: 12, borderRadius: 17, backgroundColor: MINT_SOFT },
+    copyText: { color: MINT_DEEP, fontSize: 12.5, fontWeight: '700' },
+    codeHint: { marginTop: 8, color: SECONDARY, fontSize: 12, textAlign: 'center' },
+    shareButton: { alignSelf: 'stretch', marginTop: 16, height: 50, borderRadius: 14, backgroundColor: MINT_SOFT, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+    shareText: { color: MINT_DEEP, fontSize: 14.5, fontWeight: '700' },
     enterButton: { marginHorizontal: 20 },
     root: { flex: 1, backgroundColor: BG },
-    header: { backgroundColor: WHITE, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 15, borderBottomWidth: 1, borderColor: BORDER },
+    header: { backgroundColor: BG, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 15 },
     backButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-    headerText: { color: NAVY, fontSize: 18, fontWeight: '800' },
+    headerText: { color: NAVY, fontSize: 15, fontWeight: '600' },
     content: { padding: 20, paddingBottom: 40 },
-    formCard: { backgroundColor: WHITE, borderRadius: 18, borderWidth: 1, borderColor: BORDER, padding: 18 },
+    formCard: { gap: 0 },
     label: { fontSize: 13, fontWeight: '700', color: NAVY, marginBottom: 9 },
     labelRow: { flexDirection: 'row', justifyContent: 'space-between' },
-    counter: { fontSize: 12, fontWeight: '600', color: '#a1a8b8' },
-    optional: { fontSize: 12, fontWeight: '600', color: '#a1a8b8' },
+    counter: { fontSize: 12, fontWeight: '600', color: '#A8A3B0' },
+    optional: { fontSize: 13, fontWeight: '400', color: SECONDARY },
+    inputFocused: { borderWidth: 1.5, borderColor: MINT_DEEP },
     inputError: { borderColor: RED },
     clearLink: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', marginTop: -8, marginBottom: 16 },
-    clearText: { color: SECONDARY, fontSize: 12.5, fontWeight: '700' },
-    hint: { color: '#a1a8b8', fontSize: 12, fontWeight: '600', marginTop: -8, marginBottom: 16 },
-    input: { backgroundColor: '#f8f9fb', borderRadius: 11, borderWidth: 1, borderColor: BORDER, minHeight: 48, paddingHorizontal: 13, color: NAVY, fontSize: 14, marginBottom: 17 },
-    selectBox: { borderRadius: 11, borderWidth: 1, borderColor: BORDER, backgroundColor: '#f8f9fb', height: 49, flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 13, marginBottom: 17 },
-    selectText: { flex: 1, color: NAVY, fontSize: 14, fontWeight: '600' },
-    placeholder: { color: '#a1a8b8', fontWeight: '400' },
-    infoRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 16 },
-    infoText: { flex: 1, color: SECONDARY, fontSize: 12.5, fontWeight: '600' },
+    clearText: { color: MINT_DEEP, fontSize: 12.5, fontWeight: '700' },
+    hint: { color: SECONDARY, fontSize: 12, marginTop: -8, marginBottom: 16 },
+    input: { backgroundColor: WHITE, borderRadius: 14, borderWidth: 1, borderColor: BORDER, height: 52, paddingHorizontal: 14, color: NAVY, fontSize: 16, marginBottom: 17 },
+    selectBox: { borderRadius: 14, borderWidth: 1, borderColor: BORDER, backgroundColor: WHITE, height: 52, flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 14, marginBottom: 17 },
+    selectText: { flex: 1, color: NAVY, fontSize: 16, fontWeight: '600' },
+    placeholder: { color: '#A8A3B0', fontWeight: '400' },
+    infoRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 16, backgroundColor: MINT_SOFT, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 14 },
+    infoText: { flex: 1, color: MINT_DEEP, fontSize: 13 },
     notice: { color: RED, fontSize: 12.5, fontWeight: '600', marginBottom: 12 },
-    unknownBox: { backgroundColor: '#fff6e0', borderRadius: 12, padding: 12, marginBottom: 12, gap: 10 },
-    unknownText: { color: '#7a5600', fontSize: 13, fontWeight: '600', lineHeight: 18 },
+    unknownBox: { backgroundColor: '#F8EAF0', borderRadius: 14, padding: 12, marginBottom: 12, gap: 10 },
+    unknownText: { color: '#8C4C62', fontSize: 13, fontWeight: '600', lineHeight: 18 },
     unknownButton: { alignSelf: 'flex-start', backgroundColor: WHITE, borderRadius: 10, paddingHorizontal: 14, paddingVertical: 9, borderWidth: 1, borderColor: BORDER },
-    unknownButtonText: { color: NAVY, fontSize: 13.5, fontWeight: '800' },
-    primaryButton: { backgroundColor: NAVY, height: 53, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-    primaryText: { color: WHITE, fontSize: 15, fontWeight: '800' },
-    disabled: { opacity: 0.6 },
+    unknownButtonText: { color: MINT_DEEP, fontSize: 13.5, fontWeight: '700' },
+    primaryButton: { backgroundColor: MINT_DEEP, height: 54, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+    primaryText: { color: WHITE, fontSize: 16, fontWeight: '700' },
+    disabled: { backgroundColor: '#CFC6DA' },
     pressed: { opacity: 0.72 },
 });
