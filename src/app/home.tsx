@@ -33,17 +33,20 @@ import { fetchMyRooms } from '@/services/room';
 import { meetingRoomParams, pickUpcomingRoom, toHomeMeeting, type HomeMeetingCard } from '@/utils/upcoming-meeting';
 
 const NAVY = '#0f1c3f';
-const MINT = '#2bcf9a';
-const MINT_DEEP = '#12a77a';
+const PURPLE = '#5C3F78';
+const INK = '#25212D';
+const MUTED = '#83808B';
+const TINT = '#EDE8F3';
+const LINE = '#E8E4ED';
+const DIVIDER_SOFT = '#EFEBF3';
+const CHEVRON = '#B4AFBC';
+const HANDLE = '#DCD7E3';
 
 const BACKGROUND = '#f3f5f8';
 const CARD = '#ffffff';
 const SECONDARY = '#6b7488';
 const DISABLED = '#a1a8b8';
 const DIVIDER = '#e6e9ef';
-
-const AI = '#6a5ae0';
-const AI_BG = '#f0eefd';
 
 /** 하단 탭바에서 safe area 를 뺀 높이 */
 const TAB_BAR_CONTENT_HEIGHT = 58;
@@ -169,22 +172,18 @@ export default function HomeScreen() {
                 </View>}
             </View>
 
-            {/* ❶ 상단 로고 + 검색창 */}
-            <View style={[styles.topPanel, { top: insets.top + 10 }]}>
-                <View style={styles.brandRow}>
-                    <LinkRoLogo size={22} />
-                </View>
-
-                <Pressable
-                    style={({ pressed }) => [styles.searchBar, pressed && styles.pressed]}
-                    onPress={openStationSearch}
-                    accessibilityRole="search"
-                    accessibilityLabel="출발역과 도착역 검색"
-                >
-                    <Ionicons name="search-outline" size={21} color={NAVY} />
-                    <Text style={styles.searchText}>어디로 이동하시나요?</Text>
-                </Pressable>
-            </View>
+            {/* 상단 검색 필 */}
+            <Pressable
+                style={({ pressed }) => [styles.topPanel, { top: insets.top + 10 }, pressed && styles.pressed]}
+                onPress={openStationSearch}
+                accessibilityRole="search"
+                accessibilityLabel="출발역과 도착역 검색"
+            >
+                <LinkRoLogo size={17} showBars={false} />
+                <View style={styles.searchDivider} />
+                <Ionicons name="search-outline" size={18} color={MUTED} />
+                <Text style={styles.searchText}>어디로 이동하시나요?</Text>
+            </Pressable>
 
             {/* 지도 우측 버튼 (시트 높이에 맞춰 위치) */}
             {sheetHeight > 0 && (
@@ -199,7 +198,7 @@ export default function HomeScreen() {
                         onPress={() => serverMode ? homeMap.locate() : showPreparing('현재 위치')}
                         accessibilityLabel="현재 위치"
                     >
-                        <Ionicons name="locate-outline" size={22} color={NAVY} />
+                        <Ionicons name="locate-outline" size={22} color={PURPLE} />
                     </Pressable>
 
                     <View style={styles.mapControlDivider} />
@@ -209,7 +208,7 @@ export default function HomeScreen() {
                         onPress={() => showPreparing('지도 설정')}
                         accessibilityLabel="지도 설정"
                     >
-                        <Ionicons name="layers-outline" size={22} color={NAVY} />
+                        <Ionicons name="layers-outline" size={22} color="#4A4553" />
                     </Pressable>
                 </View>
             )}
@@ -234,45 +233,16 @@ export default function HomeScreen() {
                     showsVerticalScrollIndicator={false}
                     bounces={false}
                 >
-                    {/* ❷ 주요 기능 카드 */}
-                    <Pressable
-                        style={({ pressed }) => [styles.primaryCard, pressed && styles.pressed]}
-                        onPress={() => router.push('/route-search')}
-                        accessibilityRole="button"
-                        accessibilityLabel="경로 탐색"
-                    >
-                        <View style={styles.iconTile}>
-                            <Ionicons name="train-outline" size={24} color={NAVY} />
-                        </View>
-
-                        <View style={styles.primaryText}>
-                            <Text style={styles.cardTitle}>경로 탐색</Text>
-                            <Text style={styles.cardDescription} numberOfLines={1}>
-                                출발역과 도착역으로 최적 경로 찾기
-                            </Text>
-                        </View>
-
-                        <Ionicons name="chevron-forward" size={20} color={NAVY} />
-                    </Pressable>
-
-                    <View style={styles.featureRow}>
-                        <FeatureCard
-                            icon="camera-outline"
-                            iconColor={AI}
-                            title="AI 표지판 방향 확인"
-                            description="표지판 사진으로 방향 확인"
-                            ai
-                            wide
-                            onPress={() => router.push('/ai-direction')}
-                        />
-
-                        <FeatureCard
-                            icon="chatbubbles-outline"
-                            iconColor={NAVY}
-                            title="약속방"
-                            description="함께 만날 약속 관리"
+                    <View style={styles.meetingHeader}>
+                        <Text style={styles.sectionTitle}>내 약속</Text>
+                        <Pressable
+                            style={({ pressed }) => [styles.allMeetingsButton, pressed && styles.pressed]}
                             onPress={() => router.push('/rooms')}
-                        />
+                            accessibilityRole="button"
+                            accessibilityLabel="전체 보기"
+                        >
+                            <Text style={styles.allMeetingsText}>전체 보기</Text>
+                        </Pressable>
                     </View>
 
                     {/* ❸ 다가오는 약속 */}
@@ -282,7 +252,7 @@ export default function HomeScreen() {
                                 <Text style={styles.meetingLabel}>다가오는 약속</Text>
                                 <Text style={styles.meetingMeta}>약속을 불러오고 있어요</Text>
                             </View>
-                            <ActivityIndicator color={NAVY} />
+                            <ActivityIndicator color={PURPLE} />
                         </View>
                     ) : serverMode && meetingState.kind === 'error' ? (
                         <Pressable
@@ -296,7 +266,7 @@ export default function HomeScreen() {
                                 <Text style={styles.meetingTitle}>약속을 불러오지 못했어요</Text>
                                 <Text style={styles.meetingMeta}>눌러서 다시 시도해 주세요</Text>
                             </View>
-                            <Ionicons name="refresh" size={20} color={NAVY} />
+                            <Ionicons name="refresh" size={20} color={PURPLE} />
                         </Pressable>
                     ) : meeting ? (
                         <Pressable
@@ -305,12 +275,9 @@ export default function HomeScreen() {
                             accessibilityRole="button"
                             accessibilityLabel={`다가오는 약속 ${meeting.title}`}
                         >
-                            <View style={styles.meetingDate}>
+                            <View style={styles.meetingDate} accessibilityLabel={formatMonthDay(meeting.appointmentAt)}>
                                 <Text style={styles.meetingDday}>
                                     {formatDday(meeting.appointmentAt)}
-                                </Text>
-                                <Text style={styles.meetingDay}>
-                                    {formatMonthDay(meeting.appointmentAt)}
                                 </Text>
                             </View>
 
@@ -328,7 +295,7 @@ export default function HomeScreen() {
                                 </Text>
                             </View>
 
-                            <Ionicons name="chevron-forward" size={20} color={NAVY} />
+                            <Ionicons name="chevron-forward" size={18} color={CHEVRON} />
                         </Pressable>
                     ) : (
                         <Pressable
@@ -340,9 +307,27 @@ export default function HomeScreen() {
                                 <Text style={styles.meetingTitle}>예정된 약속이 없어요</Text>
                                 <Text style={styles.meetingMeta}>약속방을 만들어 친구를 초대해 보세요</Text>
                             </View>
-                            <Ionicons name="chevron-forward" size={20} color={NAVY} />
+                            <Ionicons name="chevron-forward" size={18} color={CHEVRON} />
                         </Pressable>
                     )}
+                    <View style={styles.roomActions}>
+                        <Pressable
+                            style={({ pressed }) => [styles.roomButton, styles.createRoomButton, pressed && styles.pressed]}
+                            onPress={() => router.push('/rooms/new')}
+                            accessibilityRole="button"
+                            accessibilityLabel="방 만들기"
+                        >
+                            <Text style={styles.createRoomText}>방 만들기</Text>
+                        </Pressable>
+                        <Pressable
+                            style={({ pressed }) => [styles.roomButton, styles.joinRoomButton, pressed && styles.pressed]}
+                            onPress={() => router.push('/rooms/join')}
+                            accessibilityRole="button"
+                            accessibilityLabel="코드로 참여"
+                        >
+                            <Text style={styles.joinRoomText}>코드로 참여</Text>
+                        </Pressable>
+                    </View>
                 </ScrollView>
             </View>
 
@@ -371,59 +356,6 @@ export default function HomeScreen() {
                 />
             </View>
         </View>
-    );
-}
-
-function FeatureCard({
-                         icon,
-                         iconColor,
-                         title,
-                         description,
-                         ai = false,
-                         wide = false,
-                         onPress,
-                     }: {
-    icon: IoniconName;
-    iconColor: string;
-    title: string;
-    description: string;
-    ai?: boolean;
-    wide?: boolean;
-    onPress: () => void;
-}) {
-    return (
-        <Pressable
-            style={({ pressed }) => [
-                styles.featureCard,
-                wide ? styles.featureCardWide : styles.featureCardNarrow,
-                pressed && styles.pressed,
-            ]}
-            onPress={onPress}
-            accessibilityRole="button"
-            accessibilityLabel={title}
-        >
-            <View style={styles.featureTop}>
-                <View style={styles.iconTile}>
-                    <Ionicons name={icon} size={24} color={iconColor} />
-                </View>
-
-                {ai && (
-                    <View style={styles.aiChip}>
-                        <Ionicons name="sparkles" size={12} color={AI} />
-                        <Text style={styles.aiChipText}>AI</Text>
-                    </View>
-                )}
-            </View>
-
-            <View>
-                <Text style={styles.cardTitle} numberOfLines={1} adjustsFontSizeToFit>
-                    {title}
-                </Text>
-                <Text style={styles.cardDescription} numberOfLines={1}>
-                    {description}
-                </Text>
-            </View>
-        </Pressable>
     );
 }
 
@@ -685,56 +617,51 @@ const styles = StyleSheet.create({
         left: 16,
         right: 16,
         zIndex: 5,
-        paddingHorizontal: 16,
-        paddingTop: 14,
-        paddingBottom: 14,
-        borderRadius: 26,
-        backgroundColor: CARD,
-    },
-
-    brandRow: {
-        minHeight: 31,
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-
-    searchBar: {
         height: 52,
-        marginTop: 12,
         paddingHorizontal: 16,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
-        borderRadius: 18,
-        backgroundColor: BACKGROUND,
+        gap: 12,
+        borderRadius: 16,
+        backgroundColor: CARD,
+        boxShadow: '0px 4px 16px rgba(60,40,90,0.10)',
+        elevation: 3,
+    },
+
+    searchDivider: {
+        width: 1,
+        height: 18,
+        backgroundColor: LINE,
     },
 
     searchText: {
-        color: SECONDARY,
-        fontSize: 16,
-        fontWeight: '600',
+        flex: 1,
+        color: MUTED,
+        fontSize: 15,
     },
 
     mapControls: {
         position: 'absolute',
         right: 16,
         zIndex: 4,
-        width: 48,
+        width: 44,
         overflow: 'hidden',
-        borderRadius: 18,
+        borderRadius: 12,
         backgroundColor: CARD,
+        boxShadow: '0px 3px 12px rgba(60,40,90,0.12)',
     },
 
     mapControlButton: {
-        width: 48,
-        height: 48,
+        width: 44,
+        height: 44,
         alignItems: 'center',
         justifyContent: 'center',
     },
 
     mapControlDivider: {
         height: 1,
-        backgroundColor: DIVIDER,
+        marginHorizontal: 8,
+        backgroundColor: DIVIDER_SOFT,
     },
 
     sheet: {
@@ -742,149 +669,73 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         zIndex: 6,
-        borderTopLeftRadius: 26,
-        borderTopRightRadius: 26,
+        borderTopLeftRadius: 24,
+        borderTopRightRadius: 24,
         backgroundColor: CARD,
         overflow: 'hidden',
+        boxShadow: '0px -6px 24px rgba(60,40,90,0.08)',
     },
 
     sheetHandleArea: {
-        height: 22,
+        height: 24,
         alignItems: 'center',
         justifyContent: 'center',
     },
 
     sheetHandle: {
-        width: 36,
+        width: 38,
         height: 4,
         borderRadius: 999,
-        backgroundColor: '#d5dae3',
+        backgroundColor: HANDLE,
     },
 
     sheetContent: {
-        paddingHorizontal: 16,
-        paddingBottom: 14,
-        gap: 8,
+        paddingTop: 2,
+        paddingHorizontal: 18,
+        paddingBottom: 18,
     },
 
-    // 경로 탐색 (가로형 주 기능 카드)
-    primaryCard: {
-        minHeight: 80,
-        paddingHorizontal: 14,
-        paddingVertical: 14,
+    meetingHeader: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 12,
-        borderRadius: 18,
-        backgroundColor: BACKGROUND,
-    },
-
-    primaryText: {
-        flex: 1,
-    },
-
-    featureRow: {
-        flexDirection: 'row',
-        gap: 8,
-    },
-
-    featureCard: {
-        minHeight: 132,
-        padding: 14,
         justifyContent: 'space-between',
-        borderRadius: 18,
-        backgroundColor: BACKGROUND,
     },
 
-    // 'AI 표지판 방향 확인' 제목이 길어 왼쪽 카드를 넓게 둡니다.
-    featureCardWide: {
-        flex: 1.27,
+    sectionTitle: {
+        color: INK,
+        fontSize: 16,
+        fontWeight: '700',
     },
 
-    featureCardNarrow: {
-        flex: 1,
+    allMeetingsButton: {
+        padding: 6,
     },
 
-    featureTop: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
+    allMeetingsText: {
+        color: MUTED,
+        fontSize: 13,
     },
 
-    iconTile: {
-        width: 44,
-        height: 44,
-        borderRadius: 13,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: CARD,
-    },
-
-    cardTitle: {
-        color: NAVY,
-        fontSize: 17,
-        fontWeight: '800',
-        letterSpacing: -0.3,
-    },
-
-    cardDescription: {
-        marginTop: 4,
-        color: SECONDARY,
-        fontSize: 12.5,
-        fontWeight: '500',
-    },
-
-    aiChip: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 3,
-        paddingHorizontal: 7,
-        paddingVertical: 4,
-        borderRadius: 8,
-        backgroundColor: AI_BG,
-    },
-
-    aiChipText: {
-        color: AI,
-        fontSize: 11,
-        fontWeight: '800',
-    },
-
-    // 다가오는 약속
     meetingCard: {
-        minHeight: 80,
-        marginTop: 2,
-        padding: 10,
-        paddingRight: 14,
+        paddingVertical: 10,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
-        borderWidth: 1,
-        borderColor: DIVIDER,
-        borderRadius: 18,
-        backgroundColor: CARD,
     },
 
     meetingDate: {
-        width: 58,
-        height: 58,
+        width: 44,
+        height: 44,
         borderRadius: 12,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: NAVY,
+        backgroundColor: TINT,
     },
 
     meetingDday: {
-        color: MINT,
-        fontSize: 12,
-        fontWeight: '800',
-    },
-
-    meetingDay: {
-        marginTop: 3,
-        color: '#ffffff',
-        fontSize: 16,
-        fontWeight: '800',
+        color: PURPLE,
+        fontSize: 13,
+        fontWeight: '700',
     },
 
     meetingInfo: {
@@ -892,22 +743,55 @@ const styles = StyleSheet.create({
     },
 
     meetingLabel: {
-        color: MINT_DEEP,
+        color: MUTED,
         fontSize: 12,
         fontWeight: '700',
     },
 
     meetingTitle: {
         marginTop: 2,
-        color: NAVY,
-        fontSize: 16,
-        fontWeight: '800',
+        color: INK,
+        fontSize: 15.5,
+        fontWeight: '600',
     },
 
     meetingMeta: {
         marginTop: 3,
-        color: SECONDARY,
-        fontSize: 12,
+        color: MUTED,
+        fontSize: 13,
+    },
+
+    roomActions: {
+        flexDirection: 'row',
+        gap: 8,
+        marginTop: 10,
+    },
+
+    roomButton: {
+        flex: 1,
+        height: 48,
+        borderRadius: 14,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+
+    createRoomButton: {
+        backgroundColor: PURPLE,
+    },
+
+    joinRoomButton: {
+        backgroundColor: TINT,
+    },
+
+    createRoomText: {
+        color: '#ffffff',
+        fontSize: 15,
+        fontWeight: '600',
+    },
+
+    joinRoomText: {
+        color: PURPLE,
+        fontSize: 15,
         fontWeight: '600',
     },
 

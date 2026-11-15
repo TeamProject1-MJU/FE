@@ -4886,7 +4886,6 @@ test('서버 홈: 7.3 방 목록으로 가장 가까운 약속 카드(서버 값
     assert.equal(card.props.accessibilityLabel, '다가오는 약속 가까운 서버 모임');
     const when = new Date(near.appointmentAt);
     assert.ok(findText(card, format.formatDday(when)));
-    assert.ok(findText(card, format.formatMonthDay(when)));
     assert.ok(findText(card, `${format.formatTime(when)} · 서버 역 88001역 · 3/4명`));
     card.props.onPress();
     assert.deepEqual(plain(r.pushes), [{ pathname: '/rooms/[roomId]', params: {
@@ -5180,14 +5179,12 @@ test('서버 홈: 서버 오류는 안내와 다시 시도, 다른 기능 버튼
     r.respond(async () => jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR' } }, 500));
     r.view(); await settle(); let view = r.view();
     assert.ok(findText(view, '약속을 불러오지 못했어요'));
-    assert.ok(findElement(view, element => element.type === 'Pressable' && element.props.accessibilityLabel === '경로 탐색'));
-    for (const title of ['AI 표지판 방향 확인', '약속방']) {
-        const feature = findElement(view, element => typeof element.type === 'function' && element.props?.title === title);
-        assert.ok(feature, title);
-        feature.props.onPress();
+    for (const label of ['전체 보기', '방 만들기', '코드로 참여']) {
+        const button = findElement(view, element => element.type === 'Pressable' && element.props?.accessibilityLabel === label);
+        assert.ok(button, label);
+        button.props.onPress();
     }
-    findElement(view, element => element.props?.accessibilityLabel === '경로 탐색').props.onPress();
-    assert.deepEqual(plain(r.pushes), ['/ai-direction', '/rooms', '/route-search']);
+    assert.deepEqual(plain(r.pushes), ['/rooms', '/rooms/new', '/rooms/join']);
     r.respond(async () => ok([homeRoom('aaaa0000-aaaa-4aaa-8aaa-aaaaaaaaaaaa', HOME_DAY, { name: '다시 불러온 모임' })]));
     findElement(view, element => element.props?.accessibilityLabel === '다가오는 약속 다시 불러오기').props.onPress();
     view = r.view();
@@ -5266,7 +5263,6 @@ test('mock 홈은 HOME_UPCOMING_MEETING 그대로이고 서버를 부르지 않�
     const card = homeMeetingCard(view);
     assert.equal(card.props.accessibilityLabel, `다가오는 약속 ${HOME_UPCOMING_MEETING.title}`);
     assert.ok(findText(card, formatDday(HOME_UPCOMING_MEETING.appointmentAt)));
-    assert.ok(findText(card, formatMonthDay(HOME_UPCOMING_MEETING.appointmentAt)));
     assert.ok(findText(card, `${formatTime(HOME_UPCOMING_MEETING.appointmentAt)} · 시청역 · 3/4명`));
     assert.equal(findText(view, '약속을 불러오고 있어요'), null);
     card.props.onPress();
