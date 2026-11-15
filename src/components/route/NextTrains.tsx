@@ -9,6 +9,15 @@ import { fetchArrivals, type ArrivalsMock } from '@/services/arrivals';
 import type { ArrivalsResponse } from '@/types/arrivals';
 import type { RouteStep } from '@/types/route';
 
+/** Split only the formatted countdown suffix; keep formatter text and timing intact. */
+function trainLabel(text: string, countdown: boolean) {
+    const match = /^(.* )(\d+분 \d+초)$/.exec(text);
+    if (countdown && match) {
+        return <><Text style={styles.destination}>{match[1]}</Text><Text style={styles.remaining}>{match[2]}</Text></>;
+    }
+    return <Text style={text.endsWith(' 곧 도착') ? styles.soon : styles.destination}>{text}</Text>;
+}
+
 /** 서버가 (역, 노선)별로 10~20초 캐시하고 일일 호출 한도가 있어 15~30초 사이로 지켜요. */
 const ARRIVALS_POLL_MS = 20000;
 
@@ -74,7 +83,9 @@ export default function NextTrains({ step, mock }: { step: RouteStep; mock?: Arr
     return (
         <View style={styles.row}>
             <Text style={styles.text}>
-                다음 열차{loading ? ' 확인 중' : ` ${data!.trains.slice(0, 2).map(train => formatNextTrain(train, elapsed)).join(', ')}`}
+                <Text style={styles.label}>다음 열차</Text>{loading ? ' 확인 중' : data!.trains.slice(0, 2).map((train, index) => (
+                    <Text key={index}>{index === 0 ? ' ' : ', '}{trainLabel(formatNextTrain(train, elapsed), train.secondsUntil !== null)}</Text>
+                ))}
             </Text>
         </View>
     );
@@ -84,4 +95,8 @@ const styles = StyleSheet.create({
     // 라벤더 시안(#196) 경로 안내 승차역 아래 줄
     row: { marginTop: 2, justifyContent: 'center' },
     text: { color: '#4A4553', fontSize: 12.5, lineHeight: 18 },
+    label: { color: '#83808B' },
+    destination: { color: '#25212D', fontWeight: '500' },
+    remaining: { color: '#5C3F78', fontWeight: '800', fontVariant: ['tabular-nums'] },
+    soon: { color: '#5C3F78', fontWeight: '700' },
 });

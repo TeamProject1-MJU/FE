@@ -7121,7 +7121,7 @@ function shallow129(node) {
 }
 /** #129 이전(dev e970115) route-guide.tsx 의 mock 모드 트리 sha256 이에요. #187 fontWeight 900→800 반영, #196 경로 안내 시안 반영 */
 // #196: 요약 시각 배치, 지도 접기 및 안내 스타일 변경으로 화면 트리 해시 갱신.
-const MOCK_GUIDE_SHA129 = '04c3b34f932b0a99ba7141288bb6ccf62151ab55bf2ce7716b1e022777623af9';
+const MOCK_GUIDE_SHA129 = '4cea05a2d08a2db165a5da42341e9389a95b35baf53766a2fc88e2bda488d0f3';
 test('129 mock 모드 경로 화면 트리는 #129 이전과 같아요', () => {
     const r = guide129({ mock: true });
     const sha = require('node:crypto').createHash('sha256').update(JSON.stringify(shallow129(r.render()))).digest('hex');

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import RouteNotices from '@/components/route/RouteNotices';
 import RouteTimeNotice from '@/components/route/RouteTimeNotice';
-import { formatArrivalSlack, formatRouteDateTime, formatRouteTimeSelection, shouldShowLiveTrains } from '@/utils/route-time';
+import { formatArrivalSlack, formatRouteDateTime, formatRouteTimeSelection, seoulDateTime, shouldShowLiveTrains } from '@/utils/route-time';
 import { formatStationName } from '@/utils/station-name';
 import { directionInputFromStep, directionStepIssue, normalizeDirectionRoute } from '@/utils/direction-route';
 import { formatClock } from '@/components/route/format';
@@ -35,6 +35,12 @@ const LV_WHITE = '#FFFFFF';
 const LV_CARD_BORDER = '#EEEAF2';
 /** 서버 모드 경로 지도 높이. 경로선과 역 마커가 보이면서 아래 경로 정보 카드가 첫 화면에 걸리도록 정했어요. */
 const ROUTE_MAP_HEIGHT = 220;
+
+/** Presentation only: show the date for service times outside today in KST. */
+function summaryTime(iso: string | undefined) {
+    if (!iso) return '';
+    return seoulDateTime(iso)?.date === seoulDateTime()?.date ? formatClock(iso) : formatRouteDateTime(iso);
+}
 
 /** 홈과 같은 계정 기준(로그인 세대:userId). 계정이 바뀐 뒤에는 지도 메시지를 처리하지 않아요. */
 function currentAccount() {
@@ -158,40 +164,28 @@ export default function RouteGuideScreen() {
                             {!!conditionLabel && <Text style={styles.condition}>{conditionLabel}</Text>}
                         </View>
 
-                        <View style={styles.totalRow}>
-                            <Text style={styles.totalLine}>
-                                {!!splitTotalTime(selected.route.summary)[0] && <Text style={styles.totalPrefix}>{splitTotalTime(selected.route.summary)[0]}</Text>}
-                                <Text style={styles.totalTime}>{splitTotalTime(selected.route.summary)[1]}</Text>
-                            </Text>
-                            <Text style={styles.clockRange}>{selected.searchTime ? formatRouteDateTime(selected.route.summary.departureAt ?? '') : formatClock(selected.route.summary.departureAt ?? '')} → {selected.searchTime ? formatRouteDateTime(selected.route.summary.arrivalAt) : formatClock(selected.route.summary.arrivalAt)}</Text>
-                        </View>
+                        <Text style={styles.totalLine}>
+                            <Text style={styles.totalPrefix}>{splitTotalTime(selected.route.summary)[0].replace('대기 포함 ', '')}</Text>
+                            <Text style={styles.totalTime}>{splitTotalTime(selected.route.summary)[1]}</Text>
+                            <Text style={styles.clockRange}>{'  '}{summaryTime(selected.route.summary.departureAt)} → {summaryTime(selected.route.summary.arrivalAt)}</Text>
+                        </Text>
 
-                        <View style={styles.arrivalRow}>
-                            {!!formatClock(selected.route.summary.arrivalAt) && (
-                                <Text style={styles.arrival}>
-                                    {selected.searchTime ? formatRouteDateTime(selected.route.summary.arrivalAt) : formatClock(selected.route.summary.arrivalAt)} 도착 예정
-                                </Text>
-                            )}
-                            <View style={styles.flex} />
-                            {congestionMark(selected.route.summary.congestion, {
-                                compact: true,
-                                slot: selected.route.steps.find(step => step.type === 'SUBWAY')?.stations?.[0],
-                                size: 12,
-                            })}
-                        </View>
-
-                        {selected.route.summary.departureAt && <Text style={styles.meta}>{selected.searchTime ? formatRouteDateTime(selected.route.summary.departureAt ?? '') : formatClock(selected.route.summary.departureAt ?? '')} 출발 예정</Text>}
                         <RouteNotices summary={selected.route.summary} />
                         {selected.searchTime && selected.route.summary.slackSeconds != null && <Text style={styles.meta}>{formatArrivalSlack(selected.route.summary.slackSeconds)}</Text>}
 
                         <View style={styles.metaRow}>
-                            {selected.route.summary.fareSource === 'ESTIMATED' && <Text style={styles.meta}>예상</Text>}
-                            <Text style={styles.meta}>
-                                {formatFare(selected.route)} 환승 {selected.route.summary.transferCount}회
-                                {selected.route.summary.walkingMinutes > 0
-                                    ? ` 도보 ${selected.route.summary.walkingMinutes}분`
-                                    : ''}
-                            </Text>
+                            <Text style={styles.chip}>{selected.route.summary.fareSource === 'ESTIMATED' ? '예상 ' : ''}{formatFare(selected.route)}</Text>
+                            <Text style={styles.chip}>환승 {selected.route.summary.transferCount}회</Text>
+                            {selected.route.summary.walkingMinutes > 0 && <Text style={styles.chip}>도보 {selected.route.summary.walkingMinutes}분</Text>}
+                            {selected.route.summary.congestion.supported && selected.route.summary.congestion.level && (
+                                <View style={styles.chip}>
+                                    {congestionMark(selected.route.summary.congestion, {
+                                        compact: true,
+                                        slot: selected.route.steps.find(step => step.type === 'SUBWAY')?.stations?.[0],
+                                        size: 12,
+                                    })}
+                                </View>
+                            )}
                         </View>
                         {/* 안내 문구 */}
                         {selected.searchTime && <RouteTimeNotice compact selection={selected.searchTime} routes={selected.origin.id === selected.destination.id ? [] : [selected.route]} mock={isMockMode()} />}
@@ -323,8 +317,10 @@ const styles = StyleSheet.create({
     routeName: {
         flex: 1,
         minWidth: 0,
-        color: LV_SUB,
-        fontSize: 15,
+        color: LV_TEXT,
+        fontSize: 22,
+        fontWeight: '800',
+        letterSpacing: -0.5,
     },
 
     condition: {
@@ -332,8 +328,7 @@ const styles = StyleSheet.create({
         fontSize: 12,
     },
 
-    totalRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 10 },
-    clockRange: { color: LV_SUB, fontSize: 14 },
+    clockRange: { color: LV_SECONDARY, fontSize: 15, fontWeight: '600' },
     mapToggle: { height: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8 },
     mapToggleText: { fontSize: 13, fontWeight: '600', color: LV_MAIN },
     totalLine: {
@@ -354,26 +349,25 @@ const styles = StyleSheet.create({
         lineHeight: 38,
     },
 
-    arrivalRow: {
-        marginTop: 4,
+    metaRow: {
+        marginTop: 8,
         flexDirection: 'row',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 6,
+        gap: 8,
     },
 
-    arrival: {
-        flexShrink: 1,
-        color: LV_MAIN,
-        fontSize: 13.5,
-        fontWeight: '600',
-    },
-
-    metaRow: {
-        marginTop: 3,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
+    chip: {
+        backgroundColor: LV_WHITE,
+        borderWidth: 1,
+        borderColor: LV_CARD_BORDER,
+        borderRadius: 999,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        color: LV_TEXT,
+        fontSize: 13,
+        fontWeight: '700',
+        overflow: 'hidden',
     },
 
     meta: {
