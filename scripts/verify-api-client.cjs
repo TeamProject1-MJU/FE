@@ -53,6 +53,7 @@ function createRuntime(env = {}, react = require('react')) {
             getCurrentPositionAsync: async () => { throw Error('위치 응답을 지정하세요'); },
         },
         'expo-image-picker': { requestCameraPermissionsAsync: async () => ({ granted: false }) },
+        'expo-image': { Image: 'Image' },
     };
     Object.defineProperty(external, '@stomp/stompjs', { get() {
             const module = { exports: {} };
