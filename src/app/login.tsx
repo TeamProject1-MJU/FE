@@ -1,15 +1,16 @@
 import { useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import LinkRoLogo, { LinkRoColors } from '@/components/linkro-logo';
+import LinkRoLogo from '@/components/linkro-logo';
+import Passenger from '@/components/passenger';
 import { loginWithKakao } from '@/services/auth';
 import { isKakaoLoginCancelled } from '@/services/kakao';
 import { ApiError, API_ERROR_MESSAGES } from '@/services/api/errors';
 
-const BACKGROUND = '#f3f5f8';
+const BACKGROUND = '#F7F5FA';
 const SECONDARY = '#6b7488';
 const MINT_DEEP = '#12a77a';
 
@@ -21,6 +22,8 @@ const HOME_ROUTE = '/home';
 
 export default function LoginScreen() {
     const insets = useSafeAreaInsets();
+    const { height } = useWindowDimensions();
+    const brandPaddingTop = Math.max(24, 172 - Math.max(0, 760 - height));
 
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState('');
@@ -40,11 +43,17 @@ export default function LoginScreen() {
         <View style={styles.container}>
             <StatusBar style="dark" />
 
-            {/* 브랜드 영역: 로고 + 태그라인 + 설명 */}
-            <View style={[styles.brand, { paddingTop: 172 + insets.top }]}>
-                <LinkRoLogo size={48} />
-                <Text style={styles.tagline}>지하철을 더 가깝게, 함께.</Text>
-                <Text style={styles.description}>LinkRo에서 이동을 시작해보세요.</Text>
+            {/* 브랜드 영역: 캐릭터 + 로고 + 태그라인 */}
+            <View style={[styles.brand, { paddingTop: brandPaddingTop + insets.top }]}>
+                <View style={styles.passengers}>
+                    <Passenger tone="me" size={76} />
+                    <Passenger tone="other" size={58} />
+                    <Passenger tone="pink" size={46} />
+                </View>
+                <View style={styles.logo}>
+                    <LinkRoLogo size={44} />
+                </View>
+                <Text style={styles.tagline}>{'지하철 경로, 혼잡도, 약속까지\n한 번에 확인해요.'}</Text>
             </View>
 
             {/* 액션 영역: 카카오 버튼 + 안내 문구 */}
@@ -112,23 +121,25 @@ const styles = StyleSheet.create({
 
     // 브랜드
     brand: {
-        alignItems: 'center',
+        alignItems: 'flex-start',
+    },
+
+    passengers: {
+        flexDirection: 'row',
+        alignItems: 'flex-end',
+        gap: 6,
+    },
+
+    logo: {
+        marginTop: 24,
+        alignSelf: 'flex-start',
     },
 
     tagline: {
-        marginTop: 20,
-        color: LinkRoColors.navy,
-        fontSize: 17,
-        lineHeight: 22,
-        fontWeight: '800',
-        letterSpacing: -0.6,
-    },
-
-    description: {
-        marginTop: 9,
-        color: SECONDARY,
-        fontSize: 13,
-        lineHeight: 18,
+        marginTop: 16,
+        color: '#6E6A77',
+        fontSize: 16,
+        lineHeight: 24,
         fontWeight: '500',
     },
 
@@ -140,12 +151,12 @@ const styles = StyleSheet.create({
     },
 
     kakaoButton: {
-        height: 56,
+        height: 54,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
-        borderRadius: 18,
+        borderRadius: 14,
         borderWidth: 1,
         borderColor: KAKAO_YELLOW,
         backgroundColor: KAKAO_YELLOW,
@@ -158,8 +169,8 @@ const styles = StyleSheet.create({
 
     kakaoButtonText: {
         color: KAKAO_BLACK,
-        fontSize: 14,
-        fontWeight: '800',
+        fontSize: 16,
+        fontWeight: '700',
     },
 
     chatIcon: {
