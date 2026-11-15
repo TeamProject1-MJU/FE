@@ -1,4 +1,6 @@
 import BottomTabBar, { useTabBarHeight } from '@/components/bottom-tab-bar';
+import Passenger from '@/components/passenger';
+import { UiColors } from '@/constants/linkro-colors';
 import { useMock } from '@/services/api/config';
 import { ApiError, API_ERROR_MESSAGES, isAuthError } from '@/services/api/errors';
 import { ComponentProps, ReactNode, useCallback, useEffect, useState } from 'react';
@@ -24,16 +26,6 @@ import { useAppPermissions } from '@/hooks/use-app-permissions';
 import { resetToLogin, useRedirectIfSignedOut } from '@/stores/auth-store';
 import { APP_PERMISSIONS, PERMISSION_DISPLAY, permissionAccessibilityLabel } from '@/utils/app-permission';
 import { NICKNAME_MAX, UserError, type UserProfile } from '@/types/user';
-
-const NAVY = '#0f1c3f';
-const MINT_DEEP = '#12a77a';
-const MINT_SOFT = '#e8f8f1';
-const RED = '#e5484d';
-const BACKGROUND = '#f3f5f8';
-const CARD = '#ffffff';
-const SECONDARY = '#6b7488';
-const DISABLED = '#a1a8b8';
-const DIVIDER = '#e6e9ef';
 
 type IoniconName = ComponentProps<typeof Ionicons>['name'];
 type Sheet = 'nickname' | 'logout' | 'withdraw' | null;
@@ -101,14 +93,11 @@ export default function MyScreen() {
     const user = load.kind === 'done' ? load.user : null;
 
     return (
-        <View style={styles.container}>
+        <View style={[styles.container, { paddingTop: insets.top }]}>
             <StatusBar style="dark" />
 
-            <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
-                <Text style={styles.headerTitle}>마이</Text>
-            </View>
-
             <ScrollView contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + 24 }]}>
+                <Text style={styles.headerTitle}>마이</Text>
                 {/* ❶ 프로필 카드 */}
                 {load.kind === 'loading' && (
                     <View style={[styles.card, styles.profile]}>
@@ -117,13 +106,13 @@ export default function MyScreen() {
                             <View style={[styles.skeletonLine, { width: 90 }]} />
                             <View style={[styles.skeletonLine, { width: 64, marginTop: 8 }]} />
                         </View>
-                        <ActivityIndicator color={NAVY} />
+                        <ActivityIndicator color={UiColors.purple} />
                     </View>
                 )}
 
                 {load.kind === 'error' && (
                     <View style={[styles.card, styles.errorCard]}>
-                        <Ionicons name="cloud-offline-outline" size={26} color={SECONDARY} />
+                        <Ionicons name="cloud-offline-outline" size={26} color={UiColors.muted} />
                         <Text style={styles.errorTitle}>내 정보를 불러오지 못했어요</Text>
                         <Text style={styles.errorText}>인터넷 연결을 확인한 뒤 다시 시도해 주세요.</Text>
                         <Pressable
@@ -131,7 +120,7 @@ export default function MyScreen() {
                             onPress={loadUser}
                             accessibilityRole="button"
                         >
-                            <Ionicons name="refresh" size={16} color={CARD} />
+                            <Ionicons name="refresh" size={16} color={UiColors.white} />
                             <Text style={styles.retryText}>다시 시도</Text>
                         </Pressable>
                     </View>
@@ -140,38 +129,41 @@ export default function MyScreen() {
                 {user && (
                     <View style={[styles.card, styles.profile]}>
                         <View style={styles.avatar}>
-                            <Text style={styles.avatarText}>{user.nickname.slice(0, 1)}</Text>
+                            <Passenger tone="me" size={52} />
                         </View>
                         <View style={styles.flex}>
-                            <Text style={styles.nickname} numberOfLines={1}>
-                                {user.nickname}
-                            </Text>
+                            <View style={styles.nicknameRow}>
+                                <Text style={styles.nickname} numberOfLines={1}>
+                                    {user.nickname}
+                                </Text>
+                                <Pressable
+                                    style={({ pressed }) => [styles.smallButton, pressed && styles.pressed]}
+                                    onPress={() => setSheet('nickname')}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="닉네임 수정"
+                                >
+                                    <Text style={styles.smallButtonText}>수정</Text>
+                                </Pressable>
+                            </View>
                             {/* 로그인은 카카오만 지원 (명세 4.1) */}
                             <Text style={styles.loginType}>카카오 로그인</Text>
                         </View>
-                        <Pressable
-                            style={({ pressed }) => [styles.smallButton, pressed && styles.pressed]}
-                            onPress={() => setSheet('nickname')}
-                            accessibilityRole="button"
-                        >
-                            <Text style={styles.smallButtonText}>닉네임 수정</Text>
-                        </Pressable>
                     </View>
                 )}
 
                 {/* ❷ 앱 권한 */}
                 <Text style={styles.sectionTitle}>앱 권한</Text>
-                <View style={styles.card}>
+                <View>
                     {APP_PERMISSIONS.map((item, index) => {
                         const state = permissions.states[item.key];
                         const display = state === 'loading' ? null : PERMISSION_DISPLAY[state];
-                        const color = state === 'granted' ? MINT_DEEP : state === 'denied' ? RED : SECONDARY;
+                        const color = state === 'granted' ? UiColors.purple : state === 'denied' ? UiColors.red : UiColors.muted;
                         return (
                             <Pressable
                                 key={item.key}
                                 style={({ pressed }) => [
                                     styles.listRow,
-                                    index > 0 && styles.listDivider,
+                                    index < APP_PERMISSIONS.length - 1 && styles.listDivider,
                                     pressed && styles.pressed,
                                 ]}
                                 // 허용·허용 안 함은 기기 설정을 열고, 아직 묻지 않음은 바로 요청, 확인할 수 없음은 다시 조회해요.
@@ -187,8 +179,8 @@ export default function MyScreen() {
                                 </View>
                                 {display
                                     ? <Text style={[styles.permission, { color }]}>{display.text}</Text>
-                                    : <ActivityIndicator size="small" color={SECONDARY} />}
-                                <Ionicons name="chevron-forward" size={17} color={SECONDARY} />
+                                    : <ActivityIndicator size="small" color={UiColors.muted} />}
+                                <Ionicons name="chevron-forward" size={17} color={UiColors.chevron} />
                             </Pressable>
                         );
                     })}
@@ -196,20 +188,20 @@ export default function MyScreen() {
 
                 {/* ❸ ❹ 계정 */}
                 <Text style={styles.sectionTitle}>계정</Text>
-                <View style={styles.card}>
+                <View>
                     <Pressable
-                        style={({ pressed }) => [styles.listRow, pressed && styles.pressed]}
+                        style={({ pressed }) => [styles.listRow, styles.listDivider, pressed && styles.pressed]}
                         onPress={() => setSheet('logout')}
                         accessibilityRole="button"
                     >
-                        <Text style={[styles.listLabel, { color: RED }]}>로그아웃</Text>
+                        <Text style={styles.listLabel}>로그아웃</Text>
                     </Pressable>
                     <Pressable
-                        style={({ pressed }) => [styles.listRow, styles.listDivider, pressed && styles.pressed]}
+                        style={({ pressed }) => [styles.listRow, pressed && styles.pressed]}
                         onPress={() => setSheet('withdraw')}
                         accessibilityRole="button"
                     >
-                        <Text style={styles.listLabel}>회원 탈퇴</Text>
+                        <Text style={[styles.listLabel, { color: UiColors.faint }]}>회원 탈퇴</Text>
                     </Pressable>
                 </View>
 
@@ -226,7 +218,7 @@ export default function MyScreen() {
 
             {!!toast && (
                 <View style={[styles.toast, { bottom: tabBarHeight + 16 }]} accessibilityLiveRegion="polite">
-                    <Ionicons name="checkmark-circle" size={18} color="#7ee2bf" />
+                    <Ionicons name="checkmark-circle" size={18} color={UiColors.tint} />
                     <Text style={styles.toastText}>{toast}</Text>
                 </View>
             )}
@@ -327,7 +319,7 @@ function SheetHero({ icon, heading, description }: { icon: IoniconName; heading:
     return (
         <View style={styles.hero}>
             <View style={styles.heroIcon}>
-                <Ionicons name={icon} size={24} color={MINT_DEEP} />
+                <Ionicons name={icon} size={24} color={UiColors.purple} />
             </View>
             <Text style={styles.heroHeading}>{heading}</Text>
             <Text style={styles.heroDescription}>{description}</Text>
@@ -398,13 +390,13 @@ function NicknameSheet({
                     onSubmitEditing={save}
                     accessibilityLabel="닉네임"
                     placeholder="닉네임"
-                    placeholderTextColor={DISABLED}
+                    placeholderTextColor={UiColors.faint}
                 />
-                <Text style={[styles.counter, length > NICKNAME_MAX && { color: RED }]}>
+                <Text style={[styles.counter, length > NICKNAME_MAX && { color: UiColors.red }]}>
                     {length}/{NICKNAME_MAX}
                 </Text>
             </View>
-            <Text style={[styles.inputHelp, !!message && { color: RED }]}>
+            <Text style={[styles.inputHelp, !!message && { color: UiColors.red }]}>
                 {message ?? '앞뒤 공백은 빼고 저장해요. 다른 사용자와 같은 닉네임도 쓸 수 있어요.'}
             </Text>
 
@@ -416,7 +408,7 @@ function NicknameSheet({
                 accessibilityState={{ disabled, busy: saving }}
             >
                 {saving ? (
-                    <ActivityIndicator color={CARD} />
+                    <ActivityIndicator color={UiColors.white} />
                 ) : (
                     <Text style={styles.primaryText}>{saveError ? '다시 저장' : '저장'}</Text>
                 )}
@@ -497,7 +489,7 @@ function ConfirmSheet({
         return (
             <SheetFrame title={title} onClose={close}>
                 <View style={styles.doneBox} accessibilityLiveRegion="polite">
-                    <Ionicons name="checkmark-circle" size={44} color={MINT_DEEP} />
+                    <Ionicons name="checkmark-circle" size={44} color={UiColors.purple} />
                     <Text style={styles.heroHeading}>{successText}</Text>
                     <Text style={styles.heroDescription}>로그인 화면으로 이동할게요.</Text>
                 </View>
@@ -522,7 +514,7 @@ function ConfirmSheet({
 
             {!!error && (
                 <View style={styles.sheetError} accessibilityLiveRegion="polite">
-                    <Ionicons name="alert-circle" size={17} color={RED} />
+                    <Ionicons name="alert-circle" size={17} color={UiColors.red} />
                     <Text style={styles.sheetErrorText}>{error}</Text>
                 </View>
             )}
@@ -534,7 +526,7 @@ function ConfirmSheet({
                 accessibilityRole="button"
             >
                 {busy ? (
-                    <ActivityIndicator color={CARD} />
+                    <ActivityIndicator color={UiColors.white} />
                 ) : (
                     <Text style={styles.primaryText}>{error ? '다시 시도' : confirmLabel}</Text>
                 )}
@@ -558,90 +550,88 @@ const styles = StyleSheet.create({
 
     container: {
         flex: 1,
-        backgroundColor: BACKGROUND,
-    },
-
-    header: {
-        paddingBottom: 12,
-        alignItems: 'center',
-        backgroundColor: BACKGROUND,
+        backgroundColor: UiColors.bg,
     },
 
     headerTitle: {
-        color: NAVY,
-        fontSize: 18,
+        color: UiColors.ink,
+        fontSize: 26,
         fontWeight: '800',
+        letterSpacing: -0.6,
     },
 
     content: {
         paddingHorizontal: 20,
-        paddingTop: 8,
+        paddingTop: 12,
     },
 
     card: {
         overflow: 'hidden',
-        borderRadius: 18,
-        backgroundColor: CARD,
+        borderRadius: 22,
+        borderWidth: 1,
+        borderColor: UiColors.cardBorder,
+        backgroundColor: UiColors.white,
+        marginTop: 18,
     },
 
     profile: {
         padding: 18,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 14,
+        gap: 16,
     },
 
     avatar: {
-        width: 52,
-        height: 52,
-        borderRadius: 26,
+        width: 76,
+        height: 76,
+        borderRadius: 20,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: NAVY,
+        backgroundColor: UiColors.avatar,
     },
 
-    avatarText: {
-        color: CARD,
-        fontSize: 20,
-        fontWeight: '800',
+    nicknameRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
     },
 
     nickname: {
-        color: NAVY,
-        fontSize: 18,
-        fontWeight: '800',
-    },
-
-    loginType: {
-        marginTop: 3,
-        color: SECONDARY,
-        fontSize: 13,
-        fontWeight: '600',
-    },
-
-    smallButton: {
-        paddingHorizontal: 11,
-        paddingVertical: 8,
-        borderWidth: 1,
-        borderColor: DIVIDER,
-        borderRadius: 10,
-        backgroundColor: CARD,
-    },
-
-    smallButtonText: {
-        color: NAVY,
-        fontSize: 13,
+        flexShrink: 1,
+        color: UiColors.ink,
+        fontSize: 20,
         fontWeight: '700',
     },
 
+    loginType: {
+        marginTop: 6,
+        color: UiColors.muted,
+        fontSize: 12.5,
+    },
+
+    smallButton: {
+        height: 30,
+        paddingHorizontal: 10,
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: UiColors.chip,
+    },
+
+    smallButtonText: {
+        color: UiColors.purple,
+        fontSize: 12.5,
+        fontWeight: '600',
+    },
+
     skeleton: {
-        backgroundColor: '#e3e7ee',
+        backgroundColor: UiColors.tint,
     },
 
     skeletonLine: {
         height: 12,
         borderRadius: 6,
-        backgroundColor: '#e3e7ee',
+        backgroundColor: UiColors.tint,
     },
 
     errorCard: {
@@ -652,13 +642,13 @@ const styles = StyleSheet.create({
 
     errorTitle: {
         marginTop: 4,
-        color: NAVY,
+        color: UiColors.ink,
         fontSize: 16,
         fontWeight: '800',
     },
 
     errorText: {
-        color: SECONDARY,
+        color: UiColors.muted,
         fontSize: 13,
         fontWeight: '600',
     },
@@ -671,40 +661,39 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 6,
         borderRadius: 12,
-        backgroundColor: NAVY,
+        backgroundColor: UiColors.purple,
     },
 
     retryText: {
-        color: CARD,
+        color: UiColors.white,
         fontSize: 14,
         fontWeight: '700',
     },
 
     sectionTitle: {
         marginTop: 24,
-        marginBottom: 10,
-        color: NAVY,
-        fontSize: 15,
-        fontWeight: '800',
+        marginBottom: 4,
+        color: UiColors.ink,
+        fontSize: 14,
+        fontWeight: '700',
     },
 
     listRow: {
-        minHeight: 54,
-        paddingHorizontal: 16,
+        minHeight: 52,
+        paddingVertical: 8,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
     },
 
     listDivider: {
-        borderTopWidth: 1,
-        borderTopColor: DIVIDER,
+        borderBottomWidth: 1,
+        borderBottomColor: UiColors.lineSoft,
     },
 
     listLabel: {
-        color: NAVY,
+        color: UiColors.ink,
         fontSize: 15,
-        fontWeight: '700',
     },
 
     permission: {
@@ -714,13 +703,13 @@ const styles = StyleSheet.create({
 
     permissionHint: {
         marginTop: 2,
-        color: SECONDARY,
+        color: UiColors.muted,
         fontSize: 12,
         fontWeight: '600',
     },
 
     footer: {
-        marginTop: 22,
+        marginTop: 20,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
@@ -728,15 +717,14 @@ const styles = StyleSheet.create({
     },
 
     footerText: {
-        color: SECONDARY,
-        fontSize: 12.5,
-        fontWeight: '600',
+        color: UiColors.faint,
+        fontSize: 11.5,
     },
 
     footerBar: {
         width: 1,
         height: 11,
-        backgroundColor: DIVIDER,
+        backgroundColor: UiColors.lineSoft,
     },
 
     toast: {
@@ -748,11 +736,11 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 7,
         borderRadius: 14,
-        backgroundColor: 'rgba(15,28,63,0.94)',
+        backgroundColor: UiColors.toast,
     },
 
     toastText: {
-        color: CARD,
+        color: UiColors.white,
         fontSize: 14,
         fontWeight: '700',
     },
@@ -764,7 +752,7 @@ const styles = StyleSheet.create({
 
     dim: {
         ...StyleSheet.absoluteFill,
-        backgroundColor: 'rgba(15,28,63,0.38)',
+        backgroundColor: UiColors.dim,
     },
 
     sheet: {
@@ -772,7 +760,7 @@ const styles = StyleSheet.create({
         paddingTop: 10,
         borderTopLeftRadius: 24,
         borderTopRightRadius: 24,
-        backgroundColor: CARD,
+        backgroundColor: UiColors.white,
     },
 
     sheetHandle: {
@@ -781,12 +769,12 @@ const styles = StyleSheet.create({
         marginBottom: 14,
         alignSelf: 'center',
         borderRadius: 2,
-        backgroundColor: '#d9dde4',
+        backgroundColor: UiColors.handle,
     },
 
     sheetTitle: {
         alignSelf: 'center',
-        color: NAVY,
+        color: UiColors.ink,
         fontSize: 16,
         fontWeight: '800',
     },
@@ -803,19 +791,19 @@ const styles = StyleSheet.create({
         borderRadius: 16,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: MINT_SOFT,
+        backgroundColor: UiColors.tint,
     },
 
     heroHeading: {
         marginTop: 14,
-        color: NAVY,
+        color: UiColors.ink,
         fontSize: 17,
         fontWeight: '800',
     },
 
     heroDescription: {
         marginTop: 8,
-        color: SECONDARY,
+        color: UiColors.muted,
         fontSize: 13.5,
         fontWeight: '500',
         lineHeight: 20,
@@ -828,23 +816,23 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         borderWidth: 1.5,
-        borderColor: NAVY,
-        borderRadius: 13,
+        borderColor: UiColors.inputBorder,
+        borderRadius: 10,
     },
 
     inputError: {
-        borderColor: RED,
+        borderColor: UiColors.red,
     },
 
     inputText: {
         flex: 1,
-        color: NAVY,
+        color: UiColors.ink,
         fontSize: 16,
         fontWeight: '700',
     },
 
     counter: {
-        color: DISABLED,
+        color: UiColors.faint,
         fontSize: 12.5,
         fontWeight: '600',
     },
@@ -852,7 +840,7 @@ const styles = StyleSheet.create({
     inputHelp: {
         marginTop: 7,
         marginLeft: 2,
-        color: SECONDARY,
+        color: UiColors.muted,
         fontSize: 12.5,
         fontWeight: '600',
     },
@@ -863,7 +851,7 @@ const styles = StyleSheet.create({
         padding: 13,
         gap: 8,
         borderRadius: 13,
-        backgroundColor: BACKGROUND,
+        backgroundColor: UiColors.bg,
     },
 
     detailRow: {
@@ -877,12 +865,12 @@ const styles = StyleSheet.create({
         height: 5,
         marginTop: 7,
         borderRadius: 3,
-        backgroundColor: SECONDARY,
+        backgroundColor: UiColors.muted,
     },
 
     detailText: {
         flex: 1,
-        color: '#4b5468',
+        color: UiColors.muted,
         fontSize: 13,
         fontWeight: '600',
         lineHeight: 19,
@@ -901,12 +889,12 @@ const styles = StyleSheet.create({
         alignItems: 'flex-start',
         gap: 7,
         borderRadius: 12,
-        backgroundColor: '#fdecec',
+        backgroundColor: UiColors.errorBg,
     },
 
     sheetErrorText: {
         flex: 1,
-        color: '#b42318',
+        color: UiColors.errorText,
         fontSize: 13,
         fontWeight: '600',
         lineHeight: 18,
@@ -918,19 +906,19 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: 14,
-        backgroundColor: NAVY,
+        backgroundColor: UiColors.purple,
     },
 
     primaryDisabled: {
-        backgroundColor: '#c3c8d2',
+        backgroundColor: UiColors.handle,
     },
 
     danger: {
-        backgroundColor: RED,
+        backgroundColor: UiColors.red,
     },
 
     primaryText: {
-        color: CARD,
+        color: UiColors.white,
         fontSize: 15.5,
         fontWeight: '800',
     },
@@ -941,13 +929,13 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
-        borderColor: DIVIDER,
+        borderColor: UiColors.lineSoft,
         borderRadius: 14,
-        backgroundColor: CARD,
+        backgroundColor: UiColors.white,
     },
 
     secondaryText: {
-        color: NAVY,
+        color: UiColors.ink,
         fontSize: 15,
         fontWeight: '700',
     },
