@@ -218,7 +218,7 @@ export default function MyScreen() {
 
             {!!toast && (
                 <View style={[styles.toast, { bottom: tabBarHeight + 16 }]} accessibilityLiveRegion="polite">
-                    <Ionicons name="checkmark-circle" size={18} color={UiColors.tint} />
+                    <Ionicons name="checkmark-circle" size={18} color={UiColors.toastCheck} />
                     <Text style={styles.toastText}>{toast}</Text>
                 </View>
             )}
@@ -341,6 +341,7 @@ function NicknameSheet({
     onSaved: (user: UserProfile) => void;
 }) {
     const [value, setValue] = useState(current);
+    const [focused, setFocused] = useState(false);
     const [saving, setSaving] = useState(false);
     const [saveError, setSaveError] = useState('');
     const [failNext, setFailNext] = useState(failFirstSave);
@@ -376,10 +377,12 @@ function NicknameSheet({
         <SheetFrame title="닉네임 수정" onClose={close}>
             <SheetHero icon="person-outline" heading="닉네임을 바꿀 수 있어요" description="2~20자로 입력해주세요." />
 
-            <View style={[styles.input, !!message && styles.inputError]}>
+            <View style={[styles.input, (focused || !!value) && styles.inputActive, !!message && styles.inputError]}>
                 <TextInput
                     style={styles.inputText}
                     value={value}
+                    onFocus={() => setFocused(true)}
+                    onBlur={() => setFocused(false)}
                     onChangeText={text => {
                         setValue(text);
                         setSaveError('');
@@ -392,11 +395,11 @@ function NicknameSheet({
                     placeholder="닉네임"
                     placeholderTextColor={UiColors.faint}
                 />
-                <Text style={[styles.counter, length > NICKNAME_MAX && { color: UiColors.red }]}>
+                <Text style={[styles.counter, length > NICKNAME_MAX && { color: UiColors.sheetDanger }]}>
                     {length}/{NICKNAME_MAX}
                 </Text>
             </View>
-            <Text style={[styles.inputHelp, !!message && { color: UiColors.red }]}>
+            <Text style={[styles.inputHelp, !!message && { color: UiColors.sheetDanger }]}>
                 {message ?? '앞뒤 공백은 빼고 저장해요. 다른 사용자와 같은 닉네임도 쓸 수 있어요.'}
             </Text>
 
@@ -410,7 +413,7 @@ function NicknameSheet({
                 {saving ? (
                     <ActivityIndicator color={UiColors.white} />
                 ) : (
-                    <Text style={styles.primaryText}>{saveError ? '다시 저장' : '저장'}</Text>
+                    <Text style={[styles.primaryText, disabled && styles.primaryTextDisabled]}>{saveError ? '다시 저장' : '저장'}</Text>
                 )}
             </Pressable>
             <Pressable
@@ -514,7 +517,7 @@ function ConfirmSheet({
 
             {!!error && (
                 <View style={styles.sheetError} accessibilityLiveRegion="polite">
-                    <Ionicons name="alert-circle" size={17} color={UiColors.red} />
+                    <Ionicons name="alert-circle" size={17} color={UiColors.sheetDanger} />
                     <Text style={styles.sheetErrorText}>{error}</Text>
                 </View>
             )}
@@ -775,8 +778,8 @@ const styles = StyleSheet.create({
     sheetTitle: {
         alignSelf: 'center',
         color: UiColors.ink,
-        fontSize: 16,
-        fontWeight: '800',
+        fontSize: 15,
+        fontWeight: '700',
     },
 
     hero: {
@@ -786,9 +789,9 @@ const styles = StyleSheet.create({
     },
 
     heroIcon: {
-        width: 52,
-        height: 52,
-        borderRadius: 16,
+        width: 56,
+        height: 56,
+        borderRadius: 18,
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: UiColors.tint,
@@ -797,8 +800,9 @@ const styles = StyleSheet.create({
     heroHeading: {
         marginTop: 14,
         color: UiColors.ink,
-        fontSize: 17,
+        fontSize: 18,
         fontWeight: '800',
+        letterSpacing: -0.3,
     },
 
     heroDescription: {
@@ -815,25 +819,29 @@ const styles = StyleSheet.create({
         paddingHorizontal: 14,
         flexDirection: 'row',
         alignItems: 'center',
-        borderWidth: 1.5,
-        borderColor: UiColors.inputBorder,
-        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: UiColors.line,
+        borderRadius: 12,
+    },
+
+    inputActive: {
+        borderColor: UiColors.purple,
     },
 
     inputError: {
-        borderColor: UiColors.red,
+        borderColor: UiColors.sheetDanger,
     },
 
     inputText: {
         flex: 1,
         color: UiColors.ink,
-        fontSize: 16,
+        fontSize: 15,
         fontWeight: '700',
     },
 
     counter: {
-        color: UiColors.faint,
-        fontSize: 12.5,
+        color: UiColors.muted,
+        fontSize: 12,
         fontWeight: '600',
     },
 
@@ -865,7 +873,7 @@ const styles = StyleSheet.create({
         height: 5,
         marginTop: 7,
         borderRadius: 3,
-        backgroundColor: UiColors.muted,
+        backgroundColor: UiColors.chevron,
     },
 
     detailText: {
@@ -894,7 +902,7 @@ const styles = StyleSheet.create({
 
     sheetErrorText: {
         flex: 1,
-        color: UiColors.errorText,
+        color: UiColors.sheetDanger,
         fontSize: 13,
         fontWeight: '600',
         lineHeight: 18,
@@ -910,34 +918,36 @@ const styles = StyleSheet.create({
     },
 
     primaryDisabled: {
-        backgroundColor: UiColors.handle,
+        backgroundColor: UiColors.buttonDisabled,
     },
 
     danger: {
-        backgroundColor: UiColors.red,
+        backgroundColor: UiColors.sheetDanger,
     },
 
     primaryText: {
         color: UiColors.white,
-        fontSize: 15.5,
-        fontWeight: '800',
+        fontSize: 15,
+        fontWeight: '600',
+    },
+
+    primaryTextDisabled: {
+        color: UiColors.faint,
     },
 
     secondary: {
-        height: 50,
+        height: 52,
         marginTop: 8,
         alignItems: 'center',
         justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: UiColors.lineSoft,
         borderRadius: 14,
-        backgroundColor: UiColors.white,
+        backgroundColor: UiColors.chip,
     },
 
     secondaryText: {
-        color: UiColors.ink,
+        color: UiColors.purple,
         fontSize: 15,
-        fontWeight: '700',
+        fontWeight: '600',
     },
 
     pressed: {
