@@ -2899,9 +2899,9 @@ test('NextTrains: 첫 승차 구간 조건으로 부르고 카운트다운 중 1
     assert.equal(r.text(), '다음 열차 확인 중');
     await flush();
     assert.deepEqual(r.calls, ['https://example.test/api/v1/stations/222/arrivals?lineId=2&nextStationId=223&directionCode=INNER&limit=2']);
-    assert.equal(r.text(), '다음 열차 · 성수행 1분 1초 · 성수행 5분 0초');
-    r.advance(1000); assert.equal(r.text(), '다음 열차 · 성수행 1분 0초 · 성수행 4분 59초');
-    r.advance(1000); assert.equal(r.text(), '다음 열차 · 성수행 곧 도착 · 성수행 4분 58초');
+    assert.equal(r.text(), '다음 열차 성수행 1분 1초, 성수행 5분 0초');
+    r.advance(1000); assert.equal(r.text(), '다음 열차 성수행 1분 0초, 성수행 4분 59초');
+    r.advance(1000); assert.equal(r.text(), '다음 열차 성수행 곧 도착, 성수행 4분 58초');
     r.advance(17999); await flush();
     assert.equal(r.calls.length, 1);
     r.advance(1); await flush();
@@ -2914,9 +2914,9 @@ test('NextTrains: 첫 승차 구간 조건으로 부르고 카운트다운 중 1
             arrivalTrain({ secondsUntil: 200, message: '전역 출발' }),
         ] })));
     r.advance(20000); await flush();
-    assert.equal(r.text(), '다음 열차 · 성수행 · 2번째 전역 · 성수행 3분 20초');
+    assert.equal(r.text(), '다음 열차 성수행 · 2번째 전역, 성수행 3분 20초');
     r.advance(1000);
-    assert.equal(r.text(), '다음 열차 · 성수행 · 2번째 전역 · 성수행 3분 19초');
+    assert.equal(r.text(), '다음 열차 성수행 · 2번째 전역, 성수행 3분 19초');
     r.unmount();
     assert.equal(r.timers.size, 0);
 });
@@ -2926,7 +2926,7 @@ test('NextTrains: available:false(receivedAt null)·receivedAt 없음·빈 열�
         const r = nextTrainsRuntime();
         r.respond(async () => ok(arrivalsData({ receivedAt: r.receivedNow() })));
         r.text(); await flush();
-        assert.ok(r.text().startsWith('다음 열차 · 성수행'), outcome);
+        assert.ok(r.text().startsWith('다음 열차 성수행'), outcome);
         r.respond(async () => {
             // BE 는 available:false 여도 reason·receivedAt(null 가능)·trains([])를 항상 보내요.
             if (outcome === 'unavailable') return ok({ available: false, reason: 'UNSUPPORTED_STATION', receivedAt: null, trains: [] });
@@ -2956,12 +2956,12 @@ test('NextTrains: 인증 오류는 이전 값을 유지하고, 토큰 갱신 중
         return ok(arrivalsData({ receivedAt: r.receivedNow(), trains: [arrivalTrain({ secondsUntil: 600 })] }));
     });
     r.text(); await flush();
-    assert.equal(r.text(), '다음 열차 · 성수행 10분 0초');
+    assert.equal(r.text(), '다음 열차 성수행 10분 0초');
 
     // TOKEN_INVALID 처럼 갱신 없이 실패하는 인증 오류: 이전 값을 그대로 둬요.
     r.respond(async () => fail('TOKEN_INVALID'));
     r.advance(20000); await flush();
-    assert.equal(r.text(), '다음 열차 · 성수행 9분 40초');
+    assert.equal(r.text(), '다음 열차 성수행 9분 40초');
 
     // TOKEN_EXPIRED: 갱신이 끝날 때까지 요청이 끝나지 않으므로 이전 값이 보이고, 다음 폴링은 건너뛰어요.
     r.respond(async (_url, options) => {
@@ -2973,14 +2973,14 @@ test('NextTrains: 인증 오류는 이전 값을 유지하고, 토큰 갱신 중
     r.advance(20000); await flush();
     assert.equal(r.calls.length, before + 1);
     assert.equal(refreshes, 1);
-    assert.equal(r.text(), '다음 열차 · 성수행 9분 20초');
+    assert.equal(r.text(), '다음 열차 성수행 9분 20초');
     r.advance(20000); await flush();
     assert.equal(r.calls.length, before + 1, '갱신 중에는 다음 폴링을 겹쳐 보내지 않아요');
-    assert.equal(r.text(), '다음 열차 · 성수행 9분 0초');
+    assert.equal(r.text(), '다음 열차 성수행 9분 0초');
     refresh.resolve(); await flush();
     assert.equal(r.calls.length, before + 2);
     assert.equal(authHeaders.at(-1), 'Bearer token-new');
-    assert.equal(r.text(), '다음 열차 · 성수행 1분 30초');
+    assert.equal(r.text(), '다음 열차 성수행 1분 30초');
     r.unmount();
 });
 
@@ -2991,7 +2991,7 @@ test('NextTrains: mock 모드의 정상·none·fail 표시와 서버 미호출',
         r.advance(400); await flush();
         const shown = r.text({ mock: flag });
         if (flag) assert.equal(shown, null, flag);
-        else assert.match(shown, /^다음 열차 · 성수행 3분 2초 · 성수행 7분 2초$/);
+        else assert.match(shown, /^다음 열차 성수행 3분 2초, 성수행 7분 2초$/);
         assert.equal(r.calls.length, 0);
         r.unmount();
     }
@@ -3020,13 +3020,13 @@ test('NextTrains: message 가 항상 있는 실서버 응답도 secondsUntil 로
     const shown = r.text();
     assert.ok(shown, '줄이 보여야 해요');
     assert.equal((shown.match(/성수행/g) ?? []).length, 2);
-    assert.equal(shown, '다음 열차 · 성수행 1분 40초 · 성수행 6분 10초');
+    assert.equal(shown, '다음 열차 성수행 1분 40초, 성수행 6분 10초');
     r.advance(1000);
-    assert.equal(r.text(), '다음 열차 · 성수행 1분 39초 · 성수행 6분 9초');
+    assert.equal(r.text(), '다음 열차 성수행 1분 39초, 성수행 6분 9초');
     r.advance(40000); await flush();
     // 20초에 다시 불렀고, 그 요청이 끝나지 않아 40초 폴링은 겹침 방지로 건너뛰었어요.
     assert.equal(r.calls.length, 2);
-    assert.equal(r.text(), '다음 열차 · 성수행 곧 도착 · 성수행 5분 29초');
+    assert.equal(r.text(), '다음 열차 성수행 곧 도착, 성수행 5분 29초');
     r.unmount();
 });
 
@@ -7119,8 +7119,8 @@ function shallow129(node) {
     }
     return { t: typeof node.type === 'function' ? node.type.name : String(node.type), k: node.key, p: props, c: shallow129(children) };
 }
-/** #129 이전(dev e970115) route-guide.tsx 의 mock 모드 트리 sha256 이에요. #187 fontWeight 900→800 반영 */
-const MOCK_GUIDE_SHA129 = '8e06db9879c69f249679ae70d567220f8caa33ed40508a38b8336b294f4d9ce7';
+/** #129 이전(dev e970115) route-guide.tsx 의 mock 모드 트리 sha256 이에요. #187 fontWeight 900→800 반영, #196 경로 안내 시안 반영 */
+const MOCK_GUIDE_SHA129 = 'a21f7b4a3beba94282f053719ca17d46b95847f25fada55f6f8d9dc69c9d0dca';
 test('129 mock 모드 경로 화면 트리는 #129 이전과 같아요', () => {
     const r = guide129({ mock: true });
     const sha = require('node:crypto').createHash('sha256').update(JSON.stringify(shallow129(r.render()))).digest('hex');
@@ -7381,7 +7381,7 @@ function route146({ walkingMinutes = 1, transferCount = 2 } = {}) {
         ],
     };
 }
-/** 도보 줄은 끝에 " · 80m"(거리)가 붙어서 앞부분으로 비교해요. */
+/** 도보 줄은 끝에 ", 80m"(거리)가 붙어서 앞부분으로 비교해요. */
 function texts146(node) {
     return findAll125(node, element => element.type === 'Text').map(textOf);
 }
@@ -7418,12 +7418,12 @@ test('146 도보 1분 + 대기 10분 환승: 어디에도 "도보 11분" 없이 
     const route = route146();
     const detail = timeline146(route); const expanded = card146(route, true); const collapsed = card146(route, false);
     for (const texts of [detail, expanded, collapsed]) assert.ok(!texts.some(text => /도보 11분|환승 도보/.test(text)), texts.join(' / '));
-    assert.ok(detail.some(text => text.startsWith('서버 환승 안내 · 환승 소요 11분')));
+    assert.ok(detail.some(text => text.startsWith('서버 환승 안내, 환승 소요 11분')));
     assert.ok(expanded.some(text => text.trim() === '환승 소요 11분'));
     assert.ok(expanded.some(text => text.includes('환승 2회, 도보 1분')));
     // 경로 안내 화면 요약도 서버 값 그대로예요.
     const r = guide129({ route }); const view = r.render();
-    assert.ok(findElement(view, element => element.type === 'Text' && textOf(element).includes('환승 2회 · 도보 1분')));
+    assert.ok(findElement(view, element => element.type === 'Text' && textOf(element).includes('환승 2회 도보 1분')));
     assert.ok(!textOf(view).includes('도보 11분'));
     assert.ok(findElement(view, element => element.type === r.Timeline && element.props.route === route));
 });
@@ -7433,13 +7433,16 @@ test('146 환승 여러 번: 펼친 카드와 경로 상세가 환승마다 같�
         const route = route146({ walkingMinutes });
         const format = createRuntime().load('src/components/route/format.ts');
         const detail = timeline146(route); const expanded = card146(route, true);
-        const detailTransfers = detail.filter(text => text.includes('환승 소요')).map(text => /환승 소요 (\d+)분/.exec(text)[1]);
+        // 경로 상세는 환승역 줄과 안내 상자에 같은 분이 한 번씩 나와요(#196). 환승마다 나오는 분이 모두 같아야 해요.
+        const detailMinutes = detail.filter(text => /환승 (?:소요|도보) \d+분/.test(text)).map(text => /환승 (?:소요|도보) (\d+)분/.exec(text)[1]);
+        const detailTransfers = detailMinutes.filter((minutes, index) => index === 0 || minutes !== detailMinutes[index - 1]);
+        assert.equal(detailMinutes.length, detailTransfers.length * 2, detailMinutes.join(' / '));
         const cardTransfers = expanded.filter(text => text.includes('환승 소요')).map(text => /환승 소요 (\d+)분/.exec(text)[1]);
         assert.deepEqual(detailTransfers, ['11', '1']); assert.deepEqual(cardTransfers, detailTransfers);
         assert.deepEqual(cardTransfers, route.steps.filter((_, index) => format.isTransferStep(route.steps, index)).map(step => String(format.stepMinutes(step.durationSec))));
         // 첫 지하철 전 도보는 "도보"(이전에는 펼친 카드가 "환승 도보"로 잘못 표시했어요), 마지막 도보도 "도보"
         assert.ok(expanded.some(text => text.trim() === '도보 2분'));
-        assert.ok(detail.some(text => text.startsWith('출발역까지 걷기 · 도보 2분'))); assert.ok(detail.some(text => text.startsWith('도착지까지 걷기 · 도보 3분')));
+        assert.ok(detail.some(text => text.startsWith('출발역까지 걷기, 도보 2분'))); assert.ok(detail.some(text => text.startsWith('도착지까지 걷기, 도보 3분')));
         // 요약 도보는 서버 값 그대로, 환승 횟수는 환승 단계 수와 같아요.
         assert.ok(expanded.some(text => text.includes(`환승 2회, 도보 ${walkingMinutes}분`)));
         assert.equal(cardTransfers.length, route.summary.transferCount);
@@ -7460,7 +7463,7 @@ test('146 카카오(KAKAO)·시각표(INTERNAL) 경로는 같은 문구, 30초 �
         assert.equal(r.load('src/stores/route-store.ts').getSelectedRoute().routeSource, routeSource);
         const timeline = findElement(view, element => element.type === r.Timeline);
         results.push(JSON.stringify([timeline146(timeline.props.route), card146(route, true)]));
-        assert.ok(timeline146(route).some(text => text.startsWith('고속터미널역 7호선 승강장으로 이동 · 환승 소요 1분')));
+        assert.ok(timeline146(route).some(text => text.startsWith('고속터미널역 7호선 승강장으로 이동, 환승 소요 1분')));
         assert.ok(!timeline146(route).some(text => /환승 소요 0분|도보 0분/.test(text)));
     }
     assert.equal(results[0], results[1]);
@@ -7494,7 +7497,7 @@ test('146 보완: mock 건대입구 → 사당은 "환승 도보 3분"과 "환�
     const expanded = card146(route, true); const detail = timeline146(route);
     assert.ok(expanded.some(text => text.trim() === '환승 도보 3분'), expanded.join(' / '));
     assert.ok(expanded.some(text => text === '환승 대기 약 2분'));
-    assert.ok(detail.some(text => text.startsWith('이수역 4호선 승강장으로 환승 · 도보 3분')), detail.join(' / '));
+    assert.ok(detail.some(text => text.startsWith('이수역 4호선 승강장으로 환승, 도보 3분')), detail.join(' / '));
     assert.ok(detail.some(text => text === '환승 대기 약 2분'));
     for (const texts of [expanded, detail]) assert.ok(!texts.some(text => text.includes('환승 소요')));
 });
@@ -7507,13 +7510,13 @@ test('146 보완: 대기가 따로 오지 않는 660초 환승은 "환승 소요
     const expanded = card146(mixed, true); const detail = timeline146(mixed);
     assert.ok(expanded.some(text => text.trim() === '환승 소요 11분')); assert.ok(expanded.some(text => text.trim() === '환승 도보 1분'));
     assert.ok(expanded.some(text => text === '환승 대기 약 2분')); assert.ok(expanded.some(text => text === '승차 대기 약 3분'));
-    assert.ok(detail.some(text => text.startsWith('서버 환승 안내 · 환승 소요 11분')));
-    assert.ok(detail.some(text => text.startsWith('고속터미널역 7호선 승강장으로 환승 · 도보 1분')));
+    assert.ok(detail.some(text => text.startsWith('서버 환승 안내, 환승 소요 11분')));
+    assert.ok(detail.some(text => text.startsWith('고속터미널역 7호선 승강장으로 환승, 도보 1분')));
     assert.ok(expanded.some(text => text.trim() === '도보 2분')); // 첫 열차 전 걷기는 그대로 "도보"
     for (const texts of [expanded, detail, card146(mixed, false)]) assert.ok(!texts.some(text => text.includes('도보 11분')), texts.join(' / '));
     assert.ok(expanded.some(text => text.includes('환승 2회, 도보 1분')));
     // 펼친 카드와 경로 상세의 숫자가 환승마다 같아요.
-    const numbers = texts => texts.map(text => /환승 (?:소요|도보) (\d+)분|· (?:환승 소요|도보) (\d+)분/.exec(text)).filter(Boolean).map(match => match[1] ?? match[2]);
+    const numbers = texts => texts.map(text => /환승 (?:소요|도보) (\d+)분|, (?:환승 소요|도보) (\d+)분/.exec(text)).filter(Boolean).map(match => match[1] ?? match[2]);
     assert.deepEqual(numbers(expanded.filter(text => /^\s*환승 (소요|도보)/.test(text))), ['11', '1']);
     assert.deepEqual(numbers(detail.filter(text => /^(서버 환승 안내|고속터미널역)/.test(text))), ['11', '1']);
 });
@@ -7526,7 +7529,7 @@ test('146 보완: waitSec 이 0·null 이거나 waitKind 가 없거나 NONE 이�
         assert.deepEqual([2, 4].map(index => format.hasSeparateTransferWait(route.steps, index)), [false, false], `${wait} ${kind}`);
         const expanded = card146(route, true); const detail = timeline146(route);
         assert.ok(expanded.some(text => text.trim() === '환승 소요 11분')); assert.ok(!expanded.some(text => text.includes('환승 대기')));
-        assert.ok(detail.some(text => text.startsWith('고속터미널역 7호선 승강장으로 이동 · 환승 소요 1분')));
+        assert.ok(detail.some(text => text.startsWith('고속터미널역 7호선 승강장으로 이동, 환승 소요 1분')));
     }
     // 대기 줄과 환승 문구 판단은 같은 함수를 써서 어긋나지 않아요.
     const shown = route146Waits([undefined, 60, 60], 'REALTIME');
@@ -9356,17 +9359,17 @@ test('173 응답 직후: receivedAt 이 30초 전이어도 secondsUntil 그대�
     const r = nextTrains173Runtime();
     r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(30), trains: [arrivalTrain({ secondsUntil: 125 }), arrivalTrain({ secondsUntil: 365 })] })));
     r.text(); await flush();
-    assert.equal(r.text(), '다음 열차 · 성수행 2분 5초 · 성수행 6분 5초', '30초가 빠지면 안 돼요');
-    r.advance(999); assert.equal(r.text(), '다음 열차 · 성수행 2분 5초 · 성수행 6분 5초');
-    r.advance(1); assert.equal(r.text(), '다음 열차 · 성수행 2분 4초 · 성수행 6분 4초');
-    r.advance(1000); assert.equal(r.text(), '다음 열차 · 성수행 2분 3초 · 성수행 6분 3초');
-    r.advance(5000); assert.equal(r.text(), '다음 열차 · 성수행 1분 58초 · 성수행 5분 58초');
+    assert.equal(r.text(), '다음 열차 성수행 2분 5초, 성수행 6분 5초', '30초가 빠지면 안 돼요');
+    r.advance(999); assert.equal(r.text(), '다음 열차 성수행 2분 5초, 성수행 6분 5초');
+    r.advance(1); assert.equal(r.text(), '다음 열차 성수행 2분 4초, 성수행 6분 4초');
+    r.advance(1000); assert.equal(r.text(), '다음 열차 성수행 2분 3초, 성수행 6분 3초');
+    r.advance(5000); assert.equal(r.text(), '다음 열차 성수행 1분 58초, 성수행 5분 58초');
     // 더 오래된 receivedAt(5분 전)도 마찬가지예요. 줄을 숨기지도 않아요.
     r.unmount();
     const old = nextTrains173Runtime();
     old.respond(async () => ok(arrivalsData({ receivedAt: old.ago(300), trains: [arrivalTrain({ secondsUntil: 200 })] })));
     old.text(); await flush();
-    assert.equal(old.text(), '다음 열차 · 성수행 3분 20초');
+    assert.equal(old.text(), '다음 열차 성수행 3분 20초');
     old.unmount();
 });
 
@@ -9374,20 +9377,20 @@ test('173 폴링 재조회: 새 secondsUntil 과 새 기준 시각으로 갱신�
     const r = nextTrains173Runtime();
     r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(15), trains: [arrivalTrain({ secondsUntil: 300 })] })));
     r.text(); await flush();
-    r.advance(19000); assert.equal(r.text(), '다음 열차 · 성수행 4분 41초');
+    r.advance(19000); assert.equal(r.text(), '다음 열차 성수행 4분 41초');
     // 20초 폴링: 서버가 요청 시점으로 보정한 새 값 290초, receivedAt 은 캐시라 20초 전
     const slow = deferred();
     r.respond(() => slow.promise);
     r.advance(1000); await flush();
     assert.equal(r.calls.length, 2);
-    assert.equal(r.text(), '다음 열차 · 성수행 4분 40초', '응답 전에는 이전 값으로 계속 세요');
+    assert.equal(r.text(), '다음 열차 성수행 4분 40초', '응답 전에는 이전 값으로 계속 세요');
     r.advance(3000); await flush();
-    assert.equal(r.text(), '다음 열차 · 성수행 4분 37초');
+    assert.equal(r.text(), '다음 열차 성수행 4분 37초');
     slow.resolve(ok(arrivalsData({ receivedAt: r.ago(20), trains: [arrivalTrain({ secondsUntil: 290 }), arrivalTrain({ secondsUntil: 61 })] })));
     await flush();
-    assert.equal(r.text(), '다음 열차 · 성수행 4분 50초 · 성수행 1분 1초', '새 값 그대로, receivedAt·요청 지연만큼 빼지 않아요');
-    r.advance(1000); assert.equal(r.text(), '다음 열차 · 성수행 4분 49초 · 성수행 1분 0초');
-    r.advance(1000); assert.equal(r.text(), '다음 열차 · 성수행 4분 48초 · 성수행 곧 도착');
+    assert.equal(r.text(), '다음 열차 성수행 4분 50초, 성수행 1분 1초', '새 값 그대로, receivedAt·요청 지연만큼 빼지 않아요');
+    r.advance(1000); assert.equal(r.text(), '다음 열차 성수행 4분 49초, 성수행 1분 0초');
+    r.advance(1000); assert.equal(r.text(), '다음 열차 성수행 4분 48초, 성수행 곧 도착');
     r.unmount();
     assert.equal(r.timers.size, 0);
 });
@@ -9396,15 +9399,15 @@ test('173 화면 복귀: 재조회 결과와 새 기준 시각으로 갱신하�
     const r = nextTrains173Runtime();
     r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(10), trains: [arrivalTrain({ secondsUntil: 400 })] })));
     r.text(); await flush();
-    r.advance(15000); assert.equal(r.text(), '다음 열차 · 성수행 6분 25초');
+    r.advance(15000); assert.equal(r.text(), '다음 열차 성수행 6분 25초');
     r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(18), trains: [arrivalTrain({ secondsUntil: 380 })] })));
     r.refocus();
     r.text(); // 이 렌더 뒤에 이전 효과 정리 + 다시 조회가 돌아요.
     assert.equal(r.text(), '다음 열차 확인 중', '복귀하면 이전 값을 지우고 다시 불러요');
     await flush();
     assert.equal(r.calls.length, 2);
-    assert.equal(r.text(), '다음 열차 · 성수행 6분 20초');
-    r.advance(2000); assert.equal(r.text(), '다음 열차 · 성수행 6분 18초');
+    assert.equal(r.text(), '다음 열차 성수행 6분 20초');
+    r.advance(2000); assert.equal(r.text(), '다음 열차 성수행 6분 18초');
     // 복귀 후 폴링도 복귀 시점부터 20초예요(이전 타이머는 정리됨).
     r.advance(17999); await flush(); assert.equal(r.calls.length, 2);
     r.advance(1); await flush(); assert.equal(r.calls.length, 3);
@@ -9418,14 +9421,14 @@ test('173 조회 실패: 인증 오류는 이전 값·이전 기준 시각으로
     r.text(); await flush();
     r.respond(async () => fail('TOKEN_INVALID'));
     r.advance(20000); await flush();
-    assert.equal(r.text(), '다음 열차 · 성수행 9분 40초', '실패 시 기준 시각을 지금으로 바꾸지 않아요');
-    r.advance(5000); assert.equal(r.text(), '다음 열차 · 성수행 9분 35초');
+    assert.equal(r.text(), '다음 열차 성수행 9분 40초', '실패 시 기준 시각을 지금으로 바꾸지 않아요');
+    r.advance(5000); assert.equal(r.text(), '다음 열차 성수행 9분 35초');
     r.respond(async () => jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR' } }, 500));
     r.advance(15000); await flush();
     assert.equal(r.text(), null);
     r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(25), trains: [arrivalTrain({ secondsUntil: 500 })] })));
     r.advance(20000); await flush();
-    assert.equal(r.text(), '다음 열차 · 성수행 8분 20초');
+    assert.equal(r.text(), '다음 열차 성수행 8분 20초');
     r.unmount();
 });
 
@@ -9436,17 +9439,17 @@ test('173 표시 규칙 유지: null 은 message, 0초·60초 미만은 곧 도�
             arrivalTrain({ secondsUntil: 0, message: '전역 도착' }),
         ] })));
     r.text(); await flush();
-    assert.equal(r.text(), '다음 열차 · 성수행 · 3번째 전역 (남영) · 성수행 곧 도착');
+    assert.equal(r.text(), '다음 열차 성수행 · 3번째 전역 (남영), 성수행 곧 도착');
     r.advance(10000);
-    assert.equal(r.text(), '다음 열차 · 성수행 · 3번째 전역 (남영) · 성수행 곧 도착');
+    assert.equal(r.text(), '다음 열차 성수행 · 3번째 전역 (남영), 성수행 곧 도착');
     r.unmount();
     for (const [seconds, shown] of [[60, '성수행 1분 0초'], [59, '성수행 곧 도착'], [1, '성수행 곧 도착']]) {
         const one = nextTrains173Runtime();
         one.respond(async () => ok(arrivalsData({ receivedAt: one.ago(50), trains: [arrivalTrain({ secondsUntil: seconds })] })));
         one.text(); await flush();
-        assert.equal(one.text(), `다음 열차 · ${shown}`, String(seconds));
+        assert.equal(one.text(), `다음 열차 ${shown}`, String(seconds));
         one.advance(19000);
-        assert.equal(one.text(), '다음 열차 · 성수행 곧 도착', `${seconds} 0 아래로 내려가지 않아요`);
+        assert.equal(one.text(), '다음 열차 성수행 곧 도착', `${seconds} 0 아래로 내려가지 않아요`);
         one.unmount();
     }
 });
@@ -9454,13 +9457,13 @@ test('173 표시 규칙 유지: null 은 message, 0초·60초 미만은 곧 도�
 test('173 mock 모드: receivedAt 이 지금이라 결과가 그대로이고 폴링 후에도 같은 열차 시각을 세요', async () => {
     const r = nextTrains173Runtime({});
     r.text(); r.advance(400); await flush();
-    assert.equal(r.text(), '다음 열차 · 성수행 3분 2초 · 성수행 7분 2초');
+    assert.equal(r.text(), '다음 열차 성수행 3분 2초, 성수행 7분 2초');
     // 표시는 1초 틱(0·1000·…ms)에 바뀌어요. 400ms 에 받은 값이라 5400ms 에는 5000ms 틱 기준 4초가 지난 값이에요(기존과 같음).
-    r.advance(5000); assert.equal(r.text(), '다음 열차 · 성수행 2분 58초 · 성수행 6분 58초');
-    r.advance(600); assert.equal(r.text(), '다음 열차 · 성수행 2분 57초 · 성수행 6분 57초');
+    r.advance(5000); assert.equal(r.text(), '다음 열차 성수행 2분 58초, 성수행 6분 58초');
+    r.advance(600); assert.equal(r.text(), '다음 열차 성수행 2분 57초, 성수행 6분 57초');
     // 20초 폴링(mock 400ms 지연) 뒤: 열차 도착 시각은 그대로라 182 − 20.4 → 162초
     r.advance(14400); r.advance(400); await flush();
-    assert.equal(r.text(), '다음 열차 · 성수행 2분 42초 · 성수행 6분 42초');
+    assert.equal(r.text(), '다음 열차 성수행 2분 42초, 성수행 6분 42초');
     assert.equal(r.calls.length, 0);
     r.unmount();
 });

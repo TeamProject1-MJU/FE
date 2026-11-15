@@ -74,13 +74,14 @@ export default function NextTrains({ step, mock }: { step: RouteStep; mock?: Arr
     return (
         <View style={styles.row}>
             <Text style={styles.text}>
-                다음 열차{loading ? ' 확인 중' : ` · ${data!.trains.slice(0, 2).map(train => formatNextTrain(train, elapsed)).join(' · ')}`}
+                다음 열차{loading ? ' 확인 중' : ` ${data!.trains.slice(0, 2).map(train => formatNextTrain(train, elapsed)).join(', ')}`}
             </Text>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
-    row: { minHeight: 44, justifyContent: 'center' },
-    text: { color: '#6b7488', fontSize: 13, lineHeight: 22, fontWeight: '600' },
+    // 라벤더 시안(#196) 경로 안내 승차역 아래 줄
+    row: { marginTop: 2, justifyContent: 'center' },
+    text: { color: '#4A4553', fontSize: 12.5, lineHeight: 18 },
 });
