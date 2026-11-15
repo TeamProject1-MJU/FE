@@ -4890,7 +4890,7 @@ test('서버 홈: 7.3 방 목록으로 가장 가까운 약속 카드(서버 값
     assert.equal(card.props.accessibilityLabel, '다가오는 약속 가까운 서버 모임');
     const when = new Date(near.appointmentAt);
     assert.ok(findText(card, format.formatDday(when)));
-    assert.ok(findText(card, `${format.formatTime(when)} · 서버 역 88001역 · 3/4명`));
+    assert.ok(findText(card, `${new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', hour: 'numeric', minute: '2-digit' }).format(when)} 서버 역 88001역 3명`));
     card.props.onPress();
     assert.deepEqual(plain(r.pushes), [{ pathname: '/rooms/[roomId]', params: {
             roomId: near.id, roomName: '가까운 서버 모임', appointmentAt: format.formatAppointmentParam(when), maxMembers: '4',
@@ -4899,7 +4899,7 @@ test('서버 홈: 7.3 방 목록으로 가장 가까운 약속 카드(서버 값
     // 약속역이 없으면 기존 문구 "약속역 미정"이에요.
     r.respond(async () => ok([{ ...near, selectedStation: null }]));
     r.refocus(); await settle(); view = r.view();
-    assert.ok(findText(homeMeetingCard(view), `${format.formatTime(when)} · 약속역 미정 · 3/4명`));
+    assert.ok(findText(homeMeetingCard(view), `${new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', hour: 'numeric', minute: '2-digit' }).format(when)} 역 정하는 중 3명`));
     r.unmount();
 });
 
@@ -5267,7 +5267,7 @@ test('mock 홈은 HOME_UPCOMING_MEETING 그대로이고 서버를 부르지 않�
     const card = homeMeetingCard(view);
     assert.equal(card.props.accessibilityLabel, `다가오는 약속 ${HOME_UPCOMING_MEETING.title}`);
     assert.ok(findText(card, formatDday(HOME_UPCOMING_MEETING.appointmentAt)));
-    assert.ok(findText(card, `${formatTime(HOME_UPCOMING_MEETING.appointmentAt)} · 시청역 · 3/4명`));
+    assert.ok(findText(card, `${new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', hour: 'numeric', minute: '2-digit' }).format(HOME_UPCOMING_MEETING.appointmentAt)} 시청역 3명`));
     assert.equal(findText(view, '약속을 불러오고 있어요'), null);
     card.props.onPress();
     assert.deepEqual(plain(r.pushes), [{ pathname: '/rooms/[roomId]', params: {
