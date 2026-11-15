@@ -46,6 +46,7 @@ function createRuntime(env = {}, react = require('react')) {
         'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
         '@expo/vector-icons/Ionicons': 'Ionicons',
         'react-native-webview': { WebView: 'WebView' },
+        'expo-image': { Image: 'Image' },
         'expo-location': {
             Accuracy: { Balanced: 3 },
             getForegroundPermissionsAsync: async () => ({ granted: false }),
@@ -9796,4 +9797,39 @@ test('151 분석 중 경로가 바뀌면 이전 결과와 사진을 버리고 �
     assert.equal(texts125(view).includes('서버 판독 결과 CORRECT'), false); assert.ok(deletedCount125(r));
     await r.press('표지판 촬영'); r.respond(async () => jsonResponse({ success: true, data: response151() })); await r.press('AI로 확인하기');
     assert.equal(r.sent.at(-1).route.direction, 'DOWN'); r.unmount();
+});
+
+test('184 3D 아이콘: Passenger·TrainBlock·CongestionBlocks가 넣은 색으로 SVG를 그려요', () => {
+    const r = createScreenRuntime({}, 'src/components/passenger.tsx');
+    const svgOf = image => decodeURIComponent(image.props.source.uri.replace('data:image/svg+xml;utf8,', ''));
+    const Passenger = r.load('src/components/passenger.tsx').default;
+    const Train = r.load('src/components/train-block.tsx').default;
+    const Congestion = r.load('src/components/congestion-blocks.tsx').default;
+
+    const passenger = r.renderComponent({ type: Passenger, props: { tone: 'pink', size: 40 } });
+    assert.equal(passenger.type, 'Image'); assert.ok(svgOf(passenger).includes('#F8D7DA'));
+    assert.deepEqual(plain(passenger.props.style), { width: 40, height: 44 });
+
+    const train = props => r.renderComponent({ type: Train, props });
+    const line3 = train({ line: 3 }); assert.equal(line3.type, 'Image'); assert.equal(line3.props.accessible, false);
+    assert.equal(line3.props.contentFit, 'contain'); assert.ok(svgOf(line3).includes('#EF7C1C'));
+    assert.ok(svgOf(train({ line: '8' })).includes('#E6186C'));
+    assert.ok(svgOf(train({})).includes('#00A84D'));
+    assert.deepEqual(plain(train({}).props.style), { width: 48, height: 40 });
+    for (const line of [9, '공항', 0]) { const svg = svgOf(train({ line })); assert.ok(svg.includes('#B89BC7')); assert.equal(svg.includes('#00A84D'), false); }
+    assert.deepEqual(plain(train({ line: 1, size: 24 }).props.style), { width: 24, height: 20 });
+
+    const tops = view => findAll125(view, e => e.type === 'Image').map(image => svgOf(image).match(/points="20,2 34,9 20,16 6,9" fill="(#[0-9A-F]{6})"/)[1]);
+    const congestion = level => r.renderComponent({ type: Congestion, props: { level } });
+    const GREEN = '#E1EEC2'; const OFF = '#F3F1F5'; const RED = '#F6C3C6'; const MINT = '#D2EEE2';
+    let view = congestion(2);
+    assert.equal(view.type, 'View'); assert.equal(view.props.accessibilityLabel, '혼잡도 여유');
+    assert.deepEqual(tops(view), [GREEN, GREEN, OFF, OFF, OFF]);
+    view = congestion(0); assert.equal(view.props.accessibilityLabel, '혼잡도 미제공'); assert.deepEqual(tops(view), Array(5).fill(OFF));
+    view = congestion(9); assert.equal(view.props.accessibilityLabel, '혼잡도 매우 혼잡'); assert.deepEqual(tops(view), Array(5).fill(RED));
+    view = congestion(-3); assert.equal(view.props.accessibilityLabel, '혼잡도 미제공'); assert.deepEqual(tops(view), Array(5).fill(OFF));
+    view = congestion(1); assert.equal(view.props.accessibilityLabel, '혼잡도 쾌적'); assert.deepEqual(tops(view), [MINT, OFF, OFF, OFF, OFF]);
+    const block = findAll125(view, e => e.type === 'Image')[0];
+    assert.deepEqual(plain(block.props.style), { width: 14, height: 14 * 1.1 });
+    r.unmount();
 });
