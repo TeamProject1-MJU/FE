@@ -9,6 +9,7 @@ import {
     ScrollView,
     StyleSheet,
     View,
+    useWindowDimensions,
 } from 'react-native';
 import { Text, TextInput } from '@/components/app-text';
 
@@ -65,6 +66,8 @@ export default function RoomChatPanel({
     ownerId?: string;
     onInputFocus?: () => void;
 }) {
+    const { height: windowHeight } = useWindowDimensions();
+    const listHeight = Math.max(360, windowHeight - 260);
     const list = useRef<ScrollView>(null);
     const input = useRef<TextInput>(null);
     const nearBottom = useRef(true);
@@ -225,7 +228,7 @@ export default function RoomChatPanel({
 
             <ScrollView
                 ref={list}
-                style={styles.list}
+                style={[styles.list, { height: listHeight }]}
                 contentContainerStyle={styles.listContent}
                 nestedScrollEnabled
                 keyboardShouldPersistTaps="handled"
@@ -374,8 +377,7 @@ export default function RoomChatPanel({
                                     {message.kind === 'ai' && <View style={styles.aiAvatar}><Text style={styles.aiAvatarText}>LR</Text></View>}
                                     <View style={[styles.messageBody, message.kind === 'mine' && styles.mineBody]}>
                                         <Text style={[styles.meta, message.kind === 'ai' && styles.aiName]}>
-                                            {message.name} ·{' '}
-                                            {dateLabel(message.createdAt)}
+                                            {message.kind === 'mine' ? dateLabel(message.createdAt) : `${message.name} · ${dateLabel(message.createdAt)}`}
                                         </Text>
 
                                         <View
@@ -586,12 +588,12 @@ const styles = StyleSheet.create({
         backgroundColor: '#fff',
     },
     list: {
-        height: 360,
+        flexShrink: 0,
     },
     listContent: {
         flexGrow: 1,
         gap: 12,
-        paddingBottom: 8,
+        paddingBottom: 16,
     },
     history: {
         alignItems: 'center',

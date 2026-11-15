@@ -33,6 +33,7 @@ function createRuntime(env = {}, react = require('react')) {
             change(state) { this.currentState = state; for (const listener of [...this.listeners]) listener(state); },
         },
         StyleSheet: { create: value => value },
+        useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
         Platform: { OS: 'web', select: value => value.web },
         Keyboard: { dismiss() {} },
     };
