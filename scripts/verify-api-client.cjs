@@ -3909,7 +3909,12 @@ test('서버 방 상세는 서버의 내 카드·방장 권한·출발역을 사
         const r = roomQueryScreen('src/app/rooms/[roomId].tsx', { roomId: ROOM_QUERY_ID });
         r.context.fetch = async () => jsonResponse({ success: true, data: roomQueryDetail(role) });
         r.render(); await settle(); r.advance(1000); await settle(); const view = r.render();
-        assert.ok(findElement(view, element => element.props?.children === (role === 'OWNER' ? '내 역할 · 방장' : '내 역할 · 멤버')));
+        assert.ok(!textOf(view).includes('내 역할'));
+        if (role === 'OWNER') {
+            const avatar = findElement(view, element => element.type === r.load('src/components/rooms/member-avatar.tsx').default && element.props.isOwner);
+            assert.ok(avatar);
+            assert.ok(findElement(avatar.type(avatar.props), element => element.props?.accessibilityLabel === '방장'));
+        }
         assert.ok(findElement(view, element => element.props?.children === '나'));
         assert.ok(findElement(view, element => element.props?.accessibilityLabel === '내 출발역 변경'));
         const header = findElement(view, element => element.props?.topInset !== undefined && element.props?.onBack);
