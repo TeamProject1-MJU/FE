@@ -4,9 +4,9 @@ import {
     Pressable,
     ScrollView,
     StyleSheet,
-    Text,
     View,
 } from 'react-native';
+import { Text } from '@/components/app-text';
 
 const NAVY = '#0f1c3f';
 const MINT = '#2bcf9a';

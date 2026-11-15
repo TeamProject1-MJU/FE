@@ -1,6 +1,7 @@
 import { formatStationName } from '@/utils/station-name';
 import { useState } from 'react';
-import { LayoutChangeEvent, StyleSheet, Text, View } from 'react-native';
+import { LayoutChangeEvent, StyleSheet, View } from 'react-native';
+import { Text } from '@/components/app-text';
 
 import type { Route } from '@/types/route';
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { router, useLocalSearchParams } from 'expo-router';
-import { ActivityIndicator, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, Share, StyleSheet, View } from 'react-native';
+import { Text, TextInput } from '@/components/app-text';
 import * as Clipboard from 'expo-clipboard';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -309,14 +310,14 @@ function CreatedView({
 const styles = StyleSheet.create({
     doneContent: { flex: 1, alignItems: 'center', paddingHorizontal: 20 },
     doneIcon: { width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center', backgroundColor: MINT },
-    doneTitle: { marginTop: 16, color: NAVY, fontSize: 22, fontWeight: '900' },
+    doneTitle: { marginTop: 16, color: NAVY, fontSize: 22, fontWeight: '800' },
     doneCaption: { marginTop: 6, color: SECONDARY, fontSize: 13.5, fontWeight: '600' },
     roomCard: { alignSelf: 'stretch', marginTop: 24, padding: 16, borderRadius: 16, borderWidth: 1, borderColor: BORDER, backgroundColor: WHITE },
     roomName: { color: NAVY, fontSize: 17, fontWeight: '800' },
     roomMeta: { marginTop: 5, color: SECONDARY, fontSize: 13, fontWeight: '600' },
     codeLabel: { alignSelf: 'flex-start', marginTop: 22, marginBottom: 8, color: NAVY, fontSize: 13, fontWeight: '800' },
     codeBox: { alignSelf: 'stretch', height: 64, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderRadius: 16, borderWidth: 1.5, borderColor: MINT, backgroundColor: MINT_SOFT },
-    codeText: { color: NAVY, fontSize: 26, fontWeight: '900', letterSpacing: 6 },
+    codeText: { color: NAVY, fontSize: 26, fontWeight: '800', letterSpacing: 6 },
     copyChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 9, backgroundColor: WHITE },
     copyText: { color: MINT_DEEP, fontSize: 12.5, fontWeight: '800' },
     codeHint: { alignSelf: 'flex-start', marginTop: 8, color: SECONDARY, fontSize: 12, fontWeight: '600' },

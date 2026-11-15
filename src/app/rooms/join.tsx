@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { router } from 'expo-router';
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { Text, TextInput } from '@/components/app-text';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -203,14 +204,14 @@ const styles = StyleSheet.create({
     content: { paddingHorizontal: 20, paddingTop: 16 },
     hero: { alignItems: 'center', marginBottom: 30 },
     heroIcon: { width: 58, height: 58, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: MINT },
-    title: { marginTop: 16, color: NAVY, fontSize: 22, fontWeight: '900', lineHeight: 30, textAlign: 'center' },
+    title: { marginTop: 16, color: NAVY, fontSize: 22, fontWeight: '800', lineHeight: 30, textAlign: 'center' },
     caption: { marginTop: 8, color: SECONDARY, fontSize: 13, fontWeight: '600' },
     label: { color: NAVY, fontSize: 13, fontWeight: '800', marginBottom: 10 },
     codeRow: { flexDirection: 'row', gap: 8 },
     codeBox: { flex: 1, height: 52, borderRadius: 12, borderWidth: 1.5, borderColor: BORDER, backgroundColor: WHITE, alignItems: 'center', justifyContent: 'center' },
     codeBoxActive: { borderColor: NAVY },
     codeBoxError: { borderColor: RED },
-    codeChar: { color: NAVY, fontSize: 20, fontWeight: '900' },
+    codeChar: { color: NAVY, fontSize: 20, fontWeight: '800' },
     // 6칸 위를 덮는 실제 입력창. iOS 는 opacity 0 인 뷰를 터치하지 못하므로 글자만 투명하게 둡니다.
     hiddenInput: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, color: 'transparent', backgroundColor: 'transparent', fontSize: 1 },
     errorRow: { marginTop: 9, flexDirection: 'row', alignItems: 'center', gap: 5 },

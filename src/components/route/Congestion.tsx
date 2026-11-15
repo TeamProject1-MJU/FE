@@ -1,4 +1,5 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { Text } from '@/components/app-text';
 
 import type { CongestionSlot } from '@/types/congestion';
 import type { Congestion as CongestionData, CongestionLevel } from '@/types/route';

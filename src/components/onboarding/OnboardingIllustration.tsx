@@ -1,4 +1,5 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { Text } from '@/components/app-text';
 
 const NAVY = '#0f1c3f';
 const people = ['민', '준', '서', '지'];

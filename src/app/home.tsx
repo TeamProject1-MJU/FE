@@ -8,10 +8,10 @@ import {
     Pressable,
     ScrollView,
     StyleSheet,
-    Text,
     useWindowDimensions,
     View,
 } from 'react-native';
+import { Text } from '@/components/app-text';
 import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';

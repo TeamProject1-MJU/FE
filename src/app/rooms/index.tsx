@@ -1,7 +1,8 @@
 import { formatStationName } from '@/utils/station-name';
 import { useCallback, useRef, useState } from 'react';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Text } from '@/components/app-text';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -387,7 +388,7 @@ const styles = StyleSheet.create({
     dday: {
         color: MINT,
         fontSize: 13,
-        fontWeight: '900',
+        fontWeight: '800',
     },
 
     dateText: {

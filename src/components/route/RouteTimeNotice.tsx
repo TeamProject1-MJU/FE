@@ -1,4 +1,5 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { Text } from '@/components/app-text';
 import type { Route, RouteTimeSelection } from '@/types/route';
 import { formatRouteTimeSelection } from '@/utils/route-time';
 

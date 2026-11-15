@@ -7,10 +7,9 @@ import {
     Pressable,
     ScrollView,
     StyleSheet,
-    Text,
-    TextInput,
     View,
 } from 'react-native';
+import { Text, TextInput } from '@/components/app-text';
 
 import type { useRoomChat } from '@/hooks/use-room-chat';
 import { toChatDisplayContent } from '@/services/chat';
