@@ -1,7 +1,8 @@
+import BottomTabBar, { useTabBarHeight } from '@/components/bottom-tab-bar';
 import { useMock } from '@/services/api/config';
 import { ApiError, API_ERROR_MESSAGES, isAuthError } from '@/services/api/errors';
 import { ComponentProps, ReactNode, useCallback, useEffect, useState } from 'react';
-import { router, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import {
     ActivityIndicator,
     BackHandler,
@@ -45,10 +46,6 @@ function userErrorMessage(error: unknown, fallback: string): string {
     }
     return fallback;
 }
-
-
-const TAB_BAR_CONTENT_HEIGHT = 58;
-
 /**
  * 마이페이지 (#38, 상세설계서 5.5 그림 40~43, API 명세 4.3~4.6)
  *
@@ -75,7 +72,7 @@ export default function MyScreen() {
     useRedirectIfSignedOut();
     const permissions = useAppPermissions();
 
-    const tabBarHeight = TAB_BAR_CONTENT_HEIGHT + Math.max(insets.bottom, 8);
+    const tabBarHeight = useTabBarHeight();
 
     const loadUser = useCallback(async () => {
         setLoad({ kind: 'loading' });
@@ -225,12 +222,7 @@ export default function MyScreen() {
             </ScrollView>
 
             {/* 하단 탭바 (홈·경로·약속방·마이) */}
-            <View style={[styles.tabBar, { height: tabBarHeight, paddingBottom: Math.max(insets.bottom, 8) }]}>
-                <BottomTab icon="home-outline" label="홈" onPress={() => router.navigate('/home')} />
-                <BottomTab icon="navigate-outline" label="경로" onPress={() => router.push('/route-search')} />
-                <BottomTab icon="chatbubbles-outline" label="약속방" onPress={() => router.push('/rooms')} />
-                <BottomTab icon="person" label="마이" active onPress={() => undefined} />
-            </View>
+            <BottomTabBar active="my" />
 
             {!!toast && (
                 <View style={[styles.toast, { bottom: tabBarHeight + 16 }]} accessibilityLiveRegion="polite">
@@ -559,30 +551,6 @@ function ConfirmSheet({
     );
 }
 
-function BottomTab({
-                       icon,
-                       label,
-                       active = false,
-                       onPress,
-                   }: {
-    icon: IoniconName;
-    label: string;
-    active?: boolean;
-    onPress: () => void;
-}) {
-    return (
-        <Pressable
-            style={styles.tabItem}
-            onPress={onPress}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: active }}
-        >
-            <Ionicons name={icon} size={23} color={active ? NAVY : DISABLED} />
-            <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{label}</Text>
-        </Pressable>
-    );
-}
-
 const styles = StyleSheet.create({
     flex: {
         flex: 1,
@@ -769,37 +737,6 @@ const styles = StyleSheet.create({
         width: 1,
         height: 11,
         backgroundColor: DIVIDER,
-    },
-
-    tabBar: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        bottom: 0,
-        paddingTop: 10,
-        paddingHorizontal: 16,
-        flexDirection: 'row',
-        justifyContent: 'space-around',
-        borderTopWidth: 1,
-        borderTopColor: DIVIDER,
-        backgroundColor: CARD,
-    },
-
-    tabItem: {
-        width: 68,
-        alignItems: 'center',
-        gap: 3,
-    },
-
-    tabLabel: {
-        color: DISABLED,
-        fontSize: 12,
-        fontWeight: '600',
-    },
-
-    tabLabelActive: {
-        color: NAVY,
-        fontWeight: '800',
     },
 
     toast: {
