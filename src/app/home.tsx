@@ -239,6 +239,7 @@ export default function HomeScreen() {
                             style={({ pressed }) => [styles.allMeetingsButton, pressed && styles.pressed]}
                             onPress={() => router.push('/rooms')}
                             accessibilityRole="button"
+                            accessibilityLabel="전체 보기"
                         >
                             <Text style={styles.allMeetingsText}>전체 보기</Text>
                         </Pressable>
@@ -314,6 +315,7 @@ export default function HomeScreen() {
                             style={({ pressed }) => [styles.roomButton, styles.createRoomButton, pressed && styles.pressed]}
                             onPress={() => router.push('/rooms/new')}
                             accessibilityRole="button"
+                            accessibilityLabel="방 만들기"
                         >
                             <Text style={styles.createRoomText}>방 만들기</Text>
                         </Pressable>
@@ -321,6 +323,7 @@ export default function HomeScreen() {
                             style={({ pressed }) => [styles.roomButton, styles.joinRoomButton, pressed && styles.pressed]}
                             onPress={() => router.push('/rooms/join')}
                             accessibilityRole="button"
+                            accessibilityLabel="코드로 참여"
                         >
                             <Text style={styles.joinRoomText}>코드로 참여</Text>
                         </Pressable>
