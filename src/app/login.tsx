@@ -23,7 +23,7 @@ const HOME_ROUTE = '/home';
 export default function LoginScreen() {
     const insets = useSafeAreaInsets();
     const { height } = useWindowDimensions();
-    const brandPaddingTop = Math.max(24, 172 - Math.max(0, 760 - height));
+    const brandPaddingTop = Math.max(height * 0.16, insets.top + 56);
 
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState('');
@@ -44,14 +44,14 @@ export default function LoginScreen() {
             <StatusBar style="dark" />
 
             {/* 브랜드 영역: 캐릭터 + 로고 + 태그라인 */}
-            <View style={[styles.brand, { paddingTop: brandPaddingTop + insets.top }]}>
+            <View style={[styles.brand, { paddingTop: brandPaddingTop }]}>
                 <View style={styles.passengers}>
                     <Passenger tone="me" size={76} />
                     <Passenger tone="other" size={58} />
                     <Passenger tone="pink" size={46} />
                 </View>
                 <View style={styles.logo}>
-                    <LinkRoLogo size={44} />
+                    <LinkRoLogo size={44} showBars={false} roWeight="800" />
                 </View>
                 <Text style={styles.tagline}>{'지하철 경로, 혼잡도, 약속까지\n한 번에 확인해요.'}</Text>
             </View>
@@ -137,7 +137,7 @@ const styles = StyleSheet.create({
 
     tagline: {
         marginTop: 16,
-        color: '#6E6A77',
+        color: '#4A4652',
         fontSize: 16,
         lineHeight: 24,
         fontWeight: '500',
