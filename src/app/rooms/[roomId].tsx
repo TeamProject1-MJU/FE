@@ -8,9 +8,9 @@ import {
     Pressable,
     ScrollView,
     StyleSheet,
-    Text,
     View,
 } from 'react-native';
+import { Text } from '@/components/app-text';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -840,7 +840,7 @@ const styles = StyleSheet.create({
     roleText: { color: '#dfe5f1', fontSize: 11, fontWeight: '700' },
     editButton: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 10, height: 28, borderRadius: 9, backgroundColor: '#2a3a63' },
     editText: { color: WHITE, fontSize: 12, fontWeight: '800' },
-    roomName: { marginTop: 14, color: WHITE, fontSize: 22, fontWeight: '900' },
+    roomName: { marginTop: 14, color: WHITE, fontSize: 22, fontWeight: '800' },
     infoRow: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 5 },
     infoText: { color: '#dfe5f1', fontSize: 13, fontWeight: '600' },
     stationStrip: { marginTop: 16, padding: 12, borderRadius: 14, backgroundColor: '#1b2b55', flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -848,8 +848,8 @@ const styles = StyleSheet.create({
     stripCaption: { marginTop: 3, color: WHITE, fontSize: 14, fontWeight: '700' },
     stationRow: { marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 5 },
     lineBadge: { minWidth: 20, height: 20, paddingHorizontal: 5, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-    lineText: { color: WHITE, fontSize: 11, fontWeight: '900' },
-    stationName: { marginLeft: 2, color: WHITE, fontSize: 17, fontWeight: '900' },
+    lineText: { color: WHITE, fontSize: 11, fontWeight: '800' },
+    stationName: { marginLeft: 2, color: WHITE, fontSize: 17, fontWeight: '800' },
     routeHint: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 6, padding: 10, borderRadius: 10, backgroundColor: '#fff4e0' },
     routeHintText: { flex: 1, color: NAVY, fontSize: 13, fontWeight: '700' },
     stripButton: { paddingHorizontal: 13, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#4a5a83' },
@@ -909,7 +909,7 @@ const styles = StyleSheet.create({
 
     backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,28,63,0.45)' },
     sheet: { paddingHorizontal: 20, paddingTop: 22, borderTopLeftRadius: 24, borderTopRightRadius: 24, backgroundColor: WHITE },
-    sheetTitle: { color: NAVY, fontSize: 19, fontWeight: '900', marginBottom: 12 },
+    sheetTitle: { color: NAVY, fontSize: 19, fontWeight: '800', marginBottom: 12 },
     sheetBody: { color: '#3c4559', fontSize: 14.5, lineHeight: 22, fontWeight: '600' },
     sheetHint: { marginTop: 8, color: SECONDARY, fontSize: 12.5, lineHeight: 19 },
     sheetButtons: { marginTop: 20, flexDirection: 'row', gap: 10 },

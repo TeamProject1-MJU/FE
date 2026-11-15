@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Redirect, usePathname } from 'expo-router';
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, View } from 'react-native';
+import { Text } from '@/components/app-text';
 import { useMock } from '@/services/api/config';
 import { refreshSession } from '@/services/auth';
 import { ApiError, isAuthError } from '@/services/api/errors';

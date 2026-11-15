@@ -8,9 +8,9 @@ import {
     Pressable,
     ScrollView,
     StyleSheet,
-    Text,
     View,
 } from 'react-native';
+import { Text } from '@/components/app-text';
 
 import { ApiError, isAuthError } from '@/services/api/errors';
 import { getSessionGeneration } from '@/services/auth';

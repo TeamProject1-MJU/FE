@@ -5,7 +5,8 @@ import { formatStationName } from '@/utils/station-name';
 import { directionInputFromStep, directionStepIssue, normalizeDirectionRoute } from '@/utils/direction-route';
 import { formatClock, formatTotalTime } from '@/components/route/format';
 import { router, useLocalSearchParams } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Text } from '@/components/app-text';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -336,7 +337,7 @@ const styles = StyleSheet.create({
     time: {
         color: NAVY,
         fontSize: 24,
-        fontWeight: '900',
+        fontWeight: '800',
     },
 
     arrival: {

@@ -10,10 +10,9 @@ import {
     Pressable,
     ScrollView,
     StyleSheet,
-    Text,
-    TextInput,
     View,
 } from 'react-native';
+import { Text, TextInput } from '@/components/app-text';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
