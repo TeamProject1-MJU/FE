@@ -142,7 +142,7 @@ export default function MyScreen() {
                                     accessibilityRole="button"
                                     accessibilityLabel="닉네임 수정"
                                 >
-                                    <Text style={styles.smallButtonText}>수정</Text>
+                                    <Text style={styles.smallButtonText}>닉네임 수정</Text>
                                 </Pressable>
                             </View>
                             {/* 로그인은 카카오만 지원 (명세 4.1) */}
@@ -153,17 +153,17 @@ export default function MyScreen() {
 
                 {/* ❷ 앱 권한 */}
                 <Text style={styles.sectionTitle}>앱 권한</Text>
-                <View>
+                <View style={styles.card}>
                     {APP_PERMISSIONS.map((item, index) => {
                         const state = permissions.states[item.key];
                         const display = state === 'loading' ? null : PERMISSION_DISPLAY[state];
-                        const color = state === 'granted' ? UiColors.purple : state === 'denied' ? UiColors.red : UiColors.muted;
+                        const color = state === 'granted' ? UiColors.purple : state === 'denied' ? UiColors.sheetDanger : UiColors.muted;
                         return (
                             <Pressable
                                 key={item.key}
                                 style={({ pressed }) => [
                                     styles.listRow,
-                                    index < APP_PERMISSIONS.length - 1 && styles.listDivider,
+                                    index > 0 && styles.listDivider,
                                     pressed && styles.pressed,
                                 ]}
                                 // 허용·허용 안 함은 기기 설정을 열고, 아직 묻지 않음은 바로 요청, 확인할 수 없음은 다시 조회해요.
@@ -188,20 +188,20 @@ export default function MyScreen() {
 
                 {/* ❸ ❹ 계정 */}
                 <Text style={styles.sectionTitle}>계정</Text>
-                <View>
+                <View style={styles.card}>
                     <Pressable
-                        style={({ pressed }) => [styles.listRow, styles.listDivider, pressed && styles.pressed]}
+                        style={({ pressed }) => [styles.listRow, pressed && styles.pressed]}
                         onPress={() => setSheet('logout')}
                         accessibilityRole="button"
                     >
-                        <Text style={styles.listLabel}>로그아웃</Text>
+                        <Text style={[styles.listLabel, { color: UiColors.sheetDanger }]}>로그아웃</Text>
                     </Pressable>
                     <Pressable
-                        style={({ pressed }) => [styles.listRow, pressed && styles.pressed]}
+                        style={({ pressed }) => [styles.listRow, styles.listDivider, pressed && styles.pressed]}
                         onPress={() => setSheet('withdraw')}
                         accessibilityRole="button"
                     >
-                        <Text style={[styles.listLabel, { color: UiColors.faint }]}>회원 탈퇴</Text>
+                        <Text style={styles.listLabel}>회원 탈퇴</Text>
                     </Pressable>
                 </View>
 
@@ -558,39 +558,39 @@ const styles = StyleSheet.create({
 
     headerTitle: {
         color: UiColors.ink,
-        fontSize: 26,
+        fontSize: 30,
         fontWeight: '800',
         letterSpacing: -0.6,
+        paddingBottom: 14,
     },
 
     content: {
         paddingHorizontal: 20,
-        paddingTop: 12,
+        paddingTop: 14,
     },
 
     card: {
         overflow: 'hidden',
-        borderRadius: 22,
+        borderRadius: 16,
         borderWidth: 1,
-        borderColor: UiColors.cardBorder,
+        borderColor: UiColors.line,
         backgroundColor: UiColors.white,
-        marginTop: 18,
     },
 
     profile: {
-        padding: 18,
+        padding: 16,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 16,
+        gap: 14,
     },
 
     avatar: {
-        width: 76,
-        height: 76,
-        borderRadius: 20,
+        width: 72,
+        height: 72,
+        borderRadius: 14,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: UiColors.avatar,
+        backgroundColor: UiColors.tint,
     },
 
     nicknameRow: {
@@ -603,28 +603,28 @@ const styles = StyleSheet.create({
         flexShrink: 1,
         color: UiColors.ink,
         fontSize: 20,
-        fontWeight: '700',
+        fontWeight: '800',
     },
 
     loginType: {
-        marginTop: 6,
+        marginTop: 4,
         color: UiColors.muted,
-        fontSize: 12.5,
+        fontSize: 13,
     },
 
     smallButton: {
-        height: 30,
+        paddingVertical: 6,
         paddingHorizontal: 10,
         borderRadius: 8,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: UiColors.chip,
+        backgroundColor: UiColors.tint,
     },
 
     smallButtonText: {
         color: UiColors.purple,
         fontSize: 12.5,
-        fontWeight: '600',
+        fontWeight: '700',
     },
 
     skeleton: {
@@ -674,24 +674,25 @@ const styles = StyleSheet.create({
     },
 
     sectionTitle: {
-        marginTop: 24,
-        marginBottom: 4,
+        marginTop: 22,
+        marginHorizontal: 4,
+        marginBottom: 8,
         color: UiColors.ink,
-        fontSize: 14,
-        fontWeight: '700',
+        fontSize: 15,
+        fontWeight: '800',
     },
 
     listRow: {
-        minHeight: 52,
-        paddingVertical: 8,
+        paddingVertical: 15,
+        paddingHorizontal: 16,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
     },
 
     listDivider: {
-        borderBottomWidth: 1,
-        borderBottomColor: UiColors.lineSoft,
+        borderTopWidth: 1,
+        borderTopColor: UiColors.lineSoft,
     },
 
     listLabel: {
@@ -700,7 +701,7 @@ const styles = StyleSheet.create({
     },
 
     permission: {
-        fontSize: 13.5,
+        fontSize: 13,
         fontWeight: '700',
     },
 
@@ -708,11 +709,11 @@ const styles = StyleSheet.create({
         marginTop: 2,
         color: UiColors.muted,
         fontSize: 12,
-        fontWeight: '600',
+        fontWeight: '400',
     },
 
     footer: {
-        marginTop: 20,
+        marginTop: 22,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
@@ -720,8 +721,8 @@ const styles = StyleSheet.create({
     },
 
     footerText: {
-        color: UiColors.faint,
-        fontSize: 11.5,
+        color: UiColors.tabInactive,
+        fontSize: 12,
     },
 
     footerBar: {
