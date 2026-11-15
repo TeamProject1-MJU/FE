@@ -17,20 +17,15 @@ import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
-import LinkRoLogo from '@/components/linkro-logo';
 import KakaoMap from '@/components/KakaoMap';
 import { useHomeMap } from '@/hooks/use-home-map';
 import { getAuthStatus, getSession, useRedirectIfSignedOut } from '@/stores/auth-store';
-import {
-    formatDday,
-    formatMonthDay,
-    formatTime,
-    HOME_UPCOMING_MEETING,
-} from '@/constants/home-mock';
+import { HOME_UPCOMING_MEETING } from '@/constants/home-mock';
 import { useMock as isMockMode } from '@/services/api/config';
 import { ApiError, isAuthError } from '@/services/api/errors';
 import { getSessionGeneration } from '@/services/auth';
 import { fetchMyRooms } from '@/services/room';
+import { formatSeoulMonthDay, formatSeoulTime, seoulDateKey } from '@/utils/seoul-time';
 import { meetingRoomParams, pickUpcomingRoom, toHomeMeeting, type HomeMeetingCard } from '@/utils/upcoming-meeting';
 
 const PURPLE = '#5C3F78';
@@ -38,7 +33,6 @@ const INK = '#25212D';
 const MUTED = '#83808B';
 const TINT = '#EDE8F3';
 const LINE = '#E8E4ED';
-const DIVIDER_SOFT = '#EFEBF3';
 const CHEVRON = '#B4AFBC';
 const HANDLE = '#DCD7E3';
 
@@ -48,6 +42,39 @@ const SECONDARY = '#6b7488';
 
 /** 작은 화면에서 지도가 가려지지 않도록 시트가 차지할 수 있는 최대 비율 */
 const SHEET_MAX_RATIO = 0.55;
+
+/**
+ * 약속 카드 왼쪽 날짜 배지 문구 (#193). 기기 시간대가 아니라 서울 달력 날짜로 세요.
+ * 오늘 → "오늘", 하루 뒤 → "내일", 그 뒤 → "D-6", 지난 날 → "D+1". 읽을 수 없는 시각이면 null(배지 없음).
+ */
+function meetingBadgeLabel(appointmentAt: Date, now = new Date()) {
+    if (!Number.isFinite(appointmentAt.getTime())) return null;
+    const target = seoulDateKey(appointmentAt.toISOString());
+    const today = seoulDateKey(now.toISOString());
+    if (!target || !today) return null;
+    const diff = Math.round((Date.parse(target) - Date.parse(today)) / 86_400_000);
+    if (diff === 0) return '오늘';
+    if (diff === 1) return '내일';
+    return diff > 0 ? `D-${diff}` : `D+${-diff}`;
+}
+
+/** 약속 시각을 서울 기준 "오후 2:00" 으로 보여줘요 (#193). 읽을 수 없으면 빈 문자열이에요. */
+function formatMeetingClock(appointmentAt: Date) {
+    if (!Number.isFinite(appointmentAt.getTime())) return '';
+    const hhmm = formatSeoulTime(appointmentAt.toISOString());
+    if (!hhmm) return '';
+    const [hour, minute] = hhmm.split(':').map(Number);
+    return `${hour < 12 ? '오전' : '오후'} ${hour % 12 === 0 ? 12 : hour % 12}:${String(minute).padStart(2, '0')}`;
+}
+
+/** 약속 카드 설명 "오후 2:00 역 정하는 중 4명" (#193). 시안처럼 공백 한 칸으로 구분해요. */
+function meetingDescription(meeting: HomeMeetingCard) {
+    return [
+        formatMeetingClock(meeting.appointmentAt),
+        meeting.stationName ? formatStationName(meeting.stationName) : '역 정하는 중',
+        `${meeting.memberCount}명`,
+    ].filter(Boolean).join(' ');
+}
 
 /** 서버 모드 "다가오는 약속" 상태. done 은 어느 계정(로그인 세대:userId)의 결과인지 같이 들고 있어요. */
 type MeetingLoad =
@@ -173,10 +200,10 @@ export default function HomeScreen() {
                 accessibilityRole="search"
                 accessibilityLabel="출발역과 도착역 검색"
             >
-                <LinkRoLogo size={17} showBars={false} />
+                <Text style={styles.searchBrand}>LinkRo</Text>
                 <View style={styles.searchDivider} />
                 <Ionicons name="search-outline" size={18} color={MUTED} />
-                <Text style={styles.searchText}>어디로 이동하시나요?</Text>
+                <Text style={styles.searchText}>어디로 갈까요?</Text>
             </Pressable>
 
             {/* 지도 우측 버튼 (시트 높이에 맞춰 위치) */}
@@ -192,17 +219,7 @@ export default function HomeScreen() {
                         onPress={() => serverMode ? homeMap.locate() : showPreparing('현재 위치')}
                         accessibilityLabel="현재 위치"
                     >
-                        <Ionicons name="locate-outline" size={22} color={PURPLE} />
-                    </Pressable>
-
-                    <View style={styles.mapControlDivider} />
-
-                    <Pressable
-                        style={({ pressed }) => [styles.mapControlButton, pressed && styles.pressed]}
-                        onPress={() => showPreparing('지도 설정')}
-                        accessibilityLabel="지도 설정"
-                    >
-                        <Ionicons name="layers-outline" size={22} color="#4A4553" />
+                        <Ionicons name="locate-outline" size={20} color={PURPLE} />
                     </Pressable>
                 </View>
             )}
@@ -232,6 +249,7 @@ export default function HomeScreen() {
                         <Pressable
                             style={({ pressed }) => [styles.allMeetingsButton, pressed && styles.pressed]}
                             onPress={() => router.push('/rooms')}
+                            hitSlop={8}
                             accessibilityRole="button"
                             accessibilityLabel="전체 보기"
                         >
@@ -242,11 +260,13 @@ export default function HomeScreen() {
                     {/* ❸ 다가오는 약속 */}
                     {serverMode && meetingState.kind === 'loading' ? (
                         <View style={styles.meetingCard} accessibilityLabel="다가오는 약속을 불러오고 있어요">
+                            <View style={styles.meetingBadge}>
+                                <ActivityIndicator color={PURPLE} />
+                            </View>
                             <View style={styles.meetingInfo}>
-                                <Text style={styles.meetingLabel}>다가오는 약속</Text>
+                                <Text style={styles.meetingTitle}>다가오는 약속</Text>
                                 <Text style={styles.meetingMeta}>약속을 불러오고 있어요</Text>
                             </View>
-                            <ActivityIndicator color={PURPLE} />
                         </View>
                     ) : serverMode && meetingState.kind === 'error' ? (
                         <Pressable
@@ -255,8 +275,10 @@ export default function HomeScreen() {
                             accessibilityRole="button"
                             accessibilityLabel="다가오는 약속 다시 불러오기"
                         >
+                            <View style={styles.meetingBadge}>
+                                <Ionicons name="alert-circle-outline" size={20} color={PURPLE} />
+                            </View>
                             <View style={styles.meetingInfo}>
-                                <Text style={styles.meetingLabel}>다가오는 약속</Text>
                                 <Text style={styles.meetingTitle}>약속을 불러오지 못했어요</Text>
                                 <Text style={styles.meetingMeta}>눌러서 다시 시도해 주세요</Text>
                             </View>
@@ -269,23 +291,20 @@ export default function HomeScreen() {
                             accessibilityRole="button"
                             accessibilityLabel={`다가오는 약속 ${meeting.title}`}
                         >
-                            <View style={styles.meetingDate} accessibilityLabel={formatMonthDay(meeting.appointmentAt)}>
-                                <Text style={styles.meetingDday}>
-                                    {formatDday(meeting.appointmentAt)}
-                                </Text>
-                            </View>
+                            {!!meetingBadgeLabel(meeting.appointmentAt) && (
+                                <View style={styles.meetingBadge} accessibilityLabel={formatSeoulMonthDay(meeting.appointmentAt.toISOString())}>
+                                    <Text style={styles.meetingBadgeText}>
+                                        {meetingBadgeLabel(meeting.appointmentAt)}
+                                    </Text>
+                                </View>
+                            )}
 
                             <View style={styles.meetingInfo}>
-                                <Text style={styles.meetingLabel}>다가오는 약속</Text>
                                 <Text style={styles.meetingTitle} numberOfLines={1}>
                                     {meeting.title}
                                 </Text>
                                 <Text style={styles.meetingMeta} numberOfLines={1}>
-                                    {[
-                                        formatTime(meeting.appointmentAt),
-                                        meeting.stationName ? formatStationName(meeting.stationName) : '약속역 미정',
-                                        `${meeting.memberCount}/${meeting.maxMembers}명`,
-                                    ].join(' · ')}
+                                    {meetingDescription(meeting)}
                                 </Text>
                             </View>
 
@@ -296,8 +315,10 @@ export default function HomeScreen() {
                             style={({ pressed }) => [styles.meetingCard, pressed && styles.pressed]}
                             onPress={() => router.push('/rooms')}
                         >
+                            <View style={styles.meetingBadge}>
+                                <Ionicons name="calendar-outline" size={20} color={PURPLE} />
+                            </View>
                             <View style={styles.meetingInfo}>
-                                <Text style={styles.meetingLabel}>다가오는 약속</Text>
                                 <Text style={styles.meetingTitle}>예정된 약속이 없어요</Text>
                                 <Text style={styles.meetingMeta}>약속방을 만들어 친구를 초대해 보세요</Text>
                             </View>
@@ -576,6 +597,13 @@ const styles = StyleSheet.create({
         elevation: 3,
     },
 
+    searchBrand: {
+        color: INK,
+        fontSize: 17,
+        fontWeight: '800',
+        letterSpacing: -0.4,
+    },
+
     searchDivider: {
         width: 1,
         height: 18,
@@ -592,24 +620,18 @@ const styles = StyleSheet.create({
         position: 'absolute',
         right: 16,
         zIndex: 4,
-        width: 44,
-        overflow: 'hidden',
-        borderRadius: 12,
-        backgroundColor: CARD,
-        boxShadow: '0px 3px 12px rgba(60,40,90,0.12)',
     },
 
+    /** 시안의 둥근 "내 위치" 버튼 */
     mapControlButton: {
         width: 44,
         height: 44,
+        borderRadius: 22,
         alignItems: 'center',
         justifyContent: 'center',
-    },
-
-    mapControlDivider: {
-        height: 1,
-        marginHorizontal: 8,
-        backgroundColor: DIVIDER_SOFT,
+        backgroundColor: CARD,
+        boxShadow: '0px 3px 12px rgba(60,40,90,0.12)',
+        elevation: 3,
     },
 
     sheet: {
@@ -633,7 +655,7 @@ const styles = StyleSheet.create({
     sheetHandle: {
         width: 38,
         height: 4,
-        borderRadius: 999,
+        borderRadius: 2,
         backgroundColor: HANDLE,
     },
 
@@ -645,7 +667,7 @@ const styles = StyleSheet.create({
 
     meetingHeader: {
         flexDirection: 'row',
-        alignItems: 'center',
+        alignItems: 'baseline',
         justifyContent: 'space-between',
     },
 
@@ -656,7 +678,7 @@ const styles = StyleSheet.create({
     },
 
     allMeetingsButton: {
-        padding: 6,
+        paddingVertical: 6,
     },
 
     allMeetingsText: {
@@ -671,16 +693,17 @@ const styles = StyleSheet.create({
         gap: 12,
     },
 
-    meetingDate: {
+    meetingBadge: {
         width: 44,
         height: 44,
         borderRadius: 12,
         alignItems: 'center',
         justifyContent: 'center',
+        flexShrink: 0,
         backgroundColor: TINT,
     },
 
-    meetingDday: {
+    meetingBadgeText: {
         color: PURPLE,
         fontSize: 13,
         fontWeight: '700',
@@ -688,23 +711,17 @@ const styles = StyleSheet.create({
 
     meetingInfo: {
         flex: 1,
-    },
-
-    meetingLabel: {
-        color: MUTED,
-        fontSize: 12,
-        fontWeight: '700',
+        minWidth: 0,
     },
 
     meetingTitle: {
-        marginTop: 2,
         color: INK,
         fontSize: 15.5,
         fontWeight: '600',
     },
 
     meetingMeta: {
-        marginTop: 3,
+        marginTop: 2,
         color: MUTED,
         fontSize: 13,
     },
