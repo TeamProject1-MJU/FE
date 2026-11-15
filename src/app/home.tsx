@@ -1,5 +1,6 @@
+import BottomTabBar, { useTabBarHeight } from '@/components/bottom-tab-bar';
 import { formatStationName } from '@/utils/station-name';
-import { ComponentProps, useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -32,7 +33,6 @@ import { getSessionGeneration } from '@/services/auth';
 import { fetchMyRooms } from '@/services/room';
 import { meetingRoomParams, pickUpcomingRoom, toHomeMeeting, type HomeMeetingCard } from '@/utils/upcoming-meeting';
 
-const NAVY = '#0f1c3f';
 const PURPLE = '#5C3F78';
 const INK = '#25212D';
 const MUTED = '#83808B';
@@ -45,15 +45,9 @@ const HANDLE = '#DCD7E3';
 const BACKGROUND = '#f3f5f8';
 const CARD = '#ffffff';
 const SECONDARY = '#6b7488';
-const DISABLED = '#a1a8b8';
-const DIVIDER = '#e6e9ef';
 
-/** 하단 탭바에서 safe area 를 뺀 높이 */
-const TAB_BAR_CONTENT_HEIGHT = 58;
 /** 작은 화면에서 지도가 가려지지 않도록 시트가 차지할 수 있는 최대 비율 */
 const SHEET_MAX_RATIO = 0.55;
-
-type IoniconName = ComponentProps<typeof Ionicons>['name'];
 
 /** 서버 모드 "다가오는 약속" 상태. done 은 어느 계정(로그인 세대:userId)의 결과인지 같이 들고 있어요. */
 type MeetingLoad =
@@ -73,7 +67,7 @@ export default function HomeScreen() {
     const { height: windowHeight } = useWindowDimensions();
     const [sheetHeight, setSheetHeight] = useState(0);
 
-    const tabBarHeight = TAB_BAR_CONTENT_HEIGHT + Math.max(insets.bottom, 8);
+    const tabBarHeight = useTabBarHeight();
 
     /*
      * 다가오는 약속 (#102)
@@ -332,54 +326,8 @@ export default function HomeScreen() {
             </View>
 
             {/* 하단 탭바 */}
-            <View
-                style={[
-                    styles.tabBar,
-                    { height: tabBarHeight, paddingBottom: Math.max(insets.bottom, 8) },
-                ]}
-            >
-                <BottomTab icon="home" label="홈" active onPress={() => {}} />
-                <BottomTab
-                    icon="navigate-outline"
-                    label="경로"
-                    onPress={() => router.push('/route-search')}
-                />
-                <BottomTab
-                    icon="chatbubbles-outline"
-                    label="약속방"
-                    onPress={() => router.push('/rooms')}
-                />
-                <BottomTab
-                    icon="person-outline"
-                    label="마이"
-                    onPress={() => router.push('/my')}
-                />
-            </View>
+            <BottomTabBar active="home" />
         </View>
-    );
-}
-
-function BottomTab({
-                       icon,
-                       label,
-                       active = false,
-                       onPress,
-                   }: {
-    icon: IoniconName;
-    label: string;
-    active?: boolean;
-    onPress: () => void;
-}) {
-    return (
-        <Pressable
-            style={styles.tabItem}
-            onPress={onPress}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: active }}
-        >
-            <Ionicons name={icon} size={23} color={active ? NAVY : DISABLED} />
-            <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{label}</Text>
-        </Pressable>
     );
 }
 
@@ -793,38 +741,6 @@ const styles = StyleSheet.create({
         color: PURPLE,
         fontSize: 15,
         fontWeight: '600',
-    },
-
-    tabBar: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: 10,
-        paddingTop: 10,
-        paddingHorizontal: 16,
-        flexDirection: 'row',
-        justifyContent: 'space-around',
-        borderTopWidth: 1,
-        borderTopColor: DIVIDER,
-        backgroundColor: CARD,
-    },
-
-    tabItem: {
-        width: 68,
-        alignItems: 'center',
-        gap: 3,
-    },
-
-    tabLabel: {
-        color: DISABLED,
-        fontSize: 12,
-        fontWeight: '600',
-    },
-
-    tabLabelActive: {
-        color: NAVY,
-        fontWeight: '800',
     },
 
     pressed: {
