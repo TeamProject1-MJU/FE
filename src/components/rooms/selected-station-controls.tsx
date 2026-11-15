@@ -14,8 +14,8 @@ import {
 } from '@/hooks/use-selected-station';
 import type { RoomDetail } from '@/types/room';
 
-const NAVY = '#0f1c3f';
-const MINT = '#2bcf9a';
+const NAVY = '#25212D';
+const MINT = '#5C3F78';
 
 export default function SelectedStationControls({
                                                     detail,
@@ -139,7 +139,7 @@ export default function SelectedStationControls({
                                         style={styles.row}
                                         accessibilityLiveRegion="polite"
                                     >
-                                        <ActivityIndicator color={NAVY} />
+                                        <ActivityIndicator color={MINT} />
                                         <Text style={styles.body}>
                                             {clearing
                                                 ? '해제하는 중이에요'
@@ -209,7 +209,7 @@ function Action({
                 style={[
                     styles.buttonText,
                     primary && styles.primaryText,
-                    danger && !primary && styles.errorText,
+                    danger && !primary && styles.dangerText,
                 ]}
             >
                 {label}
@@ -224,8 +224,8 @@ const styles = StyleSheet.create({
         gap: 12,
         backgroundColor: '#fff',
         borderWidth: 1,
-        borderColor: '#e6e9ef',
-        borderRadius: 18,
+        borderColor: '#EEEAF2',
+        borderRadius: 22,
     },
     row: {
         flexDirection: 'row',
@@ -234,7 +234,7 @@ const styles = StyleSheet.create({
         gap: 10,
     },
     caption: {
-        color: '#6b7488',
+        color: '#83808B',
         fontSize: 12,
         lineHeight: 19,
     },
@@ -243,21 +243,22 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         paddingVertical: 12,
         borderWidth: 1,
-        borderColor: '#e6e9ef',
-        borderRadius: 12,
+        borderColor: '#D9CCE4',
+        borderRadius: 22,
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: '#fff',
     },
     primary: {
-        borderColor: NAVY,
-        backgroundColor: NAVY,
+        borderColor: MINT,
+        backgroundColor: MINT,
     },
     buttonText: {
-        color: NAVY,
+        color: MINT,
         fontSize: 13,
         fontWeight: '700',
     },
+    dangerText: { color: MINT },
     primaryText: {
         color: '#fff',
     },
@@ -271,14 +272,14 @@ const styles = StyleSheet.create({
         borderRadius: 12,
         padding: 12,
         gap: 10,
-        backgroundColor: '#e6f8f1',
+        backgroundColor: '#EDE8F3',
         borderLeftWidth: 3,
         borderLeftColor: MINT,
     },
     noticeText: {
         fontSize: 13,
         lineHeight: 21,
-        color: '#15664e',
+        color: MINT,
     },
     error: {
         backgroundColor: '#fff1f0',
@@ -318,7 +319,7 @@ const styles = StyleSheet.create({
         fontWeight: '700',
     },
     body: {
-        color: '#6b7488',
+        color: '#83808B',
         fontSize: 14,
         lineHeight: 22,
     },
