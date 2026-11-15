@@ -7417,7 +7417,7 @@ test('146 도보 1분 + 대기 10분 환승: 어디에도 "도보 11분" 없이 
     for (const texts of [detail, expanded, collapsed]) assert.ok(!texts.some(text => /도보 11분|환승 도보/.test(text)), texts.join(' / '));
     assert.ok(detail.some(text => text.startsWith('서버 환승 안내 · 환승 소요 11분')));
     assert.ok(expanded.some(text => text.trim() === '환승 소요 11분'));
-    assert.ok(expanded.some(text => text.includes('환승 2회 · 도보 1분')));
+    assert.ok(expanded.some(text => text.includes('환승 2회, 도보 1분')));
     // 경로 안내 화면 요약도 서버 값 그대로예요.
     const r = guide129({ route }); const view = r.render();
     assert.ok(findElement(view, element => element.type === 'Text' && textOf(element).includes('환승 2회 · 도보 1분')));
@@ -7438,7 +7438,7 @@ test('146 환승 여러 번: 펼친 카드와 경로 상세가 환승마다 같�
         assert.ok(expanded.some(text => text.trim() === '도보 2분'));
         assert.ok(detail.some(text => text.startsWith('출발역까지 걷기 · 도보 2분'))); assert.ok(detail.some(text => text.startsWith('도착지까지 걷기 · 도보 3분')));
         // 요약 도보는 서버 값 그대로, 환승 횟수는 환승 단계 수와 같아요.
-        assert.ok(expanded.some(text => text.includes(`환승 2회 · 도보 ${walkingMinutes}분`)));
+        assert.ok(expanded.some(text => text.includes(`환승 2회, 도보 ${walkingMinutes}분`)));
         assert.equal(cardTransfers.length, route.summary.transferCount);
         assert.ok(!expanded.some(text => text.includes('환승 도보')) && !detail.some(text => text.includes('환승 도보')));
         // 접힌 카드는 단계 시간을 보여주지 않고 환승 횟수만 보여줘요.
@@ -7508,7 +7508,7 @@ test('146 보완: 대기가 따로 오지 않는 660초 환승은 "환승 소요
     assert.ok(detail.some(text => text.startsWith('고속터미널역 7호선 승강장으로 환승 · 도보 1분')));
     assert.ok(expanded.some(text => text.trim() === '도보 2분')); // 첫 열차 전 걷기는 그대로 "도보"
     for (const texts of [expanded, detail, card146(mixed, false)]) assert.ok(!texts.some(text => text.includes('도보 11분')), texts.join(' / '));
-    assert.ok(expanded.some(text => text.includes('환승 2회 · 도보 1분')));
+    assert.ok(expanded.some(text => text.includes('환승 2회, 도보 1분')));
     // 펼친 카드와 경로 상세의 숫자가 환승마다 같아요.
     const numbers = texts => texts.map(text => /환승 (?:소요|도보) (\d+)분|· (?:환승 소요|도보) (\d+)분/.exec(text)).filter(Boolean).map(match => match[1] ?? match[2]);
     assert.deepEqual(numbers(expanded.filter(text => /^\s*환승 (소요|도보)/.test(text))), ['11', '1']);
