@@ -14,6 +14,10 @@ type Props = {
     barColor?: string;
     /** 두 번째 바 색 (기본 mint) */
     accentColor?: string;
+    /** 로고 아래 바 표시 여부 (기본 true) */
+    showBars?: boolean;
+    /** Ro 글자 굵기 (기본 500) */
+    roWeight?: '500' | '800';
 };
 
 /**
@@ -25,6 +29,8 @@ export default function LinkRoLogo({
                                        color = LinkRoColors.navy,
                                        barColor,
                                        accentColor = LinkRoColors.mint,
+                                       showBars = true,
+                                       roWeight = '500',
                                    }: Props) {
     const barHeight = Math.max(3, Math.round(size / 9));
     const barGap = Math.max(3, Math.round(size / 8));
@@ -43,23 +49,25 @@ export default function LinkRoLogo({
                 ]}
             >
                 <Text style={styles.strong}>Link</Text>
-                <Text style={styles.light}>Ro</Text>
+                <Text style={[styles.light, { fontWeight: roWeight }]}>Ro</Text>
             </Text>
 
-            <View style={[styles.bars, { gap: barGap, marginTop: barGap }]}>
-                <View
-                    style={[
-                        styles.bar,
-                        { height: barHeight, backgroundColor: barColor ?? color },
-                    ]}
-                />
-                <View
-                    style={[
-                        styles.bar,
-                        { height: barHeight, backgroundColor: accentColor },
-                    ]}
-                />
-            </View>
+            {showBars && (
+                <View style={[styles.bars, { gap: barGap, marginTop: barGap }]}>
+                    <View
+                        style={[
+                            styles.bar,
+                            { height: barHeight, backgroundColor: barColor ?? color },
+                        ]}
+                    />
+                    <View
+                        style={[
+                            styles.bar,
+                            { height: barHeight, backgroundColor: accentColor },
+                        ]}
+                    />
+                </View>
+            )}
         </View>
     );
 }
