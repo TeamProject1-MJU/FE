@@ -1,3 +1,4 @@
+import Passenger from '@/components/passenger';
 import { formatStationName } from '@/utils/station-name';
 import { useCallback, useRef, useState } from 'react';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
@@ -13,14 +14,14 @@ import { fetchMyRooms } from '@/services/room';
 import { ApiError, isAuthError } from '@/services/api/errors';
 import type { RoomSummary } from '@/types/room';
 
-const NAVY = '#0f1c3f';
-const MINT = '#2bcf9a';
-const MINT_DEEP = '#12a77a';
-const MINT_SOFT = '#e8f8f1';
-const BACKGROUND = '#f3f5f8';
+const NAVY = '#25212D';
+const MINT = '#5C3F78';
+const MINT_DEEP = '#5C3F78';
+const MINT_SOFT = '#EDE8F3';
+const BACKGROUND = '#F7F5FA';
 const CARD = '#ffffff';
-const SECONDARY = '#6b7488';
-const BORDER = '#e6e9ef';
+const SECONDARY = '#83808B';
+const BORDER = '#EEEAF2';
 
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -148,12 +149,13 @@ export default function RoomsScreen() {
                 {load.kind === 'loading' &&
                     [0, 1].map(key => (
                         <View key={key} style={[styles.card, styles.skeletonCard]}>
-                            <View style={[styles.dateBox, styles.skeleton]} />
-                            <View style={styles.flex}>
+                            <View style={styles.skeletonTop}>
+                                {key === 0 && <ActivityIndicator color={MINT_DEEP} />}
+                            </View>
+                            <View style={styles.cardBody}>
                                 <View style={[styles.skeletonLine, { width: 120 }]} />
                                 <View style={[styles.skeletonLine, { width: 170, marginTop: 10 }]} />
                             </View>
-                            {key === 0 && <ActivityIndicator color={NAVY} />}
                         </View>
                     ))}
 
@@ -174,15 +176,23 @@ export default function RoomsScreen() {
                 )}
 
                 {load.kind === 'done' && load.rooms.length === 0 && (
-                    <View style={styles.stateBox}>
-                        <View style={styles.emptyIcon}>
-                            <Ionicons name="people-outline" size={28} color={MINT_DEEP} />
+                    <>
+                        <View style={[styles.stateBox, styles.emptyCard]}>
+                            <Passenger tone="off" size={46} />
+                            <Text style={styles.stateTitle}>참여 중인 약속방이 없어요</Text>
+                            <Text style={styles.stateText}>
+                                새 약속방을 만들거나{'\n'}친구에게 받은 초대 코드로 입장해 보세요.
+                            </Text>
                         </View>
-                        <Text style={styles.stateTitle}>참여 중인 약속방이 없어요</Text>
-                        <Text style={styles.stateText}>
-                            새 약속방을 만들거나{'\n'}친구에게 받은 초대 코드로 입장해 보세요.
-                        </Text>
-                    </View>
+                        <View style={styles.emptyActions}>
+                            <Pressable style={({ pressed }) => [styles.emptyButton, pressed && styles.pressed]} onPress={() => router.push('/rooms/new')} accessibilityRole="button">
+                                <Text style={styles.emptyButtonText}>방 만들기</Text>
+                            </Pressable>
+                            <Pressable style={({ pressed }) => [styles.emptyButton, styles.emptyJoinButton, pressed && styles.pressed]} onPress={() => router.push('/rooms/join')} accessibilityRole="button">
+                                <Text style={[styles.emptyButtonText, styles.emptyJoinText]}>코드로 참여</Text>
+                            </Pressable>
+                        </View>
+                    </>
                 )}
 
                 {load.kind === 'done' && load.rooms.map(room => <RoomCard key={room.id} room={room} onPress={() => openRoom(room)} />)}
@@ -225,30 +235,30 @@ function RoomCard({ room, onPress }: { room: RoomSummary; onPress: () => void })
             accessibilityRole="button"
             accessibilityLabel={label}
         >
-            {/* D-day + 날짜 */}
-            <View style={styles.dateBox}>
-                {at ? (
-                    <>
-                        <Text style={styles.dday}>{formatDday(at)}</Text>
-                        <Text style={styles.dateText}>{formatMonthDay(at)}</Text>
-                    </>
-                ) : (
-                    <Text style={styles.dateUnknown}>날짜{'\n'}미정</Text>
-                )}
+            <View style={styles.cardTop}>
+                <View style={styles.dateRow}>
+                    {at ? (
+                        <>
+                            <Text style={styles.dday}>{formatDday(at)}</Text>
+                            <Text style={styles.dateText}>{formatMonthDay(at)}</Text>
+                        </>
+                    ) : <Text style={styles.dateUnknown}>날짜 미정</Text>}
+                </View>
+                <View style={styles.passengers}>
+                    {Array.from({ length: Math.min(room.memberCount, room.maxMembers) }, (_, index) => (
+                        <Passenger key={index} size={40} tone={index === 0 ? 'me' : (['pink', 'sky', 'mint'] as const)[(index - 1) % 3]} />
+                    ))}
+                </View>
             </View>
 
-            <View style={styles.flex}>
+            <View style={styles.cardBody}>
                 <View style={styles.row}>
-                    <Text style={styles.roomName} numberOfLines={1}>
-                        {room.name}
-                    </Text>
-                    {room.myRole === 'OWNER' && (
-                        <View style={styles.ownerTag}>
-                            <Text style={styles.ownerTagText}>방장</Text>
-                        </View>
-                    )}
+                    <Text style={styles.roomName} numberOfLines={1}>{room.name}</Text>
+                    {room.myRole === 'OWNER' && <View style={styles.ownerTag}><Text style={styles.ownerTagText}>방장</Text></View>}
+                    <View style={[styles.statusTag, confirmed ? styles.statusConfirmed : styles.statusOpen]}>
+                        <Text style={[styles.statusText, { color: confirmed ? '#2E7D5B' : SECONDARY }]}>{confirmed ? '약속역 확정' : '정하는 중'}</Text>
+                    </View>
                 </View>
-
                 <View style={[styles.row, styles.metaRow]}>
                     <Text style={styles.meta}>
                         {at ? `${WEEKDAYS[at.getDay()]} ${formatTime(at)}` : '시각 미정'}
@@ -269,19 +279,9 @@ function RoomCard({ room, onPress }: { room: RoomSummary; onPress: () => void })
                         <Text style={styles.meta}>약속역 정하는 중</Text>
                     )}
                 </View>
-            </View>
-
-            <View style={styles.side}>
-                <View style={[styles.statusTag, confirmed ? styles.statusConfirmed : styles.statusOpen]}>
-                    <Text style={[styles.statusText, { color: confirmed ? MINT_DEEP : SECONDARY }]}>
-                        {confirmed ? '확정' : '진행 중'}
-                    </Text>
-                </View>
                 <View style={styles.members}>
-                    <Ionicons name="people" size={13} color={SECONDARY} />
-                    <Text style={styles.membersText}>
-                        {room.memberCount}/{room.maxMembers}
-                    </Text>
+                    <Text style={styles.membersText}>{room.memberCount}/{room.maxMembers}명 참여 중</Text>
+                    <Ionicons name="chevron-forward" size={18} color="#B4AFBC" />
                 </View>
             </View>
         </Pressable>
@@ -301,7 +301,7 @@ const styles = StyleSheet.create({
     },
     leaveNoticeText: {
         flex: 1,
-        color: '#15664e',
+        color: MINT_DEEP,
         fontSize: 13,
         lineHeight: 22,
     },
@@ -314,135 +314,136 @@ const styles = StyleSheet.create({
     flex: {
         flex: 1,
     },
-
     row: {
         flexDirection: 'row',
         alignItems: 'center',
+        gap: 6,
     },
-
     container: {
         flex: 1,
         backgroundColor: BACKGROUND,
     },
-
     header: {
         paddingHorizontal: 16,
         paddingBottom: 12,
         flexDirection: 'row',
         alignItems: 'center',
     },
-
     headerSide: {
         flex: 1,
     },
-
     headerRight: {
         alignItems: 'flex-end',
     },
-
     headerTitle: {
         color: NAVY,
-        fontSize: 18,
+        fontSize: 26,
         fontWeight: '800',
+        letterSpacing: -0.6,
     },
-
     joinChip: {
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 9,
+        height: 34,
+        paddingHorizontal: 13,
+        borderRadius: 17,
         backgroundColor: MINT_SOFT,
+        justifyContent: 'center',
     },
-
     joinChipText: {
         color: MINT_DEEP,
-        fontSize: 12.5,
-        fontWeight: '800',
+        fontSize: 13,
+        fontWeight: '700',
     },
-
     content: {
         paddingHorizontal: 20,
         paddingTop: 8,
-        gap: 10,
-    },
-
-    card: {
-        padding: 14,
-        flexDirection: 'row',
-        alignItems: 'center',
         gap: 12,
+    },
+    card: {
         borderWidth: 1,
         borderColor: BORDER,
-        borderRadius: 18,
+        borderRadius: 22,
         backgroundColor: CARD,
+        overflow: 'hidden',
     },
-
-    dateBox: {
-        width: 54,
-        height: 54,
-        borderRadius: 13,
+    cardTop: {
+        height: 92,
+        backgroundColor: '#F4F0F8',
+        paddingHorizontal: 16,
+        paddingTop: 10,
+    },
+    dateRow: {
+        flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: NAVY,
+        gap: 8,
     },
-
     dday: {
-        color: MINT,
-        fontSize: 13,
-        fontWeight: '800',
-    },
-
-    dateText: {
-        marginTop: 2,
+        backgroundColor: MINT_DEEP,
         color: CARD,
         fontSize: 12,
+        fontWeight: '800',
+        borderRadius: 9,
+        paddingHorizontal: 9,
+        paddingVertical: 4,
+        overflow: 'hidden',
+    },
+    dateUnknown: {
+        backgroundColor: MINT_DEEP,
+        color: CARD,
+        fontSize: 12,
+        fontWeight: '800',
+        borderRadius: 9,
+        paddingHorizontal: 9,
+        paddingVertical: 4,
+        overflow: 'hidden',
+    },
+    dateText: {
+        color: '#6F6680',
+        fontSize: 12.5,
+        fontWeight: '600',
+    },
+    passengers: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+        paddingBottom: 5,
+        gap: 6,
+    },
+    cardBody: {
+        paddingHorizontal: 16,
+        paddingTop: 13,
+        paddingBottom: 15,
+    },
+    roomName: {
+        flex: 1,
+        minWidth: 0,
+        color: NAVY,
+        fontSize: 17,
         fontWeight: '700',
     },
-
-    dateUnknown: {
-        color: '#c9d0de',
-        fontSize: 11.5,
-        fontWeight: '800',
-        lineHeight: 15,
-        textAlign: 'center',
-    },
-
-    roomName: {
-        flexShrink: 1,
-        color: NAVY,
-        fontSize: 16,
-        fontWeight: '800',
-    },
-
     ownerTag: {
-        marginLeft: 6,
         paddingHorizontal: 6,
         paddingVertical: 2,
         borderRadius: 6,
-        backgroundColor: '#e8edf8',
+        backgroundColor: MINT_SOFT,
     },
-
     ownerTagText: {
-        color: '#2c4a8c',
-        fontSize: 11,
-        fontWeight: '800',
+        color: MINT_DEEP,
+        fontSize: 10.5,
+        fontWeight: '700',
     },
-
     metaRow: {
         marginTop: 7,
         gap: 4,
     },
-
     meta: {
         color: SECONDARY,
         fontSize: 13,
-        fontWeight: '600',
     },
-
     metaDot: {
         color: SECONDARY,
         fontSize: 13,
     },
-
     lineBadge: {
         width: 17,
         height: 17,
@@ -450,93 +451,100 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
     },
-
     lineBadgeText: {
         color: CARD,
         fontSize: 10,
         fontWeight: '800',
     },
-
     station: {
         flexShrink: 1,
-        color: NAVY,
+        color: SECONDARY,
         fontSize: 13,
-        fontWeight: '700',
     },
-
-    side: {
-        alignItems: 'flex-end',
-        gap: 8,
-    },
-
     statusTag: {
         paddingHorizontal: 7,
         paddingVertical: 3,
-        borderRadius: 7,
+        borderRadius: 6,
     },
-
     statusConfirmed: {
-        backgroundColor: MINT_SOFT,
+        backgroundColor: '#DDF1E7',
     },
-
     statusOpen: {
-        backgroundColor: '#eef1f5',
+        backgroundColor: '#F1EEF4',
     },
-
     statusText: {
-        fontSize: 11.5,
-        fontWeight: '800',
-    },
-
-    members: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 3,
-    },
-
-    membersText: {
-        color: SECONDARY,
-        fontSize: 12.5,
+        fontSize: 10.5,
         fontWeight: '700',
     },
-
+    members: {
+        marginTop: 8,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+    },
+    membersText: {
+        color: '#4A4553',
+        fontSize: 12.5,
+    },
     skeletonCard: {
-        borderColor: 'transparent',
+        borderColor: BORDER,
     },
-
-    skeleton: {
-        backgroundColor: '#e3e7ee',
+    skeletonTop: {
+        height: 92,
+        backgroundColor: '#E7E2EC',
+        alignItems: 'center',
+        justifyContent: 'center',
     },
-
     skeletonLine: {
         height: 12,
         borderRadius: 6,
-        backgroundColor: '#e3e7ee',
+        backgroundColor: '#E7E2EC',
     },
-
     stateBox: {
         marginTop: 40,
         padding: 24,
         alignItems: 'center',
         gap: 8,
+        backgroundColor: CARD,
+        borderWidth: 1,
+        borderColor: BORDER,
+        borderRadius: 22,
     },
-
-    emptyIcon: {
-        width: 56,
-        height: 56,
-        borderRadius: 18,
+    emptyCard: {
+        borderWidth: 1.5,
+        borderStyle: 'dashed',
+        borderColor: '#DCD6E4',
+        paddingVertical: 30,
+        paddingHorizontal: 20,
+    },
+    emptyActions: {
+        gap: 12,
+    },
+    emptyButton: {
+        height: 52,
+        borderRadius: 16,
+        backgroundColor: MINT_DEEP,
         alignItems: 'center',
         justifyContent: 'center',
+    },
+    emptyButtonText: {
+        color: CARD,
+        fontSize: 15.5,
+        fontWeight: '700',
+    },
+    emptyJoinButton: {
         backgroundColor: MINT_SOFT,
     },
-
+    emptyJoinText: {
+        color: MINT_DEEP,
+    },
     stateTitle: {
         marginTop: 6,
         color: NAVY,
         fontSize: 16,
         fontWeight: '800',
+        textAlign: 'center',
     },
-
     stateText: {
         color: SECONDARY,
         fontSize: 13.5,
@@ -544,7 +552,6 @@ const styles = StyleSheet.create({
         lineHeight: 20,
         textAlign: 'center',
     },
-
     stateButton: {
         marginTop: 8,
         paddingHorizontal: 16,
@@ -553,38 +560,34 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 6,
         borderRadius: 12,
-        backgroundColor: NAVY,
+        backgroundColor: MINT_DEEP,
     },
-
     stateButtonText: {
         color: CARD,
         fontSize: 14,
         fontWeight: '700',
     },
-
     fab: {
         position: 'absolute',
         right: 20,
-        height: 48,
+        height: 52,
         paddingHorizontal: 18,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 6,
-        borderRadius: 24,
-        backgroundColor: NAVY,
-        shadowColor: NAVY,
-        shadowOpacity: 0.25,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: 4 },
-        elevation: 5,
+        borderRadius: 16,
+        backgroundColor: MINT_DEEP,
+        shadowColor: MINT_DEEP,
+        shadowOpacity: 0.12,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 3 },
+        elevation: 3,
     },
-
     fabText: {
         color: CARD,
-        fontSize: 14.5,
-        fontWeight: '800',
+        fontSize: 15.5,
+        fontWeight: '700',
     },
-
     pressed: {
         opacity: 0.72,
     },
