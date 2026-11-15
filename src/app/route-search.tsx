@@ -37,11 +37,20 @@ import {
 
 const NAVY = '#0f1c3f';
 const MINT = '#2bcf9a';
-const BACKGROUND = '#f3f5f8';
 const WHITE = '#ffffff';
 const SECONDARY = '#6b7488';
-const BORDER = '#e6e9ef';
 const AI = '#6a5ae0';
+
+// 라벤더 시안(#184) — 상단 제목·출발/도착 입력·빈 상태에만 써요.
+const LV_BACKGROUND = '#F7F5FA';
+const LV_CARD = '#FFFFFF';
+const LV_CARD_BORDER = '#EEEAF2';
+const LV_TEXT = '#25212D';
+const LV_SECONDARY = '#83808B';
+const LV_MAIN = '#5C3F78';
+const LV_POINT_LINE = '#E2DDE8';
+const LV_FIELD_DIVIDER = '#F1EEF4';
+const LV_SWAP_BACKGROUND = '#F4F1F7';
 
 type Field = 'departure' | 'destination';
 type SortKey = 'FASTEST' | 'FEWER_TRANSFERS' | 'CHEAPEST';
@@ -274,26 +283,20 @@ export default function RouteSearchScreen() {
             <StatusBar style="dark" />
 
             {/* 상단 헤더 */}
-            <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
+            <View style={[styles.header, { marginTop: insets.top }]}>
                 <Pressable style={styles.backButton} onPress={goBack} accessibilityLabel="뒤로 가기">
-                    <Ionicons name="chevron-back" size={25} color={NAVY} />
+                    <Ionicons name="chevron-back" size={24} color={LV_TEXT} />
                 </Pressable>
 
                 <Text style={styles.headerTitle}>경로 탐색</Text>
-
-                <View style={styles.headerRight} />
             </View>
 
-            <ScrollView
-                style={styles.scrollView}
-                contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}
-                showsVerticalScrollIndicator={false}
-            >
-                {/* 출발 / 도착역 (누르면 역 검색 화면) */}
+            {/* 출발 / 도착역 (누르면 역 검색 화면) */}
+            <View style={styles.stationArea}>
                 <View style={styles.stationCard}>
                     <View style={styles.pointColumn}>
                         <View style={styles.startPoint} />
-                        <View style={styles.pointDash} />
+                        <View style={styles.pointLine} />
                         <View style={styles.endPoint} />
                     </View>
 
@@ -318,10 +321,16 @@ export default function RouteSearchScreen() {
                         onPress={swapStations}
                         accessibilityLabel="출발역과 도착역 바꾸기"
                     >
-                        <Ionicons name="swap-vertical" size={22} color={NAVY} />
+                        <Ionicons name="swap-vertical" size={20} color={LV_MAIN} />
                     </Pressable>
                 </View>
+            </View>
 
+            <ScrollView
+                style={styles.scrollView}
+                contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}
+                showsVerticalScrollIndicator={false}
+            >
                 {!params.roomId && (
                     <RouteTimeSelector value={searchTime} open={timePickerOpen} onOpen={() => setTimePickerOpen(true)} onClose={() => setTimePickerOpen(false)}
                         onChange={value => {
@@ -378,12 +387,11 @@ export default function RouteSearchScreen() {
                 )}
 
                 {search.status === 'idle' && (
-                    <Message
-                        icon={<Ionicons name="git-commit-outline" size={34} color={NAVY} />}
-                        iconBackground="#e8f8f1"
-                        title={'출발역과 도착역을 선택하면\n경로를 찾아드려요'}
-                        description="소요시간 · 요금 · 환승 · 예상 혼잡도"
-                    />
+                    <View style={styles.empty}>
+                        <Ionicons name="train-outline" size={44} color={LV_MAIN} />
+                        <Text style={styles.emptyTitle}>{'출발역과 도착역을 선택하면\n경로를 찾아드려요'}</Text>
+                        <Text style={styles.emptyText}>소요시간 · 요금 · 환승 · 예상 혼잡도</Text>
+                    </View>
                 )}
 
                 {search.status === 'loading' && (
@@ -567,35 +575,28 @@ function ErrorMessage({ code, message, onRetry, onRoomList, onChangeTime }: {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: BACKGROUND,
+        backgroundColor: LV_BACKGROUND,
     },
 
     header: {
-        paddingHorizontal: 16,
-        paddingBottom: 16,
-        backgroundColor: WHITE,
+        height: 48,
+        paddingHorizontal: 12,
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        borderBottomWidth: 1,
-        borderBottomColor: BORDER,
     },
 
     backButton: {
-        width: 36,
-        height: 36,
+        width: 44,
+        height: 44,
         justifyContent: 'center',
         alignItems: 'center',
     },
 
     headerTitle: {
-        fontSize: 18,
+        paddingLeft: 8,
+        fontSize: 20,
         fontWeight: '700',
-        color: NAVY,
-    },
-
-    headerRight: {
-        width: 36,
+        color: LV_TEXT,
     },
 
     scrollView: {
@@ -604,95 +605,118 @@ const styles = StyleSheet.create({
 
     content: {
         paddingHorizontal: 20,
-        paddingTop: 16,
+        paddingTop: 8,
+    },
+
+    stationArea: {
+        paddingTop: 8,
+        paddingHorizontal: 20,
     },
 
     stationCard: {
-        minHeight: 92,
-        paddingVertical: 10,
-        paddingLeft: 14,
-        paddingRight: 12,
+        paddingTop: 6,
+        paddingRight: 6,
+        paddingBottom: 6,
+        paddingLeft: 16,
         flexDirection: 'row',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: BORDER,
-        borderRadius: 16,
-        backgroundColor: WHITE,
+        borderColor: LV_CARD_BORDER,
+        borderRadius: 18,
+        backgroundColor: LV_CARD,
     },
 
     pointColumn: {
-        width: 22,
+        marginRight: 12,
         alignItems: 'center',
-        alignSelf: 'stretch',
-        paddingVertical: 8,
+        gap: 3,
     },
 
     startPoint: {
         width: 10,
         height: 10,
-        borderWidth: 2,
-        borderColor: NAVY,
         borderRadius: 5,
+        backgroundColor: LV_MAIN,
     },
 
-    pointDash: {
-        flex: 1,
-        marginVertical: 4,
-        borderLeftWidth: 2,
-        borderStyle: 'dotted',
-        borderColor: '#c3c9d4',
+    pointLine: {
+        width: 2,
+        height: 30,
+        backgroundColor: LV_POINT_LINE,
     },
 
     endPoint: {
-        width: 9,
-        height: 9,
+        width: 10,
+        height: 10,
+        borderWidth: 2.5,
+        borderColor: LV_MAIN,
         borderRadius: 5,
-        backgroundColor: MINT,
+        backgroundColor: LV_CARD,
     },
 
     stationFields: {
         flex: 1,
-        marginLeft: 6,
-        marginRight: 10,
+        minWidth: 0,
     },
 
     stationField: {
-        paddingVertical: 3,
+        height: 46,
+        justifyContent: 'center',
     },
 
     stationLabel: {
-        color: SECONDARY,
+        color: LV_SECONDARY,
         fontSize: 11,
         fontWeight: '600',
     },
 
     stationName: {
-        marginTop: 1,
-        color: NAVY,
-        fontSize: 18.5,
-        fontWeight: '800',
+        color: LV_TEXT,
+        fontSize: 16.5,
+        fontWeight: '600',
     },
 
     stationPlaceholder: {
-        marginTop: 2,
-        color: SECONDARY,
-        fontSize: 15.5,
-        fontWeight: '500',
+        color: LV_SECONDARY,
+        fontSize: 16.5,
+        fontWeight: '600',
     },
 
     stationDivider: {
         height: 1,
-        marginVertical: 4,
-        backgroundColor: BORDER,
+        backgroundColor: LV_FIELD_DIVIDER,
     },
 
     swapButton: {
-        width: 36,
-        height: 36,
-        borderRadius: 10,
+        width: 44,
+        height: 44,
+        marginLeft: 6,
+        borderRadius: 12,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: BACKGROUND,
+        backgroundColor: LV_SWAP_BACKGROUND,
+    },
+
+    empty: {
+        paddingTop: 36,
+        paddingBottom: 12,
+        alignItems: 'center',
+    },
+
+    emptyTitle: {
+        marginTop: 14,
+        textAlign: 'center',
+        color: LV_TEXT,
+        fontSize: 16,
+        fontWeight: '700',
+        lineHeight: 23,
+    },
+
+    emptyText: {
+        marginTop: 6,
+        textAlign: 'center',
+        color: LV_SECONDARY,
+        fontSize: 13,
     },
 
     notice: {

@@ -11,6 +11,13 @@ const MODES = [
     { mode: 'arrival', label: '도착 시각 지정' },
 ] as const;
 
+// 라벤더 시안(#184) — 시각 선택 버튼에만 써요.
+const LV_CARD = '#FFFFFF';
+const LV_CARD_BORDER = '#EEEAF2';
+const LV_TEXT = '#25212D';
+const LV_SECONDARY = '#83808B';
+const LV_MAIN = '#5C3F78';
+
 type Props = {
     value: RouteTimeSelection;
     open: boolean;
@@ -46,12 +53,12 @@ export default function RouteTimeSelector({ value, open, onOpen, onClose, onChan
     return (
         <>
             <Pressable style={styles.trigger} onPress={onOpen} accessibilityRole="button" accessibilityLabel="검색 시각 선택">
-                <Ionicons name="time-outline" size={19} color="#0f1c3f" />
-                <View style={styles.flex}>
-                    <Text style={styles.caption}>검색 시각 · 한국 시간 기준</Text>
-                    <Text style={styles.value}>{formatRouteTimeSelection(value)}</Text>
+                <Ionicons name="time-outline" size={20} color={LV_MAIN} />
+                <View style={styles.triggerText}>
+                    <Text style={styles.triggerCaption}>검색 시각 · 한국 시간 기준</Text>
+                    <Text style={styles.triggerValue}>{formatRouteTimeSelection(value)}</Text>
                 </View>
-                <Ionicons name="chevron-down" size={17} color="#6b7488" />
+                <Ionicons name="chevron-down" size={18} color={LV_SECONDARY} />
             </Pressable>
             <Modal visible={open && !calendar && !clock} transparent animationType="fade" onRequestClose={onClose}>
                 <View style={styles.overlay}>
@@ -96,8 +103,11 @@ export default function RouteTimeSelector({ value, open, onOpen, onClose, onChan
 }
 
 const styles = StyleSheet.create({
-    flex: { flex: 1 },
-    trigger: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, backgroundColor: '#ffffff', borderWidth: 1, borderColor: '#e6e9ef', borderRadius: 15 },
+    // 라벤더 시안(#184) — 시각 선택 버튼에만 써요. 모달 스타일은 그대로예요.
+    trigger: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 58, paddingVertical: 8, paddingHorizontal: 14, backgroundColor: LV_CARD, borderWidth: 1, borderColor: LV_CARD_BORDER, borderRadius: 16 },
+    triggerText: { flex: 1, minWidth: 0 },
+    triggerCaption: { color: LV_SECONDARY, fontSize: 11.5 },
+    triggerValue: { marginTop: 1, color: LV_TEXT, fontSize: 15.5, fontWeight: '600' },
     caption: { color: '#6b7488', fontSize: 12, lineHeight: 18 },
     value: { color: '#0f1c3f', fontWeight: '600', fontSize: 14, lineHeight: 21 },
     overlay: { flex: 1, justifyContent: 'center', padding: 20, backgroundColor: 'rgba(15,28,63,0.4)' },
