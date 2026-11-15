@@ -55,7 +55,7 @@ export default function RouteTimeSelector({ value, open, onOpen, onClose, onChan
             <Pressable style={styles.trigger} onPress={onOpen} accessibilityRole="button" accessibilityLabel="검색 시각 선택">
                 <Ionicons name="time-outline" size={20} color={LV_MAIN} />
                 <View style={styles.triggerText}>
-                    <Text style={styles.triggerCaption}>검색 시각 · 한국 시간 기준</Text>
+                    <Text style={styles.triggerCaption}>{value.mode === 'arrival' ? '도착' : '출발'} 시각 한국 시간 기준</Text>
                     <Text style={styles.triggerValue}>{formatRouteTimeSelection(value)}</Text>
                 </View>
                 <Ionicons name="chevron-down" size={18} color={LV_SECONDARY} />

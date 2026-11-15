@@ -18,6 +18,8 @@ import { MOCK_STATIONS } from '@/mocks/stations';
 import RouteCard from '@/components/route/RouteCard';
 import RouteTimeSelector from '@/components/route/RouteTimeSelector';
 import RouteTimeNotice from '@/components/route/RouteTimeNotice';
+import BottomTabBar, { useTabBarHeight } from '@/components/bottom-tab-bar';
+import TrainBlock from '@/components/train-block';
 import { personalRouteTimeBasis, roomRouteTimeBasis, routeTimeOptions } from '@/utils/route-time';
 import { searchRoute } from '@/services/route';
 import { fetchRoomDetail, getMockRoom } from '@/services/room';
@@ -107,6 +109,7 @@ function sortRoutes(routes: Route[], key: SortKey) {
 
 export default function RouteSearchScreen() {
     const insets = useSafeAreaInsets();
+    const tabBarHeight = useTabBarHeight();
 
     // 홈 화면 등에서 넘겨받은 초기값 (#32)
     // departureId·destinationId(#140)가 있으면 이름 재검색 없이 그 역 ID 로 요청해요. 이름은 표시용 대체값이에요.
@@ -276,6 +279,10 @@ export default function RouteSearchScreen() {
         });
     };
 
+    // 다른 화면에서 값을 넘겨 열었을 때만 뒤로 버튼을 보여요. 탭 바에서 바로 열면 숨겨요.
+    const hasBack = [params.roomId, params.departure, params.destination, params.departureId, params.destinationId, params.focus]
+        .some(value => !!value);
+
     const badgeLabel = SORT_TABS.find(tab => tab.key === sortKey)?.label ?? '';
 
     return (
@@ -284,11 +291,13 @@ export default function RouteSearchScreen() {
 
             {/* 상단 헤더 */}
             <View style={[styles.header, { marginTop: insets.top }]}>
-                <Pressable style={styles.backButton} onPress={goBack} accessibilityLabel="뒤로 가기">
-                    <Ionicons name="chevron-back" size={24} color={LV_TEXT} />
-                </Pressable>
+                {hasBack && (
+                    <Pressable style={styles.backButton} onPress={goBack} accessibilityLabel="뒤로 가기">
+                        <Ionicons name="chevron-back" size={24} color={LV_TEXT} />
+                    </Pressable>
+                )}
 
-                <Text style={styles.headerTitle}>경로 탐색</Text>
+                <Text style={styles.headerTitle}>경로 검색</Text>
             </View>
 
             {/* 출발 / 도착역 (누르면 역 검색 화면) */}
@@ -304,14 +313,14 @@ export default function RouteSearchScreen() {
                         <StationField
                             label="출발"
                             station={departure}
-                            placeholder="출발역을 검색하세요"
+                            placeholder="출발역"
                             onPress={() => openPicker('departure', departure)}
                         />
                         <View style={styles.stationDivider} />
                         <StationField
                             label="도착"
                             station={destination}
-                            placeholder="도착역을 검색하세요"
+                            placeholder="도착역"
                             onPress={() => openPicker('destination', destination)}
                         />
                     </View>
@@ -328,7 +337,7 @@ export default function RouteSearchScreen() {
 
             <ScrollView
                 style={styles.scrollView}
-                contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}
+                contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + 32 }]}
                 showsVerticalScrollIndicator={false}
             >
                 {!params.roomId && (
@@ -388,9 +397,9 @@ export default function RouteSearchScreen() {
 
                 {search.status === 'idle' && (
                     <View style={styles.empty}>
-                        <Ionicons name="train-outline" size={44} color={LV_MAIN} />
+                        <TrainBlock line={2} size={56} />
                         <Text style={styles.emptyTitle}>{'출발역과 도착역을 선택하면\n경로를 찾아드려요'}</Text>
-                        <Text style={styles.emptyText}>소요시간 · 요금 · 환승 · 예상 혼잡도</Text>
+                        <Text style={styles.emptyText}>소요시간 요금 환승 예상 혼잡도</Text>
                     </View>
                 )}
 
@@ -442,7 +451,15 @@ export default function RouteSearchScreen() {
                             onStart={() => startGuide(route)}
                         />
                     ))}
+
+                {search.status === 'idle' && (
+                    <Text style={styles.supportNote}>
+                        서울교통공사 1~8호선 역을 지원해요. 그 밖의 역은 <Text style={styles.supportNoteStrong}>미제공</Text>으로 표시되고 선택할 수 없어요.
+                    </Text>
+                )}
             </ScrollView>
+
+            <BottomTabBar active="route" />
         </View>
     );
 }
@@ -465,7 +482,6 @@ function StationField({
             accessibilityRole="button"
             accessibilityLabel={`${label}역 ${station ? formatStationName(station.name) : '선택'}`}
         >
-            <Text style={styles.stationLabel}>{label}</Text>
             {station ? (
                 <Text style={styles.stationName} numberOfLines={1}>{formatStationName(station.name)}</Text>
             ) : (
@@ -664,12 +680,6 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
 
-    stationLabel: {
-        color: LV_SECONDARY,
-        fontSize: 11,
-        fontWeight: '600',
-    },
-
     stationName: {
         color: LV_TEXT,
         fontSize: 16.5,
@@ -717,6 +727,18 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         color: LV_SECONDARY,
         fontSize: 13,
+    },
+
+    // 시안(#184)의 아래 안내 문구 자리 — 글자만 있어요.
+    supportNote: {
+        marginTop: 22,
+        color: LV_SECONDARY,
+        fontSize: 12,
+        lineHeight: 19.2,
+    },
+
+    supportNoteStrong: {
+        fontWeight: '700',
     },
 
     notice: {
