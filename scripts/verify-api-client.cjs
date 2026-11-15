@@ -7315,7 +7315,7 @@ test('147 KAKAO·정상 약속방 INTERNAL·대체 INTERNAL은 계산 원인을 
         const Card = search.load('src/components/route/RouteCard.tsx').default;
         assert.equal(!!findText(Card({ ...card.props, expanded: true }), '예상'), fareSource === 'ESTIMATED');
         assert.equal(!!findTextIncluding(Card({ ...card.props, expanded: false }), '예상 '), fareSource === 'ESTIMATED');
-        assert.equal(!!findText(guided, '예상'), fareSource === 'ESTIMATED');
+        assert.equal(!!findTextIncluding(guided, '예상 '), fareSource === 'ESTIMATED');
         assert.equal(selected.routeSource, scenario.source);
         search.unmount(); guide.unmount();
     }
@@ -7424,7 +7424,8 @@ test('146 도보 1분 + 대기 10분 환승: 어디에도 "도보 11분" 없이 
     assert.ok(expanded.some(text => text.includes('환승 2회, 도보 1분')));
     // 경로 안내 화면 요약도 서버 값 그대로예요.
     const r = guide129({ route }); const view = r.render();
-    assert.ok(findElement(view, element => element.type === 'Text' && textOf(element).includes('환승 2회 도보 1분')));
+    assert.ok(findText(view, '환승 2회'));
+    assert.ok(findText(view, '도보 1분'));
     assert.ok(!textOf(view).includes('도보 11분'));
     assert.ok(findElement(view, element => element.type === r.Timeline && element.props.route === route));
 });
@@ -8167,7 +8168,11 @@ test('161 TIMETABLE 경로의 펼침·접힘·안내 화면은 서버의 대기 
         for (const expanded of [false, true]) assert.ok(findText(Card({ ...card.props, expanded }), expected));
         card.props.onStart(); const selected = search.load('src/stores/route-store.ts').getSelectedRoute();
         assert.equal(selected.route.summary.waitKind, 'TIMETABLE');
-        const guide = route147Guide(selected); assert.ok(findText(guide.render(), expected));
+        const guide = route147Guide(selected); const guideView = guide.render();
+        const guideExpected = expected.replace('대기 포함 ', '');
+        assert.ok(findText(guideView, guideExpected));
+        assert.ok(!findTextIncluding(guideView, `약 ${guideExpected}`));
+        assert.ok(!findTextIncluding(guideView, '대기 포함 '));
         assert.equal(findElement(search.render(), element => element.props?.code), null);
         search.unmount(); guide.unmount();
     }
@@ -8978,7 +8983,7 @@ test('152 결과·안내는 검색한 조건과 자정 다음 날의 서버 날�
     const notice = findElement(r.render(), element => element.type === r.load('src/components/route/RouteTimeNotice.tsx').default);
     assert.ok(findText(notice.type(notice.props), '검색 조건 · 2026.11.15 00:08까지 도착'));
     card.props.onStart(); const selected = r.load('src/stores/route-store.ts').getSelectedRoute(); const guide = route147Guide(selected);
-    const guideView = guide.render(); assert.ok(findText(guideView, '2026.11.15 00:05 도착 예정'));
+    const guideView = guide.render(); assert.ok(findTextIncluding(guideView, '2026.11.14 23:35 → 2026.11.15 00:05'));
     const guideNotice = findElement(guideView, element => element.type === guide.load('src/components/route/RouteTimeNotice.tsx').default);
     assert.equal(guideNotice.props.selection.at, ARRIVE152);
     const timeline = findElement(guideView, element => element.type === guide.Timeline); assert.equal(timeline.props.showDates, true);
