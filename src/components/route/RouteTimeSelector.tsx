@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Text } from '@/components/app-text';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { CalendarModal, TimeWheelModal } from '@/components/rooms/appointment-picker';
 import type { RouteTimeSelection } from '@/types/route';

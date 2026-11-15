@@ -1,7 +1,8 @@
 import { formatStationName } from '@/utils/station-name';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { ActivityIndicator, Alert, Animated, Easing, Image, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Easing, Image, Linking, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Text } from '@/components/app-text';
 import * as ImagePicker from 'expo-image-picker';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { File, Paths } from 'expo-file-system';
@@ -1091,7 +1092,7 @@ const styles = StyleSheet.create({
     signBadgeText: {
         color: WHITE,
         fontSize: 18,
-        fontWeight: '900',
+        fontWeight: '800',
     },
 
     signHeadsign: {
@@ -1110,7 +1111,7 @@ const styles = StyleSheet.create({
     signArrow: {
         color: WHITE,
         fontSize: 26,
-        fontWeight: '900',
+        fontWeight: '800',
     },
 
     blur: {
@@ -1210,7 +1211,7 @@ const styles = StyleSheet.create({
 
     statusTitle: {
         fontSize: 19,
-        fontWeight: '900',
+        fontWeight: '800',
     },
 
     aiChip: {

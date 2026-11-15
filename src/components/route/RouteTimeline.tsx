@@ -1,7 +1,8 @@
 import { formatRouteDateTime } from '@/utils/route-time';
 import { formatClock, formatDirection, formatWait, formatWalkingStep } from '@/components/route/format';
 import { type ReactNode, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { Text } from '@/components/app-text';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import Congestion, { congestionColor } from '@/components/route/Congestion';

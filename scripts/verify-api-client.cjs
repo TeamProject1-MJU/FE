@@ -54,6 +54,8 @@ function createRuntime(env = {}, react = require('react')) {
             getCurrentPositionAsync: async () => { throw Error('위치 응답을 지정하세요'); },
         },
         'expo-image-picker': { requestCameraPermissionsAsync: async () => ({ granted: false }) },
+        // #187 공용 글자 컴포넌트는 화면 검사에서 react-native 의 Text·TextInput 과 같은 가짜 요소로 연결해요.
+        '@/components/app-text': { Text: 'Text', TextInput: 'TextInput' },
     };
     Object.defineProperty(external, '@stomp/stompjs', { get() {
             const module = { exports: {} };
@@ -75,6 +77,7 @@ function createRuntime(env = {}, react = require('react')) {
         }).outputText;
         const evaluate = new vm.Script(`(function(require, module, exports) { ${code}\n})`, { filename }).runInContext(context);
         evaluate(id => {
+            if (id === '@/components/app-text') return external[id];
             if (id.startsWith('@/')) return load(`src/${id.slice(2)}`);
             assert.ok(Object.hasOwn(external, id), `예상하지 못한 모듈입니다: ${id}`);
             return external[id];
@@ -7116,8 +7119,8 @@ function shallow129(node) {
     }
     return { t: typeof node.type === 'function' ? node.type.name : String(node.type), k: node.key, p: props, c: shallow129(children) };
 }
-/** #129 이전(dev e970115) route-guide.tsx 의 mock 모드 트리 sha256 이에요. */
-const MOCK_GUIDE_SHA129 = 'b96b2ecb22153e475a783a02f6e1e08552c118446ec3e8764218114d4239d13e';
+/** #129 이전(dev e970115) route-guide.tsx 의 mock 모드 트리 sha256 이에요. #187 fontWeight 900→800 반영 */
+const MOCK_GUIDE_SHA129 = '8e06db9879c69f249679ae70d567220f8caa33ed40508a38b8336b294f4d9ce7';
 test('129 mock 모드 경로 화면 트리는 #129 이전과 같아요', () => {
     const r = guide129({ mock: true });
     const sha = require('node:crypto').createHash('sha256').update(JSON.stringify(shallow129(r.render()))).digest('hex');
@@ -9832,4 +9835,37 @@ test('184 3D 아이콘: Passenger·TrainBlock·CongestionBlocks가 넣은 색으
     const block = findAll125(view, e => e.type === 'Image')[0];
     assert.deepEqual(plain(block.props.style), { width: 14, height: 14 * 1.1 });
     r.unmount();
+});
+
+test('187 공용 글자 컴포넌트는 원래 style 순서·위치를 지키고 글꼴을 맨 뒤에 붙이며 fontFamily 가 있으면 그대로 둬요', () => {
+    // 화면 검사에서는 가짜 요소로 연결하므로, 여기서는 app-text.tsx 를 직접 불러와 style 합치기 규칙만 확인해요.
+    const { Text, TextInput } = createRuntime().load('src/components/app-text.tsx');
+    for (const [Component, type] of [[Text, 'Text'], [TextInput, 'TextInput']]) {
+        // style 없음: 글꼴 스타일 하나만(검사 환경은 web 이라 Pretendard 뒤에 fallback 이 붙어요)
+        let element = Component({});
+        const font = plain(element.props.style);
+        assert.equal(element.type, type); assert.deepEqual(Object.keys(font), ['fontFamily']); assert.match(font.fontFamily, /^Pretendard\b/);
+        // 객체 하나
+        const single = { color: '#111', fontWeight: '800' };
+        element = Component({ style: single });
+        assert.equal(element.props.style.length, 2); assert.equal(element.props.style[0], single); assert.deepEqual(plain(element.props.style[1]), font);
+        // 배열: 원래 위치 유지(false·null 자리 포함), 글꼴은 맨 뒤
+        const a = { color: 'red' }; const b = { fontSize: 14 }; const original = [a, false, b, null];
+        element = Component({ style: original });
+        assert.equal(element.props.style.length, 5);
+        original.forEach((value, index) => assert.equal(element.props.style[index], value));
+        assert.deepEqual(plain(element.props.style[4]), font); assert.equal(original.length, 4);
+        // 중첩 배열: 바깥 배열 위치 유지, 안쪽 배열은 같은 참조
+        const inner = [a, b]; element = Component({ style: [inner, single] });
+        assert.equal(element.props.style[0], inner); assert.equal(element.props.style[1], single); assert.deepEqual(plain(element.props.style[2]), font);
+        // fontFamily 가 이미 있으면 그대로(객체·배열·중첩 배열 모두 같은 참조)
+        const mono = { fontFamily: 'monospace' };
+        for (const style of [mono, [a, mono], [a, [b, mono]]]) assert.equal(Component({ style }).props.style, style);
+        // 나머지 props 그대로 전달
+        const ref = { current: null }; const onPress = () => {}; const onChangeText = () => {};
+        element = Component({ style: a, ref, numberOfLines: 2, onPress, onChangeText, accessibilityLabel: '라벨', testID: 'id', children: '글자' });
+        assert.equal(element.props.ref ?? element.ref, ref);
+        assert.equal(element.props.numberOfLines, 2); assert.equal(element.props.onPress, onPress); assert.equal(element.props.onChangeText, onChangeText);
+        assert.equal(element.props.accessibilityLabel, '라벨'); assert.equal(element.props.testID, 'id'); assert.equal(element.props.children, '글자');
+    }
 });

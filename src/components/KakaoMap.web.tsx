@@ -3,7 +3,8 @@
  * 현재 페이지에 JS SDK를 직접 추가하고 kakao.maps.load 콜백에서 지도를 만들어요.
  */
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { Text } from '@/components/app-text';
 import type { KakaoMapProps } from '@/components/KakaoMap';
 import { createWebMap, loadMapSdk } from '@/components/map/map-web';
 

@@ -1,7 +1,8 @@
 import RouteNotices from '@/components/route/RouteNotices';
 import { formatArrivalSlack, formatRouteDateTime } from '@/utils/route-time';
 import { formatClock, formatDirection, formatTotalTime, formatWait, formatWalkBeforeRide, stepMinutes } from '@/components/route/format';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { Text } from '@/components/app-text';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import CongestionBlocks from '@/components/congestion-blocks';

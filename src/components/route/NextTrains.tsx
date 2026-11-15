@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { Text } from '@/components/app-text';
 
 import { arrivalsCountdownBase, arrivalsElapsedSec, formatNextTrain } from '@/components/route/format';
 import { isAuthError } from '@/services/api/errors';
