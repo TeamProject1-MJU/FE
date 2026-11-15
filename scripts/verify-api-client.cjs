@@ -6380,7 +6380,7 @@ test('125 계정이 바뀌면 재시도 응답을 버리고 유지하던 사진�
 test('125 경로 정보가 없으면 안내와 경로 검색 버튼, 있으면 역·호선·방면 요약을 보여주고 보내는 route는 그대로예요', async () => {
     for (const params of [{}, { stationId: '105', lineId: '2' }, { stationId: '0', lineId: '2', headsign: '사당 방면' }, { stationId: '105', lineId: '2', headsign: '  ' }]) {
         const r = await directionScreen125(params); const view = r.render();
-        assert.ok(texts125(view).includes('확인할 경로가 없어요')); assert.ok(texts125(view).includes('방향을 확인할 경로를 먼저 선택해 주세요.'));
+        assert.ok(texts125(view).includes('확인할 경로가 없어요')); assert.ok(texts125(view).includes(r.load('src/utils/direction-route.ts').directionRouteIssue(params)));
         for (const label of ['표지판 촬영', '갤러리 선택', 'AI로 확인하기']) assert.equal(r.button(label), null);
         await r.press('경로 검색'); assert.deepEqual(r.routes, ['/route-search']); r.unmount();
     }
@@ -9628,4 +9628,176 @@ test('172 mock 모드: 약속 있는 mock 방은 실시간을 숨기고 약속 �
     for (let i = 0; i < 5; i++) { r.render(); await settle(); r.advance(800); await settle(); }
     findElement(r.render(), element => element.type === r.load('src/components/route/RouteCard.tsx').default).props.onStart();
     assert.equal(r.load('src/stores/route-store.ts').getSelectedRoute().timeBasis, 'unknown'); r.unmount();
+});
+
+/* ---------- 표지판 방향 단독 계약·실제 경로 진입 (#151) ---------- */
+const directionCases151 = [
+    ['UP', 1, '상행', 'DOWN'], ['DOWN', 1, '하행', 'UP'], ['INNER', 2, '내선', 'OUTER'],
+    ['OUTER', 2, '외선', 'INNER'], ['LOOP', 6, '순환', null],
+];
+function response151(result = 'CORRECT', reason = null, read = '내선순환') {
+    return { result, reason, recognized: { stationName: '승차역', lineName: '2호선', headsign: read },
+        expected: { stationName: '승차역', lineName: '2호선', headsign: null }, message: `서버 판독 결과 ${result}` };
+}
+function step151(code = 'INNER', lineId = 2) {
+    const step = routeData().routes[0].steps.find(item => item.type === 'SUBWAY');
+    return { ...step, stations: (step.stations ?? []).map(station => ({ ...station, congestion: station.congestion ?? missingRouteCongestion() })),
+        line: { id: lineId, name: `${lineId}호선`, color: '#00a84d' }, direction: null, directionCode: code,
+        stops: [{ id: 88001, name: '승차역', order: 0 }, { id: 99002, name: '도착역', order: 1 }] };
+}
+function guide151(steps, mock = false) {
+    const route = route129(); route.steps = steps;
+    const r = guide129({ route, mock }); const pushes = [];
+    r.external['expo-router'].router.push = href => pushes.push(href);
+    r.timeline151 = () => findElement(r.render(), element => element.type === r.Timeline);
+    return Object.assign(r, { pushes151: pushes });
+}
+
+test('151 expected.headsign null은 정상 판독 결과이며 누락·잘못된 타입과 다른 필드 오류는 계속 거절해요', () => {
+    const parse = createRuntime(serverEnv).load('src/services/direction.ts').parseDirectionResponse;
+    for (const [result, reason] of [['CORRECT', null], ['WRONG', 'DIRECTION_MISMATCH'], ['RETAKE', 'MISSING_INFO']]) {
+        const data = response151(result, reason); assert.deepEqual(plain(parse(data)), data);
+    }
+    for (const value of [undefined, 3, {}, false]) {
+        const data = response151(); if (value === undefined) delete data.expected.headsign; else data.expected.headsign = value;
+        assert.throws(() => parse(data), { code: 'UNKNOWN_ERROR' });
+    }
+    for (const key of ['stationName', 'lineName']) {
+        const data = response151(); data.expected[key] = null; assert.throws(() => parse(data), { code: 'UNKNOWN_ERROR' });
+    }
+});
+
+test('151 방향 코드 5종은 headsign 생략·null·공백 모두 multipart에서 방면을 만들지 않고 그대로 전달해요', async () => {
+    for (const [direction, lineId] of directionCases151) for (const headsign of [undefined, null, '  ']) {
+        const r = createRuntime(serverEnv); let request;
+        r.context.fetch = async (url, options) => { request = { url, options }; return jsonResponse({ success: true, data: response151() }); };
+        const route = { stationId: 88001, lineId, direction, ...(headsign === undefined ? {} : { headsign }) };
+        const data = await r.load('src/services/direction.ts').checkDirection(directionPhoto114, route);
+        assert.equal(data.expected.headsign, null); assert.equal(request.url, 'https://example.test/api/v1/ai/direction-check');
+        assert.deepEqual(JSON.parse(request.options.body.get('route')), { stationId: 88001, lineId, direction });
+        assert.equal(request.options.body.get('image').name, 'direction.jpg'); assert.equal(request.options.headers['Content-Type'], undefined);
+    }
+});
+
+test('151 방향·방면 모두 없음, 잘못된 코드와 ID는 사진 업로드 없이 차단하고 기존 headsign 단독 요청은 유지해요', async () => {
+    const r = createRuntime(serverEnv); let calls = 0; let body;
+    r.context.fetch = async (_url, options) => { calls++; body = options.body; return jsonResponse({ success: true, data: directionData114() }); };
+    const service = r.load('src/services/direction.ts');
+    for (const route of [{ stationId: 88001, lineId: 2 }, { stationId: 88001, lineId: 2, headsign: ' ' },
+        { stationId: 88001, lineId: 2, direction: 'SIDEWAYS', headsign: '사당 방면' }, { stationId: 88001, lineId: 2, direction: 'inner' },
+        { stationId: 0, lineId: 2, direction: 'INNER' }, { stationId: 88001, lineId: null, direction: 'INNER' },
+        { stationId: 88001, lineId: 2, direction: ['INNER'] }, { stationId: 88001, lineId: 2, direction: 'INNER', headsign: 5 }]) {
+        await assert.rejects(service.checkDirection(directionPhoto114, route), { code: 'VALIDATION_ERROR' });
+    }
+    assert.equal(calls, 0);
+    await service.checkDirection(directionPhoto114, { stationId: 88001, lineId: 2, headsign: ' 사당 방면 ' });
+    assert.deepEqual(JSON.parse(body.get('route')), { stationId: 88001, lineId: 2, headsign: '사당 방면' }); assert.equal(calls, 1);
+});
+
+test('151 서버 방향 코드 경로는 안내 버튼에서 승차역·노선·코드를 넘기고 촬영·선택 후 동일한 route로 분석해요', async () => {
+    for (const [direction, lineId, label] of directionCases151) {
+        const data = routeData(); data.routes[0].steps = [step151(direction, lineId)];
+        const search = await route147Search(data); const card = search.card147(); assert.ok(card); card.props.onStart();
+        const guide = route147Guide(search.load('src/stores/route-store.ts').getSelectedRoute()); guide.pushes151 = [];
+        guide.external['expo-router'].router.push = href => guide.pushes151.push(href);
+        const timeline = findElement(guide.render(), element => element.type === guide.Timeline);
+        const content = guide.renderComponent(timeline);
+        const button = findElement(content, element => element.type === 'Pressable' && textOf(element) === '표지판으로 방향 확인');
+        assert.ok(button); button.props.onPress();
+        const href = guide.pushes151[0]; assert.equal(href.pathname, '/ai-direction');
+        assert.deepEqual(plain(href.params), { stationId: '88001', stationName: '승차역', lineId: String(lineId), lineName: `${lineId}호선`, direction });
+        const screen = await directionScreen125(plain(href.params)); assert.ok(screen.button('표지판 촬영')); assert.ok(screen.button('갤러리 선택'));
+        assert.ok(texts125(screen.render()).includes(`승차역 · ${lineId}호선 ${label}`));
+        await screen.press(direction === 'UP' || direction === 'INNER' ? '표지판 촬영' : '갤러리 선택');
+        screen.respond(async () => jsonResponse({ success: true, data: response151() })); const result = await screen.press('AI로 확인하기');
+        assert.deepEqual(screen.sent[0].route, { stationId: 88001, lineId, direction });
+        assert.ok(texts125(result).includes('올바른 방향이에요')); assert.equal(screen.calls, 1); screen.unmount(); guide.unmount(); search.unmount();
+    }
+});
+
+test('151 승차역·노선·방향 정보 없는 구간은 버튼 대신 이유를 보여주고 직접 호출도 이동하지 않아요', () => {
+    const base = step151();
+    const missing = [{ ...base, directionCode: null }, { ...base, stops: [] }, { ...base, line: { ...base.line, id: null } }, { ...base, directionCode: 'BAD' }];
+    for (const step of missing) {
+        const r = guide151([step]); const timeline = r.timeline151(); const view = r.renderComponent(timeline);
+        assert.equal(findElement(view, element => element.type === 'Pressable' && textOf(element) === '표지판으로 방향 확인'), null);
+        const issue = r.load('src/utils/direction-route.ts').directionStepIssue(step); assert.ok(issue); assert.ok(findText(view, issue));
+        timeline.props.onSignCheck(step); assert.equal(r.pushes151.length, 0); r.unmount();
+    }
+    const legacy = guide151([{ ...base, directionCode: null, direction: '사당 방면' }]);
+    legacy.timeline151().props.onSignCheck({ ...base, directionCode: null, direction: '사당 방면' });
+    assert.equal(legacy.pushes151[0].params.headsign, '사당 방면'); assert.equal(Object.hasOwn(legacy.pushes151[0].params, 'direction'), false); legacy.unmount();
+});
+
+test('151 여러 승차·환승 구간은 각각의 역·호선·방향으로 진입하며 도보 구간에는 버튼이 없어요', () => {
+    const first = step151('UP', 1); const second = step151('OUTER', 2); second.stops[0] = { id: 88002, name: '환승역', order: 0 };
+    const walking = { ...first, type: 'WALKING', line: null, directionCode: null, stops: [] };
+    const r = guide151([first, walking, second]); const timeline = r.timeline151(); const view = r.renderComponent(timeline);
+    const buttons = findAll125(view, element => element.type === 'Pressable' && textOf(element) === '표지판으로 방향 확인'); assert.equal(buttons.length, 2);
+    buttons.forEach(button => button.props.onPress());
+    assert.deepEqual(r.pushes151.map(href => [href.params.stationId, href.params.lineId, href.params.direction]), [['88001', '1', 'UP'], ['88002', '2', 'OUTER']]); r.unmount();
+});
+
+test('151 직접 진입에서 방향·방면·ID가 부족하면 촬영·갤러리를 막고 이유와 경로 검색을 보여줘요', async () => {
+    for (const params of [{}, { stationId: '88001', lineId: '2' }, { stationId: '88001', lineId: '2', direction: 'BAD' },
+        { stationId: '88001', lineId: '2', direction: ['INNER'] }, { stationId: '-1', lineId: '2', direction: 'INNER' }]) {
+        const r = await directionScreen125(params); const issue = r.load('src/utils/direction-route.ts').directionRouteIssue(params);
+        assert.ok(findText(r.render(), issue)); assert.equal(r.button('표지판 촬영'), null); assert.equal(r.button('갤러리 선택'), null);
+        assert.equal(r.calls, 0); await r.press('경로 검색'); assert.deepEqual(r.routes, ['/route-search']); r.unmount();
+    }
+});
+
+test('151 CORRECT·WRONG·MISSING_INFO는 null 방면을 유지하고 서버 결과와 명시적 방향 표시를 구분해 그려요', async () => {
+    for (const [result, reason, read] of [['CORRECT', null, '내선순환'], ['WRONG', 'DIRECTION_MISMATCH', '외선순환'], ['RETAKE', 'MISSING_INFO', '성수 방면']]) {
+        const r = await directionScreen125({ stationId: '88001', stationName: '승차역', lineId: '2', lineName: '2호선', direction: 'INNER' });
+        await r.press('표지판 촬영'); const data = response151(result, reason, read);
+        r.respond(async () => jsonResponse({ success: true, data })); const view = await r.press('AI로 확인하기');
+        const text = texts125(view); assert.ok(text.includes(data.message)); assert.ok(text.includes('읽은 방향 표시')); assert.ok(text.includes('내 경로 방향')); assert.ok(text.includes('내선'));
+        assert.equal(text.includes('내 경로 방면'), false); assert.equal(r.button('다시 시도'), null);
+        if (result === 'RETAKE') assert.ok(text.includes('행선지 이름만으로는 방향을 확정할 수 없어요'));
+        assert.equal(data.expected.headsign, null); assert.deepEqual(r.sent[0].route, { stationId: 88001, lineId: 2, direction: 'INNER' }); r.unmount();
+    }
+});
+
+test('151 인식 정보가 모두 null인 RETAKE도 실패 화면 없이 재촬영 안내와 경로 복귀를 제공해요', async () => {
+    const r = await directionScreen125({ stationId: '88001', lineId: '6', direction: 'LOOP' }); await r.press('갤러리 선택');
+    const data = response151('RETAKE', 'MISSING_INFO', null); data.recognized = { stationName: null, lineName: null, headsign: null };
+    r.respond(async () => jsonResponse({ success: true, data })); const text = texts125(await r.press('AI로 확인하기'));
+    assert.ok(text.includes('다시 촬영해 주세요')); assert.ok(text.includes('읽지 못했어요')); assert.ok(text.includes('순환'));
+    assert.ok(r.button('표지판 촬영')); assert.ok(r.button('경로 안내로 돌아가기')); assert.equal(r.alerts.length, 0); r.unmount();
+});
+
+test('151 방향 단독 요청의 인증 갱신은 같은 multipart를 재전송하고 400·404·네트워크 오류는 기존 코드로 유지돼요', async () => {
+    const r = createRuntime(serverEnv); const client = r.load('src/services/api/client.ts'); const calls = []; let token = 'old';
+    client.setAccessTokenProvider(() => token); client.setTokenRefresher(async () => { token = 'new'; });
+    r.context.fetch = async (_url, request) => { calls.push(request); return calls.length === 1 ? jsonResponse({ success: false, error: { code: 'TOKEN_EXPIRED' } }, 401) : jsonResponse({ success: true, data: response151() }); };
+    const route = { stationId: 88001, lineId: 2, direction: 'INNER' };
+    await r.load('src/services/direction.ts').checkDirection(directionPhoto114, route);
+    assert.equal(calls.length, 2); assert.equal(calls[0].body, calls[1].body); assert.equal(calls[1].headers.Authorization, 'Bearer new');
+    assert.deepEqual(JSON.parse(calls[1].body.get('route')), route);
+    for (const [code, status] of [['VALIDATION_ERROR', 400], ['STATION_NOT_FOUND', 404], ['NETWORK_ERROR', 0]]) {
+        const api = createRuntime(serverEnv); api.context.fetch = async () => { if (!status) throw Error(); return jsonResponse({ success: false, error: { code } }, status); };
+        await assert.rejects(api.load('src/services/direction.ts').checkDirection(directionPhoto114, route), { code });
+    }
+});
+
+test('151 방향 단독 요청도 30초 제한·중복 제출 방지·같은 사진 재시도를 유지해요', async () => {
+    const r = await directionScreen125({ stationId: '88001', lineId: '1', direction: 'UP' }); await r.press('표지판 촬영');
+    r.respond(failure125('AI_UNAVAILABLE')); await r.press('AI로 확인하기'); assert.ok(r.button('다시 시도'));
+    const finish = r.hold(); const button = r.button('다시 시도'); button.props.onPress(); button.props.onPress(); await r.pump(); assert.equal(r.calls, 2);
+    finish(jsonResponse({ success: true, data: response151() })); await r.pump();
+    assert.deepEqual(r.sent[0], r.sent[1]); r.unmount();
+    const api = createRuntime(serverEnv); api.context.fetch = (_url, request) => new Promise((_, reject) => request.signal.addEventListener('abort', () => reject(Error())));
+    const request = api.load('src/services/direction.ts').checkDirection(directionPhoto114, { stationId: 88001, lineId: 1, direction: 'UP' });
+    const rejected = assert.rejects(request, { code: 'NETWORK_ERROR' }); await settle(); assert.equal([...api.timers.values()][0].ms, 30000); api.advance(30000); await rejected;
+});
+
+test('151 분석 중 경로가 바뀌면 이전 결과와 사진을 버리고 새 방향으로 촬영·전송해요', async () => {
+    const params = { stationId: '88001', lineId: '1', direction: 'UP' }; const r = await directionScreen125(params);
+    await r.press('표지판 촬영'); const finish = r.hold(); r.button('AI로 확인하기').props.onPress(); await r.pump();
+    params.direction = 'DOWN'; r.render(); let view = r.render(); assert.equal(r.button('AI로 확인하기'), null);
+    finish(jsonResponse({ success: true, data: response151() })); view = await r.pump();
+    assert.equal(texts125(view).includes('서버 판독 결과 CORRECT'), false); assert.ok(deletedCount125(r));
+    await r.press('표지판 촬영'); r.respond(async () => jsonResponse({ success: true, data: response151() })); await r.press('AI로 확인하기');
+    assert.equal(r.sent.at(-1).route.direction, 'DOWN'); r.unmount();
 });

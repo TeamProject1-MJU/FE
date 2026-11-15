@@ -10,9 +10,10 @@ export type DirectionCode = NonNullable<RouteStep['directionCode']>;
 export type DirectionCheckRoute = {
     stationId: number;
     lineId: number;
-    /** 모르면 생략 → 서버가 headsign 으로 비교 */
+    /** headsign이 없으면 필수예요. 경로의 directionCode를 그대로 보내요. */
     direction?: DirectionCode;
-    headsign: string;
+    /** 알려진 방면 이름만 보내고, 모르면 생략하거나 null로 둬요. */
+    headsign?: string | null;
 };
 
 export type DirectionResult = 'CORRECT' | 'WRONG' | 'RETAKE';
@@ -36,6 +37,7 @@ export type DirectionCheckResponse = {
     /** CORRECT 이면 null */
     reason: DirectionReason | null;
     recognized: SignInfo;
+    /** 방면 이름이 없는 요청은 expected.headsign이 명시적 null이에요. */
     expected: SignInfo;
     message: string;
 };

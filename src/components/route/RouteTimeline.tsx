@@ -45,6 +45,7 @@ type Props = {
     showDates?: boolean;
     /** 승차 구간의 '표지판으로 방향 확인' 버튼 */
     onSignCheck: (step: RouteStep) => void;
+    getSignCheckIssue?: (step: RouteStep) => string | null;
 };
 
 /**
@@ -52,7 +53,7 @@ type Props = {
  * 명세 6.1 route.steps 를 순서대로 그립니다: 승차 → (중간역) → 하차 → 환승 → … → 도착
  * WALKING 은 "도보 N분"이고, 다음 열차 대기가 따로 표시되지 않는 환승 단계만 "환승 소요 N분"이에요(#146, format.ts formatWalkingStep).
  */
-export default function RouteTimeline({ route, onSignCheck, nextTrains, showDates = false }: Props) {
+export default function RouteTimeline({ route, onSignCheck, nextTrains, showDates = false, getSignCheckIssue }: Props) {
     const [openSteps, setOpenSteps] = useState<Record<number, boolean>>({});
 
     const lastSubwayIndex = route.steps.reduce(
@@ -89,6 +90,7 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, showDate
                 const middle = step.stops.slice(1, -1);
                 const open = !!openSteps[index];
                 const isLastSubway = index === lastSubwayIndex;
+                const signCheckIssue = getSignCheckIssue?.(step);
 
                 return (
                     <View key={`ride-${index}`}>
@@ -169,14 +171,14 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, showDate
                                         </View>
                                     ))}
 
-                                <Pressable
+                                {signCheckIssue ? <Text style={styles.metaText}>{signCheckIssue}</Text> : <Pressable
                                     style={({ pressed }) => [styles.signButton, pressed && styles.pressed]}
                                     onPress={() => onSignCheck(step)}
                                     accessibilityRole="button"
                                 >
                                     <Ionicons name="camera-outline" size={17} color={NAVY} />
                                     <Text style={styles.signText}>표지판으로 방향 확인</Text>
-                                </Pressable>
+                                </Pressable>}
                             </View>
                         </View>
 

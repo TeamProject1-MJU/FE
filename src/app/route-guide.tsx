@@ -2,6 +2,7 @@ import RouteNotices from '@/components/route/RouteNotices';
 import RouteTimeNotice from '@/components/route/RouteTimeNotice';
 import { formatArrivalSlack, formatRouteDateTime, shouldShowLiveTrains } from '@/utils/route-time';
 import { formatStationName } from '@/utils/station-name';
+import { directionInputFromStep, directionStepIssue, normalizeDirectionRoute } from '@/utils/direction-route';
 import { formatClock, formatTotalTime } from '@/components/route/format';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -68,6 +69,17 @@ export default function RouteGuideScreen() {
     /** 승차 구간 → 표지판 방향 확인 (명세 9.1 route 파트에 넣을 값을 함께 넘깁니다) */
     const openSignCheck = (step: RouteStep) => {
         const station = step.stops[0];
+        if (serverMode) {
+            if (directionStepIssue(step)) return;
+            const route = normalizeDirectionRoute(directionInputFromStep(step));
+            if (!route) return;
+            router.push({ pathname: '/ai-direction', params: {
+                stationId: String(route.stationId), stationName: station?.name ?? '',
+                lineId: String(route.lineId), lineName: step.line?.name ?? '',
+                ...(route.direction ? { direction: route.direction } : {}), ...(route.headsign ? { headsign: route.headsign } : {}),
+            } });
+            return;
+        }
         router.push({
             pathname: '/ai-direction',
             params: {
@@ -226,6 +238,7 @@ export default function RouteGuideScreen() {
                     <RouteTimeline
                         route={selected.route}
                         onSignCheck={openSignCheck}
+                        {...(serverMode ? { getSignCheckIssue: directionStepIssue } : {})}
                         {...(selected.searchTime ? { showDates: true } : {})}
                         nextTrains={showLiveTrains && firstSubway && <NextTrains step={firstSubway} mock={arrivals === 'none' || arrivals === 'fail' ? arrivals : undefined} />}
                     />
