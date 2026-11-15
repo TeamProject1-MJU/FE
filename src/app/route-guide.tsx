@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import RouteNotices from '@/components/route/RouteNotices';
 import RouteTimeNotice from '@/components/route/RouteTimeNotice';
 import { formatArrivalSlack, formatRouteDateTime, formatRouteTimeSelection, shouldShowLiveTrains } from '@/utils/route-time';
@@ -29,7 +30,6 @@ const LV_TEXT = '#25212D';
 const LV_SUB = '#4A4553';
 const LV_SECONDARY = '#83808B';
 const LV_MAIN = '#5C3F78';
-const LV_SOFT = '#EDE8F3';
 const LV_BACKGROUND = '#F7F5FA';
 const LV_WHITE = '#FFFFFF';
 const LV_CARD_BORDER = '#EEEAF2';
@@ -53,6 +53,7 @@ function currentAccount() {
  */
 export default function RouteGuideScreen() {
     const insets = useSafeAreaInsets();
+    const [mapExpanded, setMapExpanded] = useState(true);
     const { routeId, arrivals } = useLocalSearchParams<{ routeId?: string; arrivals?: string }>();
     const selected = getSelectedRoute(routeId);
     const firstSubway = selected?.route.steps.find(step => step.type === 'SUBWAY');
@@ -124,7 +125,7 @@ export default function RouteGuideScreen() {
                 </View>
             ) : selected.origin.id === selected.destination.id ? (
                 <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}>
-                    {selected.searchTime && <RouteTimeNotice selection={selected.searchTime} routes={selected.origin.id === selected.destination.id ? [] : [selected.route]} mock={isMockMode()} />}
+                    {selected.searchTime && <RouteTimeNotice compact selection={selected.searchTime} routes={selected.origin.id === selected.destination.id ? [] : [selected.route]} mock={isMockMode()} />}
                     {selected.appointmentPassed && !!selected.notice && (
                         <View style={styles.notice}>
                             <Ionicons name="alert-circle-outline" size={17} color={LV_MAIN} />
@@ -132,9 +133,9 @@ export default function RouteGuideScreen() {
                         </View>
                     )}
                     {selected.routeSource === 'INTERNAL' && (
-                        <View style={styles.notice}>
+                        <View style={[styles.notice, styles.inlineNotice]}>
                             <Ionicons name="information-circle-outline" size={18} color={LV_MAIN} />
-                            <Text style={styles.noticeText}>자체 계산한 경로예요.</Text>
+                            <Text style={[styles.noticeText, styles.inlineNoticeText]}>자체 계산한 경로예요.</Text>
                         </View>
                     )}
                     <View style={styles.card}>
@@ -157,10 +158,13 @@ export default function RouteGuideScreen() {
                             {!!conditionLabel && <Text style={styles.condition}>{conditionLabel}</Text>}
                         </View>
 
-                        <Text style={styles.totalLine}>
-                            {!!splitTotalTime(selected.route.summary)[0] && <Text style={styles.totalPrefix}>{splitTotalTime(selected.route.summary)[0]}</Text>}
-                            <Text style={styles.totalTime}>{splitTotalTime(selected.route.summary)[1]}</Text>
-                        </Text>
+                        <View style={styles.totalRow}>
+                            <Text style={styles.totalLine}>
+                                {!!splitTotalTime(selected.route.summary)[0] && <Text style={styles.totalPrefix}>{splitTotalTime(selected.route.summary)[0]}</Text>}
+                                <Text style={styles.totalTime}>{splitTotalTime(selected.route.summary)[1]}</Text>
+                            </Text>
+                            <Text style={styles.clockRange}>{selected.searchTime ? formatRouteDateTime(selected.route.summary.departureAt ?? '') : formatClock(selected.route.summary.departureAt ?? '')} → {selected.searchTime ? formatRouteDateTime(selected.route.summary.arrivalAt) : formatClock(selected.route.summary.arrivalAt)}</Text>
+                        </View>
 
                         <View style={styles.arrivalRow}>
                             {!!formatClock(selected.route.summary.arrivalAt) && (
@@ -176,7 +180,7 @@ export default function RouteGuideScreen() {
                             })}
                         </View>
 
-                        {selected.route.summary.departureAt && <Text style={styles.meta}>{selected.searchTime ? formatRouteDateTime(selected.route.summary.departureAt) : formatClock(selected.route.summary.departureAt)} 출발 예정</Text>}
+                        {selected.route.summary.departureAt && <Text style={styles.meta}>{selected.searchTime ? formatRouteDateTime(selected.route.summary.departureAt ?? '') : formatClock(selected.route.summary.departureAt ?? '')} 출발 예정</Text>}
                         <RouteNotices summary={selected.route.summary} />
                         {selected.searchTime && selected.route.summary.slackSeconds != null && <Text style={styles.meta}>{formatArrivalSlack(selected.route.summary.slackSeconds)}</Text>}
 
@@ -189,53 +193,58 @@ export default function RouteGuideScreen() {
                                     : ''}
                             </Text>
                         </View>
+                        {/* 안내 문구 */}
+                        {selected.searchTime && <RouteTimeNotice compact selection={selected.searchTime} routes={selected.origin.id === selected.destination.id ? [] : [selected.route]} mock={isMockMode()} />}
+                        {selected.appointmentPassed && !!selected.notice && (
+                            <View style={styles.notice}>
+                                <Ionicons name="alert-circle-outline" size={17} color={LV_MAIN} />
+                                <Text style={styles.noticeText}>{selected.notice}</Text>
+                            </View>
+                        )}
+                        {!!liveTrainsNotice && (
+                            <View style={styles.notice}>
+                                <Ionicons name="information-circle-outline" size={18} color={LV_MAIN} />
+                                <Text style={styles.noticeText}>{liveTrainsNotice}</Text>
+                            </View>
+                        )}
+
+                        {selected.routeSource === 'INTERNAL' && (
+                            <View style={[styles.notice, styles.inlineNotice]}>
+                                <Ionicons name="information-circle-outline" size={18} color={LV_MAIN} />
+                                <Text style={[styles.noticeText, styles.inlineNoticeText]}>자체 계산한 경로예요.</Text>
+                            </View>
+                        )}
                     </View>
-
-                    {/* 안내 문구 */}
-                    {selected.searchTime && <RouteTimeNotice selection={selected.searchTime} routes={selected.origin.id === selected.destination.id ? [] : [selected.route]} mock={isMockMode()} />}
-                    {selected.appointmentPassed && !!selected.notice && (
-                        <View style={styles.notice}>
-                            <Ionicons name="alert-circle-outline" size={17} color={LV_MAIN} />
-                            <Text style={styles.noticeText}>{selected.notice}</Text>
-                        </View>
-                    )}
-                    {!!liveTrainsNotice && (
-                        <View style={styles.notice}>
-                            <Ionicons name="information-circle-outline" size={18} color={LV_MAIN} />
-                            <Text style={styles.noticeText}>{liveTrainsNotice}</Text>
-                        </View>
-                    )}
-
-                    {selected.routeSource === 'INTERNAL' && (
-                        <View style={styles.notice}>
-                            <Ionicons name="information-circle-outline" size={18} color={LV_MAIN} />
-                            <Text style={styles.noticeText}>자체 계산한 경로예요.</Text>
-                        </View>
-                    )}
 
                     {/* 지도 미리보기 */}
                     <View style={styles.mapCard}>
-                        {serverMode && routeMap.data ? (
-                            <>
-                                <View style={styles.map}>
-                                    <KakaoMap
-                                        key={routeMap.mapKey}
-                                        center={routeMap.data.center}
-                                        myLocation={null}
-                                        markers={routeMap.data.markers}
-                                        lines={routeMap.data.lines}
-                                        fitBounds={routeMap.data.bounds}
-                                        fitRevision={routeMap.fitRevision}
-                                        label="경로 지도"
-                                        onRegionChange={routeMap.onRegionChange}
-                                        onError={routeMap.onError}
-                                    />
-                                </View>
-                                {!routeMap.failed && <RouteMapLegend map={routeMap.data} />}
-                            </>
-                        ) : (
-                            <RouteMapPreview route={selected.route} />
-                        )}
+                        <Pressable style={styles.mapToggle} onPress={() => setMapExpanded(value => !value)} accessibilityRole="button" accessibilityState={{ expanded: mapExpanded }}>
+                            <Text style={styles.mapToggleText}>{mapExpanded ? '지도 접기' : '지도 미리보기'}</Text>
+                            <Ionicons name={mapExpanded ? 'chevron-up' : 'chevron-down'} size={16} color={LV_MAIN} />
+                        </Pressable>
+                        <View style={!mapExpanded ? { display: 'none' } : undefined}>
+                            {serverMode && routeMap.data ? (
+                                <>
+                                    <View style={styles.map}>
+                                        <KakaoMap
+                                            key={routeMap.mapKey}
+                                            center={routeMap.data.center}
+                                            myLocation={null}
+                                            markers={routeMap.data.markers}
+                                            lines={routeMap.data.lines}
+                                            fitBounds={routeMap.data.bounds}
+                                            fitRevision={routeMap.fitRevision}
+                                            label="경로 지도"
+                                            onRegionChange={routeMap.onRegionChange}
+                                            onError={routeMap.onError}
+                                        />
+                                    </View>
+                                    {!routeMap.failed && <RouteMapLegend compact map={routeMap.data} />}
+                                </>
+                            ) : (
+                                <RouteMapPreview route={selected.route} />
+                            )}
+                        </View>
                     </View>
 
                     <View style={styles.sectionRow}>
@@ -323,6 +332,10 @@ const styles = StyleSheet.create({
         fontSize: 12,
     },
 
+    totalRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'baseline', columnGap: 10 },
+    clockRange: { color: LV_SUB, fontSize: 14 },
+    mapToggle: { height: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 8 },
+    mapToggleText: { fontSize: 13, fontWeight: '600', color: LV_MAIN },
     totalLine: {
         marginTop: 4,
         color: LV_TEXT,
@@ -386,13 +399,15 @@ const styles = StyleSheet.create({
         backgroundColor: '#EFEBF4',
     },
 
+    inlineNotice: { padding: 0, paddingVertical: 4, backgroundColor: 'transparent' },
+    inlineNoticeText: { color: LV_SECONDARY, fontSize: 12, fontWeight: '400' },
     notice: {
         padding: 12,
         flexDirection: 'row',
         alignItems: 'flex-start',
         gap: 8,
         borderRadius: 14,
-        backgroundColor: LV_SOFT,
+        backgroundColor: '#EDE8F3',
     },
 
     noticeText: {

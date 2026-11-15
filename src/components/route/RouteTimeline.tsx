@@ -1,3 +1,5 @@
+import ArrivalFlag from '@/components/arrival-flag';
+import TrainBlock from '@/components/train-block';
 import { formatRouteDateTime } from '@/utils/route-time';
 import { formatClock, formatDirection, formatWait, formatWalkBeforeRide, formatWalkingStep, isTransferStep } from '@/components/route/format';
 import { type ReactNode, useState } from 'react';
@@ -160,6 +162,13 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, showDate
 
     return (
         <View style={styles.card}>
+            <View style={styles.hereRow}>
+                <Passenger tone="me" size={26} />
+                <View style={styles.headingBody}>
+                    <Text style={styles.hereLabel}>지금 여기</Text>
+                    <Text style={styles.hereTitle}>{steps[firstSubwayIndex]?.stops[0]?.name} {showDates ? formatRouteDateTime(route.summary.departureAt ?? '') : formatClock(route.summary.departureAt ?? '')} 출발</Text>
+                </View>
+            </View>
             {steps.map((step, index) => {
                 if (step.type === 'WALKING') {
                     if (isTransferStep(steps, index)) {
@@ -175,7 +184,7 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, showDate
                                 <View style={styles.nodeBody}>
                                     <View style={styles.nameRow}>
                                         <Text style={styles.stationName}>{from?.stops.at(-1)?.name}</Text>
-                                        <Text style={styles.subMuted}>하차</Text>
+                                        <Text style={styles.chip}>환승</Text>
                                         <Text style={styles.subMain}>
                                             {formatWalkBeforeRide(steps, index)}
                                             {step.distanceM > 0 ? ` 약 ${step.distanceM}m` : ''}
@@ -183,8 +192,7 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, showDate
                                     </View>
                                     {!!wait && <Text style={styles.note}>{wait}</Text>}
                                     <View style={styles.guideBox}>
-                                        <Passenger tone="me" size={20} shadow={false} />
-                                        <Text style={styles.guideText}>{walkingText(steps, index)}</Text>
+                                        <Text style={styles.guideText}>{from?.stops.at(-1)?.name}에서 {to?.line?.name}으로 갈아타요 · 걸어서 {toMinutes(step.durationSec)}분{step.distanceM > 0 ? ` · ${step.distanceM}m` : ''}</Text>
                                     </View>
                                 </View>
                             </View>
@@ -242,14 +250,17 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, showDate
                             </View>
                             <View style={styles.rideBody}>
                                 <View style={styles.rideHead}>
-                                    <Passenger tone="me" size={22} shadow={false} />
-                                    {lineCircle(step.line)}
-                                    <Text style={styles.rideText} numberOfLines={2}>
-                                        {step.line?.name ?? ''} {formatDirection(step)} {Math.max(step.stops.length - 1, 0)}개역{' '}
-                                        {toMinutes(step.durationSec)}분
-                                    </Text>
-                                    {congestionMark(stepCongestion(step), { compact: true, slot: step.stations?.[0], size: 12 })}
+                                    <TrainBlock line={step.line?.id ?? undefined} size={34} />
+                                    <View style={styles.headingBody}>
+                                        <View style={styles.titleRow}>
+                                            {lineCircle(step.line)}
+                                            <Text style={styles.rideText}>{first?.name}에서 {step.line?.name ?? ''}</Text>
+                                        </View>
+                                        <Text style={styles.rideSubtitle}>{Math.max(step.stops.length - 1, 0)}정거장 · {toMinutes(step.durationSec)}분 · {formatDirection(step)}</Text>
+                                    </View>
                                 </View>
+
+                                {congestionMark(stepCongestion(step), { compact: true, slot: step.stations?.[0], size: 13 })}
 
                                 {middle.length > 0 && (
                                     <Pressable
@@ -272,7 +283,7 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, showDate
                                                 {stop.name}
                                             </Text>
                                             <Text style={styles.stopLevelText}>{stopLabel(step, stopIndex + 1)}</Text>
-                                            <CongestionBlocks level={blockLevel(step.stations?.[stopIndex + 1]?.congestion)} size={11} />
+                                            <CongestionBlocks level={blockLevel(step.stations?.[stopIndex + 1]?.congestion)} size={13} />
                                         </View>
                                     ))}
 
@@ -281,7 +292,7 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, showDate
                                     onPress={() => onSignCheck(step)}
                                     accessibilityRole="button"
                                 >
-                                    <Ionicons name="camera-outline" size={15} color={LV_MAIN} />
+                                    <Ionicons name="camera-outline" size={14} color={LV_MAIN} />
                                     <Text style={styles.signText}>표지판으로 방향 확인</Text>
                                 </Pressable>}
                             </View>
@@ -293,8 +304,10 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, showDate
                                 {nodeGutter(color, color, null, true)}
                                 <View style={[styles.nodeBody, styles.arrivalBody]}>
                                     <View style={styles.nameRow}>
-                                        <Text style={styles.stationName} numberOfLines={1}>{last?.name} 도착</Text>
+                                        <Text style={styles.arrivalName} numberOfLines={1}>{last?.name} 도착</Text>
                                         {!!arrival && <Text style={styles.subMain}>{arrival} 도착 예정</Text>}
+                                        <View style={{ flex: 1 }} />
+                                        <ArrivalFlag />
                                     </View>
                                 </View>
                             </View>
@@ -304,7 +317,7 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, showDate
                                 <View style={styles.nodeBody}>
                                     <View style={styles.nameRow}>
                                         <Text style={styles.stationName} numberOfLines={1}>{last?.name}</Text>
-                                        <Text style={styles.subMuted}>하차</Text>
+                                        <Text style={styles.chip}>하차</Text>
                                     </View>
                                 </View>
                             </View>
@@ -317,6 +330,14 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, showDate
 }
 
 const styles = StyleSheet.create({
+    hereRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12 },
+    headingBody: { flex: 1, minWidth: 0, gap: 4 },
+    hereLabel: { fontSize: 11.5, color: LV_MAIN, fontWeight: '600' },
+    hereTitle: { fontSize: 15, color: LV_TEXT, fontWeight: '700' },
+    titleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    rideSubtitle: { fontSize: 12.5, color: LV_SECONDARY },
+    arrivalName: { flexShrink: 1, fontSize: 17, fontWeight: '800', color: LV_TEXT },
+    chip: { fontSize: 11, fontWeight: '700', color: LV_MAIN, backgroundColor: LV_RIDE_BG, borderRadius: 5, paddingVertical: 2, paddingHorizontal: 6 },
     card: {
         paddingTop: 8,
         paddingHorizontal: 8,
@@ -379,8 +400,8 @@ const styles = StyleSheet.create({
     stationName: {
         flexShrink: 1,
         color: LV_TEXT,
-        fontSize: 17,
-        fontWeight: '800',
+        fontSize: 14.5,
+        fontWeight: '400',
         letterSpacing: -0.3,
     },
 
@@ -404,26 +425,26 @@ const styles = StyleSheet.create({
 
     guideBox: {
         marginTop: 8,
-        paddingHorizontal: 11,
+        paddingHorizontal: 12,
         paddingVertical: 9,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
-        borderRadius: 12,
+        borderRadius: 10,
         backgroundColor: LV_BOX_BG,
     },
 
     guideText: {
         flex: 1,
         minWidth: 0,
-        color: LV_MAIN,
-        fontSize: 13,
-        fontWeight: '600',
+        color: '#5F5A68',
+        fontSize: 12.5,
+        textAlign: 'center',
         lineHeight: 19,
     },
 
     rideBox: {
-        backgroundColor: LV_RIDE_BG,
+        backgroundColor: 'transparent',
     },
 
     rideRail: {
@@ -462,8 +483,9 @@ const styles = StyleSheet.create({
     rideText: {
         flex: 1,
         minWidth: 0,
-        color: LV_SUB,
-        fontSize: 14,
+        color: LV_TEXT,
+        fontSize: 15.5,
+        fontWeight: '700',
     },
 
     congestion: {
@@ -531,7 +553,7 @@ const styles = StyleSheet.create({
     },
 
     stopRow: {
-        height: 32,
+        height: 38,
         paddingLeft: 27,
         flexDirection: 'row',
         alignItems: 'center',
@@ -540,11 +562,13 @@ const styles = StyleSheet.create({
 
     stopName: {
         flex: 1,
-        color: LV_SUB,
-        fontSize: 13.5,
+        color: LV_TEXT,
+        fontSize: 14.5,
     },
 
     stopLevelText: {
+        width: 54,
+        textAlign: 'right',
         color: LV_SECONDARY,
         fontSize: 11.5,
     },

@@ -41,15 +41,15 @@ function LineEntry({ line }: { line: RouteMapLegendLine }) {
  * 색만으로 구분하지 않도록 모든 색 옆에 글자를 붙이고, 작은 화면·큰 글꼴에서는 줄바꿈해요.
  * 혼잡도 색으로 칠하면 선 색으로 노선을 구분할 수 없으니 타는 순서대로 노선 색과 이름을 함께 보여줘요.
  */
-export default function RouteMapLegend({ map }: { map: RouteMap }) {
+export default function RouteMapLegend({ map, compact = false }: { map: RouteMap; compact?: boolean }) {
     return (
         <View style={styles.legend} accessibilityLabel="경로 지도 범례">
             <View style={styles.row}>
-                <Text style={styles.title}>혼잡도</Text>
+                <Text style={[styles.title, compact && { fontSize: 11.5 }]}>혼잡도</Text>
                 {CONGESTION_LEVELS.map(level => (
                     <View key={level} style={styles.item}>
                         <Swatch color={CONGESTION_STYLE[level].color} />
-                        <Text style={styles.text}>{CONGESTION_LEVEL_LABEL[level]}</Text>
+                        <Text style={[styles.text, compact && { fontSize: 11.5 }]}>{CONGESTION_LEVEL_LABEL[level]}</Text>
                     </View>
                 ))}
                 {map.estimated && <View style={styles.tag}><Text style={styles.tagText}>추정</Text></View>}
@@ -59,19 +59,19 @@ export default function RouteMapLegend({ map }: { map: RouteMap }) {
             <View style={styles.row}>
                 <View style={styles.item}>
                     <Swatch color={WALK_LINE_COLOR} dashed />
-                    <Text style={styles.text}>도보</Text>
+                    <Text style={[styles.text, compact && { fontSize: 11.5 }]}>도보</Text>
                 </View>
                 {MARKERS.map(kind => (
                     <View key={kind} style={styles.item}>
                         <View style={[styles.marker, { backgroundColor: ROUTE_MARKER_COLOR[kind] }]} />
-                        <Text style={styles.text}>{ROUTE_MARKER_LABEL[kind]}</Text>
+                        <Text style={[styles.text, compact && { fontSize: 11.5 }]}>{ROUTE_MARKER_LABEL[kind]}</Text>
                     </View>
                 ))}
             </View>
 
             {map.routeLines.length > 0 && (
                 <View style={styles.row}>
-                    <Text style={styles.title}>노선</Text>
+                    <Text style={[styles.title, compact && { fontSize: 11.5 }]}>노선</Text>
                     {map.routeLines.map((line, index) => <LineEntry key={`${index}-${line.id ?? line.name}`} line={line} />)}
                 </View>
             )}

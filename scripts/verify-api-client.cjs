@@ -7120,7 +7120,8 @@ function shallow129(node) {
     return { t: typeof node.type === 'function' ? node.type.name : String(node.type), k: node.key, p: props, c: shallow129(children) };
 }
 /** #129 이전(dev e970115) route-guide.tsx 의 mock 모드 트리 sha256 이에요. #187 fontWeight 900→800 반영, #196 경로 안내 시안 반영 */
-const MOCK_GUIDE_SHA129 = 'a21f7b4a3beba94282f053719ca17d46b95847f25fada55f6f8d9dc69c9d0dca';
+// #196: 요약 시각 배치, 지도 접기 및 안내 스타일 변경으로 화면 트리 해시 갱신.
+const MOCK_GUIDE_SHA129 = '04c3b34f932b0a99ba7141288bb6ccf62151ab55bf2ce7716b1e022777623af9';
 test('129 mock 모드 경로 화면 트리는 #129 이전과 같아요', () => {
     const r = guide129({ mock: true });
     const sha = require('node:crypto').createHash('sha256').update(JSON.stringify(shallow129(r.render()))).digest('hex');
@@ -7418,7 +7419,7 @@ test('146 도보 1분 + 대기 10분 환승: 어디에도 "도보 11분" 없이 
     const route = route146();
     const detail = timeline146(route); const expanded = card146(route, true); const collapsed = card146(route, false);
     for (const texts of [detail, expanded, collapsed]) assert.ok(!texts.some(text => /도보 11분|환승 도보/.test(text)), texts.join(' / '));
-    assert.ok(detail.some(text => text.startsWith('서버 환승 안내, 환승 소요 11분')));
+    assert.ok(detail.some(text => text.startsWith('교대에서 3호선으로 갈아타요 · 걸어서 11분')));
     assert.ok(expanded.some(text => text.trim() === '환승 소요 11분'));
     assert.ok(expanded.some(text => text.includes('환승 2회, 도보 1분')));
     // 경로 안내 화면 요약도 서버 값 그대로예요.
@@ -7434,7 +7435,7 @@ test('146 환승 여러 번: 펼친 카드와 경로 상세가 환승마다 같�
         const format = createRuntime().load('src/components/route/format.ts');
         const detail = timeline146(route); const expanded = card146(route, true);
         // 경로 상세는 환승역 줄과 안내 상자에 같은 분이 한 번씩 나와요(#196). 환승마다 나오는 분이 모두 같아야 해요.
-        const detailMinutes = detail.filter(text => /환승 (?:소요|도보) \d+분/.test(text)).map(text => /환승 (?:소요|도보) (\d+)분/.exec(text)[1]);
+        const detailMinutes = detail.map(text => /(?:환승 (?:소요|도보)|걸어서) (\d+)분/.exec(text)).filter(Boolean).map(match => match[1]);
         const detailTransfers = detailMinutes.filter((minutes, index) => index === 0 || minutes !== detailMinutes[index - 1]);
         assert.equal(detailMinutes.length, detailTransfers.length * 2, detailMinutes.join(' / '));
         const cardTransfers = expanded.filter(text => text.includes('환승 소요')).map(text => /환승 소요 (\d+)분/.exec(text)[1]);
@@ -7463,7 +7464,7 @@ test('146 카카오(KAKAO)·시각표(INTERNAL) 경로는 같은 문구, 30초 �
         assert.equal(r.load('src/stores/route-store.ts').getSelectedRoute().routeSource, routeSource);
         const timeline = findElement(view, element => element.type === r.Timeline);
         results.push(JSON.stringify([timeline146(timeline.props.route), card146(route, true)]));
-        assert.ok(timeline146(route).some(text => text.startsWith('고속터미널역 7호선 승강장으로 이동, 환승 소요 1분')));
+        assert.ok(timeline146(route).some(text => text.startsWith('고속터미널에서 7호선으로 갈아타요 · 걸어서 1분')));
         assert.ok(!timeline146(route).some(text => /환승 소요 0분|도보 0분/.test(text)));
     }
     assert.equal(results[0], results[1]);
@@ -7497,7 +7498,7 @@ test('146 보완: mock 건대입구 → 사당은 "환승 도보 3분"과 "환�
     const expanded = card146(route, true); const detail = timeline146(route);
     assert.ok(expanded.some(text => text.trim() === '환승 도보 3분'), expanded.join(' / '));
     assert.ok(expanded.some(text => text === '환승 대기 약 2분'));
-    assert.ok(detail.some(text => text.startsWith('이수역 4호선 승강장으로 환승, 도보 3분')), detail.join(' / '));
+    assert.ok(detail.some(text => text.startsWith('이수에서 4호선으로 갈아타요 · 걸어서 3분')), detail.join(' / '));
     assert.ok(detail.some(text => text === '환승 대기 약 2분'));
     for (const texts of [expanded, detail]) assert.ok(!texts.some(text => text.includes('환승 소요')));
 });
@@ -7510,15 +7511,15 @@ test('146 보완: 대기가 따로 오지 않는 660초 환승은 "환승 소요
     const expanded = card146(mixed, true); const detail = timeline146(mixed);
     assert.ok(expanded.some(text => text.trim() === '환승 소요 11분')); assert.ok(expanded.some(text => text.trim() === '환승 도보 1분'));
     assert.ok(expanded.some(text => text === '환승 대기 약 2분')); assert.ok(expanded.some(text => text === '승차 대기 약 3분'));
-    assert.ok(detail.some(text => text.startsWith('서버 환승 안내, 환승 소요 11분')));
-    assert.ok(detail.some(text => text.startsWith('고속터미널역 7호선 승강장으로 환승, 도보 1분')));
+    assert.ok(detail.some(text => text.startsWith('교대에서 3호선으로 갈아타요 · 걸어서 11분')));
+    assert.ok(detail.some(text => text.startsWith('고속터미널에서 7호선으로 갈아타요 · 걸어서 1분')));
     assert.ok(expanded.some(text => text.trim() === '도보 2분')); // 첫 열차 전 걷기는 그대로 "도보"
     for (const texts of [expanded, detail, card146(mixed, false)]) assert.ok(!texts.some(text => text.includes('도보 11분')), texts.join(' / '));
     assert.ok(expanded.some(text => text.includes('환승 2회, 도보 1분')));
     // 펼친 카드와 경로 상세의 숫자가 환승마다 같아요.
-    const numbers = texts => texts.map(text => /환승 (?:소요|도보) (\d+)분|, (?:환승 소요|도보) (\d+)분/.exec(text)).filter(Boolean).map(match => match[1] ?? match[2]);
+    const numbers = texts => texts.map(text => /환승 (?:소요|도보) (\d+)분|걸어서 (\d+)분/.exec(text)).filter(Boolean).map(match => match[1] ?? match[2]);
     assert.deepEqual(numbers(expanded.filter(text => /^\s*환승 (소요|도보)/.test(text))), ['11', '1']);
-    assert.deepEqual(numbers(detail.filter(text => /^(서버 환승 안내|고속터미널역)/.test(text))), ['11', '1']);
+    assert.deepEqual(numbers(detail.filter(text => /^(교대에서|고속터미널에서)/.test(text))), ['11', '1']);
 });
 
 test('146 보완: waitSec 이 0·null 이거나 waitKind 가 없거나 NONE 이면 따로 표시되지 않는 경우(환승 소요)', () => {
@@ -7529,7 +7530,7 @@ test('146 보완: waitSec 이 0·null 이거나 waitKind 가 없거나 NONE 이�
         assert.deepEqual([2, 4].map(index => format.hasSeparateTransferWait(route.steps, index)), [false, false], `${wait} ${kind}`);
         const expanded = card146(route, true); const detail = timeline146(route);
         assert.ok(expanded.some(text => text.trim() === '환승 소요 11분')); assert.ok(!expanded.some(text => text.includes('환승 대기')));
-        assert.ok(detail.some(text => text.startsWith('고속터미널역 7호선 승강장으로 이동, 환승 소요 1분')));
+        assert.ok(detail.some(text => text.startsWith('고속터미널에서 7호선으로 갈아타요 · 걸어서 1분')));
     }
     // 대기 줄과 환승 문구 판단은 같은 함수를 써서 어긋나지 않아요.
     const shown = route146Waits([undefined, 60, 60], 'REALTIME');
