@@ -5,7 +5,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { DateTimeWheel } from '@/components/time-wheel/date-time-wheel';
 import { dayLabel, timeLabel } from '@/components/time-wheel/labels';
 import type { RouteTimeSelection } from '@/types/route';
-import { arrivalLastDate, formatRouteTimeSelection, routeTimeOptions, seoulDateTime, toRouteTimeInstant, validateRouteTimeOptions } from '@/utils/route-time';
+import { arrivalLastDate, departureLastDate, formatRouteTimeSelection, routeTimeOptions, seoulDateTime, toRouteTimeInstant, validateRouteTimeOptions } from '@/utils/route-time';
 
 // 시트의 토글 두 개예요. 둘 다 꺼지면 지금 출발이에요.
 const TOGGLES = [
@@ -43,7 +43,10 @@ export default function RouteTimeSelector({ value, open, onOpen, onClose, onChan
     useEffect(() => {
         if (!open) return;
         const parts = seoulDateTime(value.mode === 'now' ? Date.now() + 60000 : value.at)!;
-        setMode(value.mode); setDate(parts.date); setTime(parts.time);
+        const today = seoulDateTime()!.date;
+        const last = departureLastDate();
+        const initialDate = value.mode === 'departure' ? (parts.date < today ? today : parts.date > last ? last : parts.date) : parts.date;
+        setMode(value.mode); setDate(initialDate); setTime(parts.time);
         setError('');
     }, [open, value]);
 
@@ -96,11 +99,11 @@ export default function RouteTimeSelector({ value, open, onOpen, onClose, onChan
                         })}
                         {mode !== 'now' && (
                             <>
-                                <DateTimeWheel date={date} time={time} minDate={seoulDateTime()!.date} maxDate={arrivalLastDate()}
+                                <DateTimeWheel date={date} time={time} minDate={seoulDateTime()!.date} maxDate={mode === 'arrival' ? arrivalLastDate() : departureLastDate()}
                                     onChange={(nextDate, nextTime) => { setDate(nextDate); setTime(nextTime); setError(''); }} />
                                 <Text style={styles.summary}>{dayLabel(date)} {timeLabel(time)} {mode === 'arrival' ? '도착' : '출발'}</Text>
-                                {mode === 'arrival' && <Text style={[styles.caption, styles.note, styles.noteFirst]}>도착 날짜는 {arrivalLastDate()}까지 선택할 수 있어요.</Text>}
-                                <Text style={[styles.caption, styles.note, mode !== 'arrival' && styles.noteFirst]}>날짜가 멀수록 실제 운행 시각과 다를 수 있어요.</Text>
+                                <Text style={[styles.caption, styles.note, styles.noteFirst]}>{mode === 'arrival' ? '도착' : '출발'} 날짜는 {mode === 'arrival' ? arrivalLastDate() : departureLastDate()}까지 선택할 수 있어요.</Text>
+                                <Text style={[styles.caption, styles.note]}>날짜가 멀수록 실제 운행 시각과 다를 수 있어요.</Text>
                             </>
                         )}
                         {!!error && <Text style={styles.error} accessibilityRole="alert">{error}</Text>}
