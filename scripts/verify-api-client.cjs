@@ -373,7 +373,7 @@ test('126 권한 시작은 순서대로 요청·이중 탭 차단·오류에도 
         r.external['expo-image-picker'].requestCameraPermissionsAsync = async () => { calls.push('camera'); await new Promise(resolve => { finish = resolve; }); throw Error(); };
         r.external['expo-location'].requestForegroundPermissionsAsync = async () => { calls.push('location'); throw Error(); };
         r.external['expo-router'].router.replace = route => routes.push(route);
-        const view = r.render(); const button = text => findElement(view, el => el.type === 'Pressable' && findText(el, text));
+        const view = r.render(); const button = text => findElement(view, el => el.type === 'Pressable' && (el.props.accessibilityLabel === text || findText(el, text)));
         if (later) { button('나중에 할게요').props.onPress(); assert.equal(calls.length, 0); }
         else {
             const promise = button('시작하기').props.onPress(); button('시작하기').props.onPress(); button('나중에 할게요').props.onPress();
@@ -6603,7 +6603,7 @@ function permission130(env = serverEnv) {
     storage.calls.push = (...items) => { items.forEach(item => r.order.push(item)); return origin(...items); };
     r.external['expo-image-picker'].requestCameraPermissionsAsync = async () => { r.order.push(['camera']); return { granted: false }; };
     r.external['expo-location'].requestForegroundPermissionsAsync = async () => { r.order.push(['location']); throw Error(); };
-    r.button = text => findElement(r.render(), el => el.type === 'Pressable' && findText(el, text));
+    r.button = text => findElement(r.render(), el => el.type === 'Pressable' && (el.props.accessibilityLabel === text || findText(el, text)));
     return r;
 }
 
