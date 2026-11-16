@@ -34,7 +34,6 @@ const MUTED = '#83808B';
 const TINT = '#EDE8F3';
 const LINE = '#E8E4ED';
 const CHEVRON = '#B4AFBC';
-const HANDLE = '#DCD7E3';
 
 const BACKGROUND = '#f3f5f8';
 const CARD = '#ffffff';
@@ -235,10 +234,6 @@ export default function HomeScreen() {
                 ]}
                 onLayout={handleSheetLayout}
             >
-                <View style={styles.sheetHandleArea}>
-                    <View style={styles.sheetHandle} />
-                </View>
-
                 <ScrollView
                     contentContainerStyle={styles.sheetContent}
                     showsVerticalScrollIndicator={false}
@@ -635,6 +630,8 @@ const styles = StyleSheet.create({
     },
 
     sheet: {
+        // 손잡이를 없애도 기존 상단 여백은 유지해요.
+        paddingTop: 24,
         position: 'absolute',
         left: 0,
         right: 0,
@@ -644,19 +641,6 @@ const styles = StyleSheet.create({
         backgroundColor: CARD,
         overflow: 'hidden',
         boxShadow: '0px -6px 24px rgba(60,40,90,0.08)',
-    },
-
-    sheetHandleArea: {
-        height: 24,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-
-    sheetHandle: {
-        width: 38,
-        height: 4,
-        borderRadius: 2,
-        backgroundColor: HANDLE,
     },
 
     sheetContent: {
