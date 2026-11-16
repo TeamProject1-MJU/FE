@@ -1,7 +1,7 @@
 import ArrivalFlag from '@/components/arrival-flag';
 import RouteNotices from '@/components/route/RouteNotices';
 import { formatArrivalSlack, formatRouteDateTime, formatRouteRelativeDateTime } from '@/utils/route-time';
-import { formatClock, formatDirection, formatTotalTime, formatWait, formatWalkBeforeRide, stepMinutes } from '@/components/route/format';
+import { formatClock, formatDirection, formatDurationMinutes, formatTotalTime, formatWait, formatWalkBeforeRide, routeDurationSec, stepMinutes } from '@/components/route/format';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/app-text';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -37,7 +37,7 @@ export function formatFare(route: Route) {
  */
 export function splitTotalTime(summary: RouteSummary): [string, string] {
     const text = formatTotalTime(summary);
-    const match = /^(.*?)(\d+분)$/.exec(text);
+    const match = /^(.*?)(\d+시간(?: \d+분)?|\d+분)$/.exec(text);
     return match ? [match[1], match[2]] : ['', text];
 }
 
@@ -182,6 +182,8 @@ export default function RouteCard({ route, expanded, badgeLabels = [], onPress, 
     const firstSlot = subwaySteps[0]?.stations?.[0];
     const arrival = formatRouteRelativeDateTime(summary.arrivalAt);
     const departure = summary.departureAt ? formatRouteRelativeDateTime(summary.departureAt) : '';
+    const firstTrainInfo = summary.noService && departure ? `${departure} 출발 ~`
+        : firstSlot?.firstTrain ? `첫차 ${formatSlot(firstSlot)} 기준` : '';
     const totalSec = route.steps.reduce((sum, step) => sum + Math.max(step.durationSec, 0), 0);
     const lastStop = subwaySteps.at(-1)?.stops.at(-1)?.name ?? '';
 
@@ -193,11 +195,14 @@ export default function RouteCard({ route, expanded, badgeLabels = [], onPress, 
                 </View>
                 <CongestionMark congestion={summary.congestion} />
             </View>
-            {!!firstSlot?.firstTrain && <View style={styles.tags}><View style={styles.tag}><Text style={styles.tagText}>첫차 {formatSlot(firstSlot)} 기준</Text></View></View>}
             <View style={[styles.headline, styles.headlineGap]}>
-                <Text style={styles.time}>{Math.floor((summary.totalWithWaitSec ?? summary.totalTimeSec) / 60)}분</Text>
+                <Text style={styles.time} accessibilityLabel={`총 소요 시간 ${formatTotalTime(summary)}`}>{formatDurationMinutes(routeDurationSec(summary) / 60)}</Text>
                 {!!arrival && <Text style={styles.arrival}>{arrival} 도착</Text>}
             </View>
+            {!!firstTrainInfo && <View style={styles.firstDeparture}>
+                <Ionicons name="information-circle-outline" size={16} color={LV_MAIN} />
+                <Text style={styles.firstDepartureText}>{firstTrainInfo}</Text>
+            </View>}
             <Text style={styles.meta}>
                 {summary.fareSource === 'ESTIMATED' && <Text>예상</Text>}{summary.fareSource === 'ESTIMATED' ? ' ' : ''}{formatFare(route)} · 환승 {summary.transferCount}회
                 {summary.walkingMinutes > 0 ? ` · 도보 ${summary.walkingMinutes}분` : ''}
@@ -220,7 +225,7 @@ export default function RouteCard({ route, expanded, badgeLabels = [], onPress, 
             </View>
             {congestionStrip(route)}
             {expanded && <View style={styles.steps}>
-                {!!departure && <Text style={styles.arrival}>{departure} 출발</Text>}
+                {!!departure && <Text style={[styles.arrival, styles.timelineDeparture]}>{departure} 출발</Text>}
                 {route.steps.map((step, index) => {
                     if (step.type !== 'SUBWAY') return null;
                     const transfer = subwaySteps.indexOf(step) > 0;
@@ -230,7 +235,7 @@ export default function RouteCard({ route, expanded, badgeLabels = [], onPress, 
                     const direction = formatDirection(step);
                     const color = step.line?.color ?? LINE_FALLBACK;
                     return <View key={index} style={styles.timelineGroup}>
-                        <View style={[styles.timelineLine, { backgroundColor: color }]} />
+                        <View style={[styles.timelineLine, { backgroundColor: color }, step === subwaySteps.at(-1) && styles.lastTimelineLine]} />
                         <View style={[styles.timelineDot, { borderColor: color }]} />
                         <View style={styles.timelineContent}>
                             <Text style={styles.stationTitle}>{step.stops[0]?.name} {transfer ? '환승' : '승차'}</Text>
@@ -244,8 +249,8 @@ export default function RouteCard({ route, expanded, badgeLabels = [], onPress, 
                         </View>
                     </View>;
                 })}
-                <View style={styles.rideRow}>
-                    <ArrivalFlag size={22} />
+                <View style={styles.timelineArrival}>
+                    <View style={styles.arrivalFlag}><ArrivalFlag size={22} /></View>
                     <View style={styles.flex}><Text style={styles.stationTitle}>{lastStop} 도착</Text>{!!arrival && <Text style={styles.timelineHint}>{arrival} 도착 예정</Text>}</View>
                 </View>
             </View>}
@@ -263,6 +268,12 @@ export default function RouteCard({ route, expanded, badgeLabels = [], onPress, 
 }
 
 const styles = StyleSheet.create({
+    firstDeparture: { flexDirection: 'row', alignItems: 'center', gap: 5, marginVertical: 8 },
+    firstDepartureText: { flexShrink: 1, color: LV_MAIN, fontSize: 13, fontWeight: '700' },
+    timelineDeparture: { marginBottom: 16 },
+    lastTimelineLine: { bottom: 0 },
+    timelineArrival: { paddingLeft: 26, minHeight: 36, position: 'relative' },
+    arrivalFlag: { position: 'absolute', left: 3, top: 2 },
     buttons: { flexDirection: 'row', gap: 8, marginTop: 14 },
     detailButton: { flex: 1, height: 46, borderRadius: 23, backgroundColor: '#F4F1F7', flexDirection: 'row', gap: 4, alignItems: 'center', justifyContent: 'center' },
     detailText: { color: LV_MAIN, fontSize: 13, fontWeight: '700' },

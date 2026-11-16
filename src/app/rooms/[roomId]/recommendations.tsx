@@ -1,3 +1,4 @@
+import { formatDurationMinutes } from '@/components/route/format';
 import { formatStationName } from '@/utils/station-name';
 import { ApiError, isAuthError } from '@/services/api/errors';
 import { useMock as isMockMode } from '@/services/api/config';
@@ -846,7 +847,7 @@ export default function RoomRecommendationsScreen() {
 
                         {/* ❸ 이동 정보 요약 (흰 카드 3칸), 모두 추정치라 "예상" 라벨 */}
                         <View style={styles.metrics}>
-                            <Metric label="평균 예상 시간" value={`${Math.round(result.metrics.averageMinutes)}분`} />
+                            <Metric label="평균 예상 시간" value={formatDurationMinutes(result.metrics.averageMinutes)} />
                             <Metric label="최대 편차" value={`${result.metrics.maxDifferenceMinutes}분`} accent />
                             <Metric label="평균 예상 요금" value={`${result.metrics.averageFare.toLocaleString()}원`} />
                         </View>
@@ -896,7 +897,7 @@ export default function RoomRecommendationsScreen() {
                                                     <Text style={styles.nearbyTag}>{alt.relationLabel}</Text>
                                                 </View>
                                             </View>
-                                            <Text style={styles.nearbyMeta}>최대 {alt.maxMinutes}분 · 예상 {alt.totalFareWon.toLocaleString()}원</Text>
+                                            <Text style={styles.nearbyMeta}>최대 {formatDurationMinutes(alt.maxMinutes)} · 예상 {alt.totalFareWon.toLocaleString()}원</Text>
                                         </View>
                                     ))}
                                 </View>
@@ -916,7 +917,7 @@ export default function RoomRecommendationsScreen() {
                                     >
                                         <Text style={styles.otherLabel}>{CRITERIA.find(c => c.key === item.criterion)?.label}</Text>
                                         <Text style={styles.otherStation} numberOfLines={1}>{formatStationName(item.recommendedStation.name)}</Text>
-                                        <Text style={styles.otherMax}>최대 {item.metrics.maxMinutes}분</Text>
+                                        <Text style={styles.otherMax}>최대 {formatDurationMinutes(item.metrics.maxMinutes)}</Text>
                                         <Ionicons name="chevron-forward" size={16} color={LV_CHEVRON} />
                                     </Pressable>
                                 ))}
@@ -985,7 +986,7 @@ function ParticipantRow({ participant: p, tone, maxMinutes, averageMinutes, mine
     // 서버는 혼잡도 데이터가 없으면 congestion: null 이에요. 이때는 점·라벨과 안내의 혼잡도 부분만 숨겨요.
     const congestionColor = p.congestion ? CONGESTION_COLOR[p.congestion.level] ?? LV_GRAY : LV_GRAY;
     return (
-        <Pressable style={styles.participant} onPress={onPress} accessibilityRole="button" accessibilityState={{ expanded: opened }} accessibilityLabel={`${p.nickname} 예상 ${p.travelMinutes}분`}>
+        <Pressable style={styles.participant} onPress={onPress} accessibilityRole="button" accessibilityState={{ expanded: opened }} accessibilityLabel={`${p.nickname} 예상 ${formatDurationMinutes(p.travelMinutes)}`}>
             <View style={styles.participantRow}>
                 <Passenger tone={tone} size={26} />
                 <View style={styles.participantWho}>
@@ -1000,7 +1001,7 @@ function ParticipantRow({ participant: p, tone, maxMinutes, averageMinutes, mine
                     <View style={[styles.barAverage, { left: `${averageLeft}%` }]} />
                 </View>
                 <View style={styles.participantRight}>
-                    <Text style={styles.participantMinutes}>{p.travelMinutes}분</Text>
+                    <Text style={styles.participantMinutes}>{formatDurationMinutes(p.travelMinutes)}</Text>
                     <Text style={styles.participantTransfer}>{p.transferCount === 0 ? '환승 없음' : `환승 ${p.transferCount}회`}</Text>
                 </View>
                 <Ionicons name={opened ? 'chevron-up' : 'chevron-down'} size={13} color={LV_CHEVRON} />
