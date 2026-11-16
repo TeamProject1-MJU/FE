@@ -1,3 +1,5 @@
+import Passenger from '@/components/passenger';
+import type { StationProposal } from '@/types/room';
 import { formatStationName } from '@/utils/station-name';
 /**
  * 역 검색·선택 화면 (이슈 #33)
@@ -129,6 +131,7 @@ export type StationPickerOptions = {
     purpose: StationPickerPurpose;
     /** 약속방 이름 등, 제목 문구에 붙일 맥락 (departure·proposal에서 사용) */
     contextLabel?: string;
+    roomId?: string;
     /** 이미 선택돼 있는 역 — 목록에서 체크 표시 */
     selectedStationId?: number;
 };
@@ -171,22 +174,25 @@ export function cancelStationPicker() {
 export function pickerCopy(purpose: StationPickerPurpose, contextLabel?: string) {
     switch (purpose) {
         case 'origin':
-            return { chip: '혼자 이동 · 출발역', title: '어느 역에서\n출발하시나요?' };
+            return { chip: '혼자 이동 · 출발역', title: '어느 역에서\n출발하시나요?', header: '출발역 검색' };
         case 'destination':
-            return { chip: '혼자 이동 · 도착역', title: '어느 역으로\n가시나요?' };
+            return { chip: '혼자 이동 · 도착역', title: '어느 역으로\n가시나요?', header: '도착역 검색' };
         case 'departure':
             return {
                 chip: '약속방 · 내 출발역',
+                header: '출발역 설정',
                 title: contextLabel ? `${contextLabel},\n어디서 출발하세요?` : '어디서\n출발하세요?',
             };
         case 'proposal':
             return {
                 chip: '약속방 · 약속역 후보 제안',
+                header: '약속역 후보 제안',
                 title: '어느 역에서\n만나면 좋을까요?',
             };
         case 'selected-station':
             return {
                 chip: '약속방 · 최종 약속역',
+                header: '최종 약속역',
                 title: '어느 역에서\n만날까요?',
             };
     }
@@ -302,6 +308,19 @@ export default function StationSearchScreen() {
     const selectedStationId = params.selectedStationId ? Number(params.selectedStationId) : undefined;
     const copy = pickerCopy(purpose, contextLabel);
 
+    const [proposalPreview, setProposalPreview] = useState<{ roomId: string; items: StationProposal[] } | null>(null);
+    const proposalRoomId = pending?.options.purpose === 'proposal' ? pending.options.roomId : undefined;
+    const proposals = proposalPreview?.roomId === proposalRoomId ? proposalPreview?.items ?? [] : [];
+    useEffect(() => {
+        let active = true;
+        if (purpose === 'proposal' && proposalRoomId) {
+            import('@/services/room').then(({ fetchProposals }) => fetchProposals(proposalRoomId)).then(list => {
+                if (active) setProposalPreview({ roomId: proposalRoomId, items: [...list.items].sort((a, b) => b.voteCount - a.voteCount || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) });
+            }).catch(() => { if (active) setProposalPreview(null); });
+        }
+        return () => { active = false; };
+    }, [purpose, proposalRoomId]);
+
     const inputRef = useRef<TextInput>(null);
     const [query, setQuery] = useState('');
     const [focused, setFocused] = useState(true);
@@ -393,7 +412,8 @@ export default function StationSearchScreen() {
     };
 
     const showRecent = trimmed.length === 0;
-    const data = showRecent ? recent : results;
+    const roomSearch = purpose === 'proposal' || purpose === 'departure';
+    const data = showRecent ? roomSearch ? [] : recent : results;
 
 
     // 시안 문구: 출발역·도착역은 "출발역 검색"/"도착역 검색", 그 밖의 용도는 지금 칩 문구를 써요(가운데 점은 공백으로).
@@ -405,21 +425,29 @@ export default function StationSearchScreen() {
     const placeholder = purpose === 'origin' ? '출발역' : purpose === 'destination' ? '도착역' : '역 이름을 입력하세요';
     // 출발 쪽은 채운 점, 도착(만날 역) 쪽은 테두리 점
     const filledPoint = purpose === 'origin' || purpose === 'departure';
-    // 약속방 용도는 시안에 없는 방 이름 맥락이 있어서 기존 제목을 남겨요.
+    // 경로 탭 검색은 기존 모양을 유지하고, 약속방 용도만 가운데 헤더를 써요.
     const showTitle = purpose !== 'origin' && purpose !== 'destination';
 
     return (
         <View style={styles.container}>
             <StatusBar style="dark" />
+            {showTitle && <>
+                <View style={[styles.pickerHeader, { paddingTop: insets.top + 8 }]}>
+                    <Pressable style={styles.pickerBack} onPress={goBack} accessibilityRole="button" accessibilityLabel="취소">
+                        <Ionicons name="chevron-back" size={24} color={LV_TEXT} />
+                    </Pressable>
+                    <Text style={styles.pickerHeaderText}>{copy.header}</Text>
+                    <View style={styles.pickerBack} />
+                </View>
+            </>}
 
             {/* 입력 카드 (1단계 경로 검색 입력 카드와 같은 톤) */}
-            <View style={[styles.searchWrap, { paddingTop: insets.top + 8 }]}>
-                {showTitle && <Text style={styles.title}>{copy.title}</Text>}
-                <Pressable style={styles.search} onPress={() => inputRef.current?.focus()}>
-                    <View style={[styles.point, filledPoint ? styles.pointFilled : styles.pointOutline]} />
+            <View style={[styles.searchWrap, { paddingTop: showTitle ? 12 : insets.top + 8 }, showTitle && styles.pickerSearchWrap]}>
+                <Pressable style={showTitle ? [styles.search, styles.pickerSearch, focused && styles.pickerSearchFocused] : styles.search} onPress={() => inputRef.current?.focus()}>
+                    {showTitle ? <Ionicons name="search" size={19} color={LV_MAIN} style={styles.pickerSearchIcon} /> : <View style={[styles.point, filledPoint ? styles.pointFilled : styles.pointOutline]} />}
                     <TextInput
                         ref={inputRef}
-                        style={styles.input}
+                        style={showTitle ? [styles.input, styles.pickerInput] : styles.input}
                         value={query}
                         onChangeText={setQuery}
                         onFocus={() => setFocused(true)}
@@ -449,7 +477,7 @@ export default function StationSearchScreen() {
             </View>
 
             {/* 목록 위 줄: "출발역 검색" + 취소(기존 뒤로 가기와 같은 동작) */}
-            <View style={styles.fieldRow}>
+            {!showTitle && <View style={styles.fieldRow}>
                 <Text style={styles.fieldLabel}>{fieldLabel} 검색</Text>
                 <Pressable
                     style={styles.cancelButton}
@@ -460,7 +488,7 @@ export default function StationSearchScreen() {
                 >
                     <Text style={styles.cancelText}>취소</Text>
                 </Pressable>
-            </View>
+            </View>}
 
             {/* 목록 (키보드 위까지만 차지) */}
             <KeyboardAvoidingView
@@ -488,7 +516,29 @@ export default function StationSearchScreen() {
                         showsVerticalScrollIndicator={false}
                         contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 24 }]}
                         ListHeaderComponent={
-                            showRecent && recent.length > 0 ? (
+                            showRecent && roomSearch ? <View>
+                                <View style={styles.infoCard}>
+                                    <View style={styles.passengers}><Passenger size={30} /><Passenger tone="other" size={30} /></View>
+                                    <View style={styles.infoBody}>
+                                        {!!contextLabel && <Text style={styles.infoContext}>{contextLabel}</Text>}
+                                        <Text style={styles.infoTitle} numberOfLines={1}>{copy.title.replace(/\n/g, ' ')}</Text>
+                                        {purpose === 'proposal' && <Text style={styles.infoDescription}>올린 역에 멤버들이 투표할 수 있어요</Text>}
+                                    </View>
+                                </View>
+                                {recent.length > 0 && <>
+                                    <View style={styles.sectionRow}>
+                                        <Text style={styles.sectionTitle}>최근 검색</Text>
+                                        <Pressable style={styles.sectionAction} onPress={handleClearRecent} hitSlop={8}><Text style={styles.sectionActionText}>전체 지우기</Text></Pressable>
+                                    </View>
+                                    <View style={styles.recentChips}>{recent.map(station => <Pressable key={station.id} style={styles.recentChip} onPress={() => choose(station)} accessibilityRole="button" accessibilityLabel={`${formatStationName(station.name)}${!station.isSupported ? ', 미제공 역' : ''}`}>
+                                        <Ionicons name="time-outline" size={14} color="#A8A3B0" />
+                                        <Text style={styles.recentName}>{formatStationName(station.name)}</Text>
+                                        {station.lines.map(line => <LineDot key={line.lineId} line={line} />)}
+                                        {!station.isSupported && <Text style={styles.naBadgeText}>미제공</Text>}
+                                        {station.id === selectedStationId && <Ionicons name="checkmark-circle" size={18} color={LV_MAIN} />}
+                                    </Pressable>)}</View>
+                                </>}
+                            </View> : showRecent && recent.length > 0 ? (
                                 <View style={styles.sectionRow}>
                                     <Text style={styles.sectionTitle}>최근 검색</Text>
                                     <Pressable style={styles.sectionAction} onPress={handleClearRecent} hitSlop={8}>
@@ -498,10 +548,20 @@ export default function StationSearchScreen() {
                             ) : null
                         }
                         ListEmptyComponent={
-                            showRecent ? <RecentEmpty /> : null
+                            showRecent && (!roomSearch || recent.length === 0) ? <RecentEmpty /> : null
                         }
                         ListFooterComponent={
-                            showRecent ? <SupportNotice /> : hiddenCount > 0 ? (
+                            showRecent ? <>
+                                {purpose === 'proposal' && proposals.length > 0 && <View style={styles.currentCandidates}>
+                                    <View style={styles.sectionRow}><Text style={styles.sectionTitle}>지금 올라온 후보</Text><Text style={styles.candidateCount}>{proposals.length}/9</Text></View>
+                                    <View style={styles.candidateCard}>{proposals.map((item, index) => <View key={item.id} style={[styles.candidateRow, index > 0 && styles.candidateDivider]}>
+                                        <Text style={styles.candidateName}>{formatStationName(item.station.name)}</Text>
+                                        {item.station.lines?.map(line => <LineDot key={line.lineId} line={line} />)}
+                                        <Text style={[styles.candidateVotes, item.voteCount > 0 && styles.candidateVotesOn]}>{item.voteCount}표</Text>
+                                    </View>)}</View>
+                                </View>}
+                                <SupportNotice compact={roomSearch} />
+                            </> : hiddenCount > 0 ? (
                                 <Text style={styles.moreNotice}>
                                     검색 결과 {search.totalElements}개 중 {results.length}개만 보여드려요.{'\n'}역 이름을 더 입력해 보세요.
                                 </Text>
@@ -590,7 +650,7 @@ function StationRow({
 }
 
 /** 시안 목록의 노선 원(18, 글자 10.5/700). 숫자가 아닌 노선은 알약형으로 늘려요. */
-function LineDot({ line }: { line: StationLine }) {
+function LineDot({ line }: { line: Pick<StationLine, 'lineId' | 'lineName' | 'color'> }) {
     const short = line.lineName.replace(/호선$/, '');
     const isNumeric = /^\d+$/.test(short);
     const label = isNumeric ? short : line.lineName.replace(/선$/, '');
@@ -620,9 +680,9 @@ function RecentEmpty() {
     );
 }
 
-function SupportNotice() {
+function SupportNotice({ compact = false }: { compact?: boolean }) {
     return (
-        <Text style={styles.supportNote}>
+        <Text style={[styles.supportNote, compact && styles.supportNoteCompact]}>
             서울교통공사 1~8호선 역을 지원해요. 그 밖의 역은{' '}
             <Text style={styles.supportNoteStrong}>미제공</Text>으로 표시되고 선택할 수 없어요.
         </Text>
@@ -740,6 +800,24 @@ function UnsupportedSheet({
 /* ───────────────────────── 스타일 ───────────────────────── */
 
 const styles = StyleSheet.create({
+    infoCard: { backgroundColor: '#EEEAF3', borderRadius: 22, paddingVertical: 16, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 22 },
+    passengers: { flexDirection: 'row', backgroundColor: '#D9CCE4', borderRadius: 9, padding: 5 },
+    infoBody: { flex: 1, minWidth: 0, gap: 4 },
+    infoContext: { fontSize: 11.5, fontWeight: '700', color: '#5C3F78' },
+    infoTitle: { fontSize: 16, fontWeight: '800', color: '#25212D' },
+    infoDescription: { fontSize: 12, color: '#6F6B78' },
+    recentChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    recentChip: { height: 38, borderRadius: 19, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#EEEAF2', paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 6 },
+    recentName: { fontSize: 14, fontWeight: '700', color: '#25212D' },
+    currentCandidates: { marginTop: 22 },
+    candidateCount: { fontSize: 12, color: '#83808B' },
+    candidateCard: { backgroundColor: '#FFFFFF', borderRadius: 20, borderWidth: 1, borderColor: '#EEEAF2', paddingHorizontal: 16 },
+    candidateRow: { minHeight: 46, flexDirection: 'row', alignItems: 'center', gap: 6 },
+    candidateDivider: { borderTopWidth: 1, borderTopColor: '#EEEAF2' },
+    candidateName: { fontSize: 14.5, fontWeight: '700', color: '#25212D', flexShrink: 1 },
+    candidateVotes: { marginLeft: 'auto', fontSize: 12.5, fontWeight: '700', color: '#83808B' },
+    candidateVotesOn: { color: '#5C3F78' },
+    supportNoteCompact: { fontSize: 11.5, lineHeight: 17, color: '#A8A3B0' },
     container: {
         flex: 1,
         backgroundColor: LV_BACKGROUND,
@@ -753,14 +831,15 @@ const styles = StyleSheet.create({
         textAlign: 'center',
     },
 
-    // 약속방 용도에서만 보이는 제목
-    title: {
-        marginBottom: 14,
-        fontSize: 20,
-        lineHeight: 27,
-        fontWeight: '700',
-        color: LV_TEXT,
-    },
+    pickerHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12 },
+    pickerBack: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+    pickerHeaderText: { flex: 1, fontSize: 16, fontWeight: '700', textAlign: 'center', color: LV_TEXT },
+    pickerContext: { marginHorizontal: 20, color: LV_SECONDARY, fontSize: 12.5 },
+    pickerSearchWrap: { paddingBottom: 16 },
+    pickerSearch: { height: 54, borderRadius: 27, borderWidth: 1.5, borderColor: '#D9CCE4', paddingHorizontal: 16, paddingVertical: 0 },
+    pickerSearchFocused: { borderColor: LV_MAIN },
+    pickerSearchIcon: { marginRight: 10 },
+    pickerInput: { height: 50, fontSize: 16 },
 
     // 입력 카드
     searchWrap: {
