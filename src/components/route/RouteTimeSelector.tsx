@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/app-text';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { CalendarModal, TimeWheelModal } from '@/components/rooms/appointment-picker';
+import { DateTimeWheel } from '@/components/time-wheel/date-time-wheel';
+import { dayLabel, timeLabel } from '@/components/time-wheel/labels';
 import type { RouteTimeSelection } from '@/types/route';
 import { arrivalLastDate, formatRouteTimeSelection, routeTimeOptions, seoulDateTime, toRouteTimeInstant, validateRouteTimeOptions } from '@/utils/route-time';
 
@@ -20,28 +21,11 @@ const LV_SECONDARY = '#83808B';
 const LV_MAIN = '#5C3F78';
 const LV_MAIN_SOFT = '#EDE8F3';
 const LV_DIVIDER = '#F1EEF4';
-const LV_FIELD_BORDER = '#E8E4ED';
 const LV_CLOSE_BG = '#F4F1F7';
 const LV_CLOSE_ICON = '#4A4553';
 const LV_TRACK_OFF = '#DCD7E3';
 const LV_BACKDROP = 'rgba(37,33,45,0.42)';
 const LV_ERROR = '#C0394B'; // 시안에 오류 색이 없어 기존 오류 색을 써요.
-
-// 표시만 해요. 상태값(YYYY-MM-DD, HH:MM)은 그대로 두고 시안 형식으로 보여 줘요.
-function dayLabel(date: string) {
-    if (date === seoulDateTime()?.date) return '오늘';
-    if (date === seoulDateTime(Date.now() + 86400000)?.date) return '내일';
-    const [, month, day] = date.split('-').map(Number);
-    const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
-    if (!month || !day || Number.isNaN(weekday)) return date;
-    return `${month}월 ${day}일(${'일월화수목금토'[weekday]})`;
-}
-
-function timeLabels(time: string) {
-    const [hour, minute] = time.split(':').map(Number);
-    if (!Number.isFinite(hour) || !Number.isFinite(minute)) return ['', '', ''];
-    return [hour < 12 ? '오전' : '오후', `${hour % 12 || 12}시`, `${String(minute).padStart(2, '0')}분`];
-}
 
 type Props = {
     value: RouteTimeSelection;
@@ -55,14 +39,12 @@ export default function RouteTimeSelector({ value, open, onOpen, onClose, onChan
     const [mode, setMode] = useState<RouteTimeSelection['mode']>(value.mode);
     const [date, setDate] = useState('');
     const [time, setTime] = useState('');
-    const [calendar, setCalendar] = useState(false);
-    const [clock, setClock] = useState(false);
     const [error, setError] = useState('');
     useEffect(() => {
         if (!open) return;
         const parts = seoulDateTime(value.mode === 'now' ? Date.now() + 60000 : value.at)!;
         setMode(value.mode); setDate(parts.date); setTime(parts.time);
-        setCalendar(false); setClock(false); setError('');
+        setError('');
     }, [open, value]);
 
     const apply = () => {
@@ -85,7 +67,7 @@ export default function RouteTimeSelector({ value, open, onOpen, onClose, onChan
                 </View>
                 <Ionicons name="chevron-down" size={18} color={LV_SECONDARY} />
             </Pressable>
-            <Modal visible={open && !calendar && !clock} transparent animationType="fade" onRequestClose={onClose}>
+            <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
                 <View style={styles.overlay}>
                     <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="시각 선택 닫기" />
                     <ScrollView style={styles.sheet} contentContainerStyle={styles.sheetContent} keyboardShouldPersistTaps="handled">
@@ -114,20 +96,11 @@ export default function RouteTimeSelector({ value, open, onOpen, onClose, onChan
                         })}
                         {mode !== 'now' && (
                             <>
-                                <View style={styles.fields}>
-                                    <Pressable style={[styles.field, styles.dayField]} onPress={() => setCalendar(true)} accessibilityRole="button" accessibilityLabel="검색 날짜 선택">
-                                        <Text style={styles.fieldValue} numberOfLines={1}>{dayLabel(date)}</Text>
-                                        <Ionicons name="chevron-expand" size={14} color={LV_SECONDARY} />
-                                    </Pressable>
-                                    {timeLabels(time).map((label, index) => (
-                                        <Pressable key={index} style={styles.field} onPress={() => setClock(true)} accessibilityRole="button" accessibilityLabel="검색 시간 선택">
-                                            <Text style={styles.fieldValue} numberOfLines={1}>{label}</Text>
-                                            <Ionicons name="chevron-expand" size={14} color={LV_SECONDARY} />
-                                        </Pressable>
-                                    ))}
-                                </View>
-                                {mode === 'arrival' && <Text style={styles.caption}>도착 날짜는 {arrivalLastDate()}까지 선택할 수 있어요.</Text>}
-                                <Text style={styles.caption}>날짜가 멀수록 실제 운행 시각과 다를 수 있어요.</Text>
+                                <DateTimeWheel date={date} time={time} minDate={seoulDateTime()!.date} maxDate={arrivalLastDate()}
+                                    onChange={(nextDate, nextTime) => { setDate(nextDate); setTime(nextTime); setError(''); }} />
+                                <Text style={styles.summary}>{dayLabel(date)} {timeLabel(time)} {mode === 'arrival' ? '도착' : '출발'}</Text>
+                                {mode === 'arrival' && <Text style={[styles.caption, styles.note, styles.noteFirst]}>도착 날짜는 {arrivalLastDate()}까지 선택할 수 있어요.</Text>}
+                                <Text style={[styles.caption, styles.note, mode !== 'arrival' && styles.noteFirst]}>날짜가 멀수록 실제 운행 시각과 다를 수 있어요.</Text>
                             </>
                         )}
                         {!!error && <Text style={styles.error} accessibilityRole="alert">{error}</Text>}
@@ -140,11 +113,6 @@ export default function RouteTimeSelector({ value, open, onOpen, onClose, onChan
                     </ScrollView>
                 </View>
             </Modal>
-            <CalendarModal visible={open && calendar} value={date} title={mode === 'arrival' ? '도착 날짜 선택' : '출발 날짜 선택'}
-                minDate={mode === 'arrival' ? seoulDateTime()!.date : ''} maxDate={mode === 'arrival' ? arrivalLastDate() : undefined}
-                onClose={() => setCalendar(false)} onConfirm={next => { setDate(next); setError(''); }} />
-            <TimeWheelModal visible={open && clock} value={time} title={mode === 'arrival' ? '도착 시각 선택' : '출발 시각 선택'}
-                onClose={() => setClock(false)} onConfirm={next => { setTime(next); setError(''); }} />
         </>
     );
 }
@@ -172,13 +140,13 @@ const styles = StyleSheet.create({
     trackOn: { backgroundColor: LV_MAIN },
     knob: { position: 'absolute', top: 3, left: 3, width: 24, height: 24, borderRadius: 12, backgroundColor: LV_CARD },
     knobOn: { left: 23 },
-    fields: { flexDirection: 'row', gap: 8, marginTop: 18 },
-    field: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 2, height: 50, paddingHorizontal: 8, borderWidth: 1, borderColor: LV_FIELD_BORDER, borderRadius: 12, backgroundColor: LV_CARD },
-    dayField: { flex: 1.5 },
-    fieldValue: { flexShrink: 1, color: LV_TEXT, fontSize: 15, fontWeight: '600' },
+    // 휠 시안(time-picker 2a) — 선택값 줄과 그 아래 안내 문구
+    summary: { marginTop: 10, textAlign: 'center', color: LV_MAIN, fontSize: 15, fontWeight: '700' },
     caption: { marginTop: 10, color: LV_SECONDARY, fontSize: 12.5, lineHeight: 19 },
+    note: { textAlign: 'center' },
+    noteFirst: { marginTop: 6 },
     error: { marginTop: 10, color: LV_ERROR, fontSize: 13, lineHeight: 20 },
-    actions: { flexDirection: 'row', gap: 8, marginTop: 22 },
+    actions: { flexDirection: 'row', gap: 8, marginTop: 16 },
     button: { flex: 1, height: 52, alignItems: 'center', justifyContent: 'center', borderRadius: 14 },
     nowButton: { backgroundColor: LV_MAIN_SOFT },
     nowText: { color: LV_MAIN, fontSize: 15.5, fontWeight: '600' },
