@@ -1,4 +1,6 @@
 import BottomTabBar, { useTabBarHeight } from '@/components/bottom-tab-bar';
+import HomeCongestionCard from '@/components/home-congestion-card';
+import { useHomeCongestion } from '@/hooks/use-home-congestion';
 import { formatStationName } from '@/utils/station-name';
 import { useCallback, useRef, useState } from 'react';
 import {
@@ -12,7 +14,7 @@ import {
     View,
 } from 'react-native';
 import { Text } from '@/components/app-text';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -104,6 +106,8 @@ export default function HomeScreen() {
      */
     const serverMode = !isMockMode();
     const homeMap = useHomeMap(serverMode, currentAccount());
+    const { mock } = useLocalSearchParams<{ mock?: string | string[] }>();
+    const congestion = useHomeCongestion({ serverMode, account: currentAccount(), location: homeMap.myLocation, locationLoading: homeMap.locationLoading, stations: homeMap.stations, mock });
     const requestId = useRef(0);
     const [load, setLoad] = useState<MeetingLoad>({ kind: 'loading' });
 
@@ -239,6 +243,7 @@ export default function HomeScreen() {
                     showsVerticalScrollIndicator={false}
                     bounces={false}
                 >
+                    <HomeCongestionCard state={congestion} onLocate={() => serverMode ? homeMap.locate() : showPreparing('현재 위치')} />
                     <View style={styles.meetingHeader}>
                         <Text style={styles.sectionTitle}>내 약속</Text>
                         <Pressable

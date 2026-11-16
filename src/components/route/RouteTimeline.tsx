@@ -8,6 +8,7 @@ import { Text } from '@/components/app-text';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import CongestionBlocks from '@/components/congestion-blocks';
+import { blockLevel, LEVEL_ORDER } from '@/utils/congestion-level';
 import Passenger from '@/components/passenger';
 import type { CongestionSlot } from '@/types/congestion';
 import type { Congestion as CongestionData, Route, RouteLine, RouteStep } from '@/types/route';
@@ -26,8 +27,6 @@ const LV_WHITE = '#FFFFFF';
 const LV_DIVIDER = '#F1EEF4';
 const UNSUPPORTED = '#a1a8b8';
 const WALK_LINE = '#DCD7E3';
-
-const LEVEL_ORDER = ['COMFORTABLE', 'RELAXED', 'NORMAL', 'CROWDED', 'VERY_CROWDED'] as const;
 
 const toMinutes = (sec: number) => Math.max(1, Math.round(sec / 60));
 
@@ -48,12 +47,6 @@ function stepCongestion(step: RouteStep): CongestionData | null {
 function stopLabel(step: RouteStep, stopIndex: number) {
     const congestion = step.stations?.[stopIndex]?.congestion;
     return congestion?.supported && congestion.level ? congestion.levelLabel ?? '' : '미제공';
-}
-
-/** 3D 혼잡도 블록 단계: 쾌적 1 ~ 매우 혼잡 5, 데이터 없음 0 (기존 단계 값을 그대로 옮겨요) */
-function blockLevel(congestion: CongestionData | null | undefined) {
-    const level = congestion?.supported ? congestion.level : null;
-    return level ? LEVEL_ORDER.indexOf(level) + 1 : 0;
 }
 
 /** "11/08 06:00" (기존 Congestion 컴포넌트의 첫차 기준 표기와 같아요) */
