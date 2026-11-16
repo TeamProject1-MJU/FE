@@ -5203,7 +5203,8 @@ test('후보 패널(서버): 방장은 남의 후보도 삭제 버튼, 멤버는
         assert.equal(findElement(view, element => element.props?.style?.backgroundColor && element.type === 'View' && element.props?.children?.type === 'Text' && /호선|^\d$/.test(textOf(element))), null, '노선 배지 없음');
         if (isOwner) {
             deleteOf('남의 역').props.onPress(); view = r.view();
-            findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '삭제')).props.onPress();
+            const dialog = findElement(view, element => element.type === 'Modal' && element.props.visible);
+            findElement(dialog, element => element.type === 'Pressable' && findText(element.props.children, '삭제')).props.onPress();
             await settle(); await settle(); view = r.view();
             assert.deepEqual(r.calls.map(call => [call.options.method, call.url.split('/station-proposals')[1]]), [['DELETE', '/other']]);
             assert.equal(r.reloads(), 1);
@@ -5336,7 +5337,8 @@ test('후보 패널(서버): 9개 초과·중복 제안·남의 후보 삭제·�
                 ? findElement(view, element => element.props?.accessibilityLabel === '남의 역 후보 삭제')
                 : findElement(view, element => element.type === 'Pressable' && element.props?.accessibilityLabel?.startsWith('남의 역 1표'));
             target.props.onPress(); view = r.view();
-            findElement(view, element => element.type === 'Pressable' && findText(element.props.children, action === 'vote' ? '투표하기' : '삭제')).props.onPress();
+            const dialog = findElement(view, element => element.type === 'Modal' && element.props.visible);
+            findElement(dialog, element => element.type === 'Pressable' && findText(element.props.children, action === 'vote' ? '투표하기' : '삭제')).props.onPress();
         }
         await settle(); await settle(); view = r.view();
         if (message) {
@@ -5375,7 +5377,8 @@ test('추천 화면에서 올린 후보가 방 상세 후보 패널의 서버 �
     view = await pumpScreen(reco);
     const post = reco.calls.find(call => call.options.method === 'POST' && call.url.includes('/station-proposals'));
     assert.deepEqual(JSON.parse(post.options.body), { stationId: 77001, resultId: 'result-TIME' });
-    assert.ok(findText(view, '이미 약속역 후보에 있어요'), '공유 뒤 7.15 로 다시 맞춘 목록 기준');
+    assert.ok(findText(view, '후보에 있어요'), '공유 뒤 7.15 로 다시 맞춘 목록 기준');
+    assert.ok(findElement(view, element => element.props?.accessibilityLabel === '이미 약속역 후보에 있어요'), '축약 전 문구를 접근성에 유지');
     reco.unmount();
 
     const room = roomQueryScreen('src/app/rooms/[roomId].tsx', { roomId: ROOM_QUERY_ID, tab: 'vote' });

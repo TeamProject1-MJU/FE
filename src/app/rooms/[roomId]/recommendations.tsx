@@ -68,9 +68,8 @@ const LV_CARD_BORDER = '#EEEAF2';
 const LV_DIVIDER = '#F3F0F6';
 const LV_FIELD_BORDER = '#E8E4ED';
 const LV_TAG_BG = '#F1EEF4';
-const LV_DISABLED = '#CFC8D8';
-const LV_WARN = '#C0612F';
-const LV_WARN_SOFT = '#FBEFE8';
+const LV_DISABLED = '#CFC6DA';
+const LV_WARN = '#6F6B78';
 const LV_ERROR = '#C2415B';
 const LV_ERROR_SOFT = '#FBECEF';
 const LV_PLACEHOLDER = '#B3AFBA';
@@ -81,8 +80,8 @@ const LV_BAR_TRACK = '#F4F1F7';
 const LV_CHIP_BORDER = '#D9CCE4';
 const LV_ROW_BORDER = '#EFEBF3';
 const LV_CHEVRON = '#B4AFBC';
-const LV_STALE_SOFT = '#FBF1E8';
-const LV_STALE_TEXT = '#9A5022';
+const LV_STALE_SOFT = '#F4F1F7';
+const LV_STALE_TEXT = '#6F6B78';
 /** 나는 'me', 다른 참여자는 이 순서로 돌려 써요 (캐릭터 줄과 참여자 목록이 같은 색) */
 const OTHER_TONES: PassengerTone[] = ['other', 'pink', 'sky', 'mint'];
 
@@ -650,7 +649,7 @@ export default function RoomRecommendationsScreen() {
                         {/* 안내: 출발역 미설정, 인원 부족, 실행 실패 */}
                         {blockReason && (
                             <View style={lv.warnBox}>
-                                <Ionicons name="alert-circle-outline" size={17} color={LV_WARN} />
+                                <Ionicons name="information-circle-outline" size={16} color={LV_PURPLE} />
                                 <Text style={lv.warnText}>{blockReason}{missingMembers.length > 0 && !tooFew ? ' 모두 설정되면 계산할 수 있어요.' : ''}</Text>
                             </View>
                         )}
@@ -698,7 +697,7 @@ export default function RoomRecommendationsScreen() {
     const proposalsFull = !!proposals && proposals.items.length >= proposals.maxProposals;
     const shareDisabled = alreadyCandidate || proposalsFull || sharing;
     const shareLabel = alreadyCandidate
-        ? '이미 약속역 후보에 있어요'
+        ? '후보에 있어요'
         : proposalsFull
             ? `후보가 가득 찼어요 (${proposals?.items.length}/${proposals?.maxProposals})`
             : sharing ? '후보로 올리는 중' : '후보로 제안';
@@ -782,7 +781,7 @@ export default function RoomRecommendationsScreen() {
                             {constraintChips(run.appliedConstraints, members).map(label => <View key={label} style={styles.constraintChip}><Text style={styles.constraintText}>{label}</Text></View>)}
                             {Object.keys(run.appliedConstraints).length === 0 && <Text style={styles.constraintNone}>적용된 제약 없음</Text>}
                         </View>
-                        {!!understoodMessage && <Text style={styles.understoodMessage}>{understoodMessage}</Text>}
+                        {!!understoodMessage && <View style={styles.understoodNotice}><Ionicons name="information-circle-outline" size={16} color={LV_PURPLE} /><Text style={styles.understoodMessage}>{understoodMessage}</Text></View>}
                     </View>
                 )}
 
@@ -891,11 +890,12 @@ export default function RoomRecommendationsScreen() {
                                         <View key={`${alt.station.id}-${alt.relation}`} style={styles.nearbyChip}>
                                             <View style={styles.nearbyMain}>
                                                 <LineDot color={result.recommendedStation.lines?.find(l => l.lineId === alt.lineId)?.color ?? LV_GRAY} name={`${alt.lineId}호선`} size={16} />
-                                                <Text style={styles.nearbyName}>{formatStationName(alt.station.name)}</Text>
-                                                <Text style={styles.nearbyMeta}>최대 {alt.maxMinutes}분</Text>
-                                                <Text style={styles.nearbyMeta}>예상 {alt.totalFareWon.toLocaleString()}원</Text>
+                                                <View style={styles.nearbyBody}>
+                                                    <Text style={styles.nearbyName}>{formatStationName(alt.station.name)}</Text>
+                                                    <Text style={styles.nearbyTag}>{alt.relationLabel}</Text>
+                                                </View>
                                             </View>
-                                            <Text style={styles.nearbyTag}>{alt.relationLabel}</Text>
+                                            <Text style={styles.nearbyMeta}>최대 {alt.maxMinutes}분 · 예상 {alt.totalFareWon.toLocaleString()}원</Text>
                                         </View>
                                     ))}
                                 </View>
@@ -945,7 +945,7 @@ export default function RoomRecommendationsScreen() {
                     <Pressable style={({ pressed }) => [styles.footerSecondary, !me?.departureStation && styles.secondaryOff, pressed && styles.pressed]} onPress={() => openRoute(result)} disabled={!me?.departureStation} accessibilityRole="button">
                         <Text style={styles.footerSecondaryText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>경로 자세히 보기</Text>
                     </Pressable>
-                    <Pressable style={({ pressed }) => [styles.footerPrimary, shareDisabled && styles.footerPrimaryOff, pressed && styles.pressed]} onPress={() => shareAsCandidate(result)} disabled={shareDisabled} accessibilityRole="button" accessibilityState={{ disabled: shareDisabled, busy: sharing }}>
+                    <Pressable style={({ pressed }) => [styles.footerPrimary, shareDisabled && styles.footerPrimaryOff, pressed && styles.pressed]} onPress={() => shareAsCandidate(result)} disabled={shareDisabled} accessibilityLabel={shareLabel === '후보에 있어요' ? '이미 약속역 후보에 있어요' : shareLabel} accessibilityRole="button" accessibilityState={{ disabled: shareDisabled, busy: sharing }}>
                         <Text style={styles.footerPrimaryText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{shareLabel}</Text>
                     </Pressable>
                 </View>
@@ -1101,7 +1101,8 @@ const styles = StyleSheet.create({
     constraintChip: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1, borderColor: LV_CHIP_BORDER },
     constraintText: { fontSize: 12, fontWeight: '600', color: LV_PURPLE },
     constraintNone: { fontSize: 12, color: LV_GRAY },
-    understoodMessage: { fontSize: 12.5, lineHeight: 18, fontWeight: '600', color: LV_WARN },
+    understoodNotice: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, backgroundColor: '#F4F1F7', borderRadius: 10, paddingVertical: 8, paddingHorizontal: 10 },
+    understoodMessage: { flex: 1, fontSize: 12, lineHeight: 18, fontWeight: '600', color: '#6F6B78' },
 
     emptyBox: { alignItems: 'center', paddingVertical: 48, paddingHorizontal: 10, gap: 6 },
 
@@ -1163,12 +1164,13 @@ const styles = StyleSheet.create({
     reasonText: { fontSize: 14.5, lineHeight: 22.5, color: LV_TEXT, marginTop: 6 },
     reasonSource: { fontSize: 11, color: LV_GRAY, marginTop: 8 },
 
-    nearbyRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-    nearbyChip: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, gap: 3 },
-    nearbyMain: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
-    nearbyName: { fontSize: 13.5, fontWeight: '600', color: LV_TEXT },
-    nearbyMeta: { fontSize: 12, color: LV_GRAY },
-    nearbyTag: { fontSize: 11, color: LV_PURPLE, marginLeft: 22 },
+    nearbyRow: { alignSelf: 'stretch', gap: 8 },
+    nearbyChip: { alignSelf: 'stretch', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 14, backgroundColor: WHITE, borderWidth: 1, borderColor: '#EEEAF2', gap: 8 },
+    nearbyMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 6 },
+    nearbyBody: { flex: 1, minWidth: 0, gap: 3 },
+    nearbyName: { fontSize: 13.5, fontWeight: '700', color: LV_TEXT },
+    nearbyMeta: { fontSize: 12, fontWeight: '600', color: '#6F6B78', textAlign: 'right' },
+    nearbyTag: { fontSize: 11, color: '#83808B' },
 
     otherTitle: { marginBottom: 4 },
     otherRow: { flexDirection: 'row', alignItems: 'center', gap: 10, height: 48, borderBottomWidth: 1, borderBottomColor: LV_ROW_BORDER },
@@ -1240,8 +1242,8 @@ const lv = StyleSheet.create({
     quickTextOn: { color: WHITE },
     hint: { fontSize: 12, lineHeight: 18, color: LV_GRAY, marginTop: 6 },
 
-    warnBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 14, backgroundColor: LV_WARN_SOFT, marginTop: 14 },
-    warnText: { flex: 1, fontSize: 12.5, lineHeight: 19, fontWeight: '600', color: LV_WARN },
+    warnBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#F4F1F7', marginTop: 14 },
+    warnText: { flex: 1, fontSize: 12, lineHeight: 18, fontWeight: '600', color: '#6F6B78' },
     errorBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 14, backgroundColor: LV_ERROR_SOFT, marginTop: 10 },
     errorText: { flex: 1, fontSize: 12.5, lineHeight: 19, fontWeight: '600', color: LV_ERROR },
     noticeBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 14, backgroundColor: LV_SOFT, marginTop: 10 },

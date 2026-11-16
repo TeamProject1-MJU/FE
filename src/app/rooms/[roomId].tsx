@@ -567,7 +567,7 @@ export default function RoomDetailScreen() {
                 {/* 출발역을 설정하면 안내는 저절로 사라져요. */}
                 {!!station && !!routeHint && !detail.members.find(item => item.userId === myUserId)?.departureStation && (
                     <View style={styles.routeHint} accessibilityRole="alert">
-                        <Ionicons name="information-circle-outline" size={16} color={NAVY} />
+                        <Ionicons name="information-circle-outline" size={16} color={MINT} />
                         <Text style={styles.routeHintText}>{routeHint}</Text>
                     </View>
                 )}
@@ -833,8 +833,8 @@ const styles = StyleSheet.create({
     lineBadge: { minWidth: 20, height: 20, paddingHorizontal: 5, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
     lineText: { color: WHITE, fontSize: 11, fontWeight: '800' },
     stationName: { color: NAVY, fontSize: 32, fontWeight: '800' },
-    routeHint: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 6, padding: 10, borderRadius: 10, backgroundColor: '#fff4e0' },
-    routeHintText: { flex: 1, color: NAVY, fontSize: 13, fontWeight: '700' },
+    routeHint: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#F4F1F7' },
+    routeHintText: { flex: 1, color: '#6F6B78', fontSize: 12, fontWeight: '600' },
     stripButton: { paddingHorizontal: 13, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: MINT },
     stripButtonText: { color: WHITE, fontSize: 13, fontWeight: '800' },
     stripPrimary: { backgroundColor: MINT, borderColor: MINT },

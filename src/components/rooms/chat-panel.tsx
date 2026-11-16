@@ -80,6 +80,7 @@ export default function RoomChatPanel({
         offset: number;
     } | null>(null);
 
+    const [inputFocused, setInputFocused] = useState(false);
     const [newMessages, setNewMessages] = useState(false);
 
     useEffect(() => {
@@ -478,7 +479,7 @@ export default function RoomChatPanel({
                 <View style={styles.inputRow}>
                     <TextInput
                         ref={input}
-                        style={styles.input}
+                        style={[styles.input, inputFocused && styles.inputFocused]}
                         multiline
                         numberOfLines={1}
                         submitBehavior="newline"
@@ -487,7 +488,8 @@ export default function RoomChatPanel({
                         accessibilityLabel="채팅 메시지"
                         value={controller.draft}
                         onChangeText={controller.setDraft}
-                        onFocus={() => onInputFocus?.()}
+                        onFocus={() => { setInputFocused(true); onInputFocus?.(); }}
+                        onBlur={() => setInputFocused(false)}
                         onKeyPress={event => {
                             // 웹: Enter 전송, Shift+Enter 줄바꿈 (한글 조합 중 Enter는 전송하지 않음)
                             // 모바일은 키보드 Enter가 줄바꿈이고 [전송] 버튼으로 보내요.
@@ -740,6 +742,7 @@ const styles = StyleSheet.create({
         gap: 8,
     },
     input: {
+        ...Platform.select({ web: { outlineStyle: 'none' } as object }),
         flex: 1,
         minHeight: 46,
         maxHeight: 120,
@@ -754,6 +757,7 @@ const styles = StyleSheet.create({
         lineHeight: 22,
         textAlignVertical: 'center',
     },
+    inputFocused: { borderWidth: 1.5, borderColor: MINT },
     counter: {
         marginTop: 6,
         color: '#A8A3B0',
