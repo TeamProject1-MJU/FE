@@ -16,10 +16,12 @@ const FALLBACK_COLOR = '#B89BC7';
 type Props = {
     line?: string | number;
     size?: number;
+    /** 지붕 색을 직접 정해요. 넘기면 line 색보다 우선해요. (#210) */
+    color?: string;
 };
 
-export default function TrainBlock({ line = 2, size = 48 }: Props) {
-    const color = LINE_COLORS[String(line).trim()] ?? FALLBACK_COLOR;
+export default function TrainBlock({ line = 2, size = 48, color: roofColor }: Props) {
+    const color = roofColor ?? LINE_COLORS[String(line).trim()] ?? FALLBACK_COLOR;
     const height = (size * 40) / 48;
     const uri = useMemo(() => {
         const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 40" width="${size}" height="${height}">
