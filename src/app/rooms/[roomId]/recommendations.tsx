@@ -18,6 +18,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { openStationPicker, type Station } from '@/app/station-search';
+import Passenger, { type PassengerTone } from '@/components/passenger';
+import LineBadge from '@/components/route/LineBadge';
 import { formatMonthDay, formatTime } from '@/constants/home-mock';
 import {
     formatBoardingTrain,
@@ -64,6 +66,26 @@ const BORDER = '#e6e9ef';
 const RED = '#d6455d';
 const ORANGE = '#c77a00';
 const ORANGE_SOFT = '#fff4e0';
+
+/* 입력 보기·계산 중·불러오기 실패 화면 라벤더 톤 (#204, design-ref 시안 07 중간역 찾기) */
+const LV_BG = '#F7F5FA';
+const LV_TEXT = '#25212D';
+const LV_GRAY = '#83808B';
+const LV_PURPLE = '#5C3F78';
+const LV_SOFT = '#F0ECF5';
+const LV_SEGMENT = '#EDE8F3';
+const LV_CARD_BORDER = '#EEEAF2';
+const LV_DIVIDER = '#F3F0F6';
+const LV_FIELD_BORDER = '#E8E4ED';
+const LV_TAG_BG = '#F1EEF4';
+const LV_DISABLED = '#CFC8D8';
+const LV_WARN = '#C0612F';
+const LV_WARN_SOFT = '#FBEFE8';
+const LV_ERROR = '#C2415B';
+const LV_ERROR_SOFT = '#FBECEF';
+const LV_PLACEHOLDER = '#B3AFBA';
+/** 나는 'me', 다른 참여자는 이 순서로 돌려 써요 (캐릭터 줄과 참여자 목록이 같은 색) */
+const OTHER_TONES: PassengerTone[] = ['other', 'pink', 'sky', 'mint'];
 
 const CRITERIA: { key: RecommendationCriterion; label: string; short: string; icon: 'time-outline' | 'wallet-outline' | 'map-outline' }[] = [
     { key: 'TIME', label: '시간 기준', short: '시간', icon: 'time-outline' },
@@ -301,6 +323,11 @@ export default function RoomRecommendationsScreen() {
     const appointmentAt = detail?.appointmentAt ? new Date(detail.appointmentAt) : null;
     const me = members.find(member => member.userId === myUserId);
     const history = useMemo(() => listRecommendationRuns(roomId), [roomId, run]);
+    /** 3D 캐릭터 색 (표시용): 나는 'me', 다른 참여자는 목록 순서대로 OTHER_TONES 를 돌려 써요 */
+    const memberTones = new Map<string, PassengerTone>();
+    members.filter(member => member.userId !== myUserId)
+        .forEach((member, index) => memberTones.set(member.userId, OTHER_TONES[index % OTHER_TONES.length]));
+    if (me) memberTones.set(me.userId, 'me');
 
     /* ───────── 동작 ───────── */
 
@@ -452,14 +479,24 @@ export default function RoomRecommendationsScreen() {
         </View>
     );
 
+    /** 입력 보기·계산 중·불러오기 화면 위쪽 (시안 07): 뒤로 + 방 이름(작은 회색), 방 이름이 없으면 "중간역 찾기" */
+    const lavenderHeader = () => (
+        <View style={[lv.header, { paddingTop: insets.top }]}>
+            <Pressable style={lv.backButton} onPress={goBack} accessibilityRole="button" accessibilityLabel="뒤로 가기" hitSlop={8}>
+                <Ionicons name="chevron-back" size={24} color={LV_TEXT} />
+            </Pressable>
+            <Text style={lv.headerRoom} numberOfLines={1}>{detail?.name || '중간역 찾기'}</Text>
+        </View>
+    );
+
     if (loading && !detail) {
         return (
-            <View style={styles.container}>
+            <View style={lv.container}>
                 <StatusBar style="dark" />
-                {header('중간역 찾기')}
-                <View style={styles.center}>
-                    <ActivityIndicator color={NAVY} />
-                    <Text style={styles.centerHint}>추천 정보를 불러오고 있어요</Text>
+                {lavenderHeader()}
+                <View style={lv.center}>
+                    <ActivityIndicator color={LV_PURPLE} />
+                    <Text style={lv.centerHint}>추천 정보를 불러오고 있어요</Text>
                 </View>
             </View>
         );
@@ -473,20 +510,20 @@ export default function RoomRecommendationsScreen() {
             UNKNOWN: { title: '추천 결과를 불러오지 못했어요', body: '네트워크 상태를 확인하고 다시 시도해 주세요.' },
         }[loadError];
         return (
-            <View style={styles.container}>
+            <View style={lv.container}>
                 <StatusBar style="dark" />
-                {header('중간역 찾기')}
-                <View style={styles.center}>
-                    <View style={styles.centerIcon}><Ionicons name="cloud-offline-outline" size={30} color={SECONDARY} /></View>
-                    <Text style={styles.centerTitle}>{copy.title}</Text>
-                    <Text style={styles.centerBody}>{copy.body}</Text>
-                    <View style={styles.centerActions}>
+                {lavenderHeader()}
+                <View style={lv.center}>
+                    <View style={lv.centerIcon}><Ionicons name="cloud-offline-outline" size={30} color={LV_GRAY} /></View>
+                    <Text style={lv.centerTitle}>{copy.title}</Text>
+                    <Text style={lv.centerBody}>{copy.body}</Text>
+                    <View style={lv.centerActions}>
                         {loadError === 'UNKNOWN' && (
-                            <Pressable style={styles.primaryButton} onPress={() => { setLoading(true); load(); }} accessibilityRole="button">
-                                <Text style={styles.primaryText}>다시 시도</Text>
+                            <Pressable style={lv.primaryButton} onPress={() => { setLoading(true); load(); }} accessibilityRole="button">
+                                <Text style={lv.primaryText}>다시 시도</Text>
                             </Pressable>
                         )}
-                        <Pressable style={styles.secondaryButton} onPress={goBack} accessibilityRole="button"><Text style={styles.secondaryText}>돌아가기</Text></Pressable>
+                        <Pressable style={lv.secondaryButton} onPress={goBack} accessibilityRole="button"><Text style={lv.secondaryText}>돌아가기</Text></Pressable>
                     </View>
                 </View>
             </View>
@@ -496,153 +533,163 @@ export default function RoomRecommendationsScreen() {
     /* 계산 중 오버레이 */
     if (running) {
         return (
-            <View style={styles.container}>
+            <View style={lv.container}>
                 <StatusBar style="dark" />
-                {header('중간역 찾기')}
-                <View style={styles.center}>
-                    <View style={styles.runningIcon}><Ionicons name="git-network-outline" size={30} color={WHITE} /></View>
-                    <Text style={styles.centerTitle}>중간역을 계산하고 있어요</Text>
-                    <Text style={styles.centerBody}>참여자 {members.length}명의 출발역에서 시간·요금·거리 기준으로 가장 알맞은 역을 찾고 있어요.</Text>
-                    <ActivityIndicator color={NAVY} style={{ marginTop: 16 }} />
+                {lavenderHeader()}
+                <View style={lv.center}>
+                    <View style={lv.runningCrowd}>
+                        {members.map(member => <Passenger key={member.userId} tone={memberTones.get(member.userId) ?? 'other'} size={36} />)}
+                    </View>
+                    <Text style={lv.centerTitle}>중간역을 계산하고 있어요</Text>
+                    <Text style={lv.centerBody}>참여자 {members.length}명의 출발역에서 시간, 요금, 거리 기준으로 가장 알맞은 역을 찾고 있어요.</Text>
+                    <ActivityIndicator color={LV_PURPLE} style={{ marginTop: 16 }} />
                 </View>
             </View>
         );
     }
 
-    /* ───────── 입력 보기 (그림 30) ───────── */
+    /* ───────── 입력 보기 (그림 30, 시안 07 중간역 찾기) ───────── */
     if (view === 'input' || !run) {
+        const doneCount = members.length - missingMembers.length;
         return (
-            <View style={styles.container}>
+            <View style={lv.container}>
                 <StatusBar style="dark" />
-                {header('중간역 찾기')}
+                {lavenderHeader()}
                 <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-                    <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 120 }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-                        {/* ❹ 모두의 출발역 */}
-                        <View style={styles.rowBetween}>
-                            <View>
-                                <Text style={styles.sectionTitle}>모두의 출발역</Text>
-                                <Text style={styles.sectionSub}>각자 자신의 출발역을 설정해요</Text>
-                            </View>
-                            <Text style={[styles.counter, missingMembers.length === 0 && styles.counterDone]}>
-                                {members.length - missingMembers.length}/{members.length}명 설정{missingMembers.length === 0 ? ' 완료' : ''}
+                    <ScrollView contentContainerStyle={[lv.content, { paddingBottom: 32 }]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+                        <Text style={lv.title}>어디서 만날까요?</Text>
+                        <Text style={lv.desc}>각자 출발역을 넣으면 모두에게 알맞은 역을 찾아요.</Text>
+
+                        {/* 3D 캐릭터 줄 */}
+                        <View style={lv.crowd} accessible={false}>
+                            {members.map(member => <Passenger key={member.userId} tone={memberTones.get(member.userId) ?? 'other'} size={40} />)}
+                        </View>
+
+                        {/* ❹ 모두의 출발역 → 참여자 목록 */}
+                        <View style={lv.sectionHead}>
+                            <Text style={lv.sectionTitle}>참여자 {members.length}명</Text>
+                            <Text style={[lv.counter, missingMembers.length === 0 && lv.counterDone]}>
+                                {doneCount}/{members.length}명 설정{missingMembers.length === 0 ? ' 완료' : ''}
                             </Text>
                         </View>
-                        <View style={styles.memberGrid}>
+                        <View style={lv.memberCard}>
                             {members.map((member, index) => {
                                 const mine = member.userId === myUserId;
                                 return (
-                                    <Pressable
-                                        key={member.userId}
-                                        style={[styles.memberCard, mine && styles.memberCardMine, !member.departureStation && styles.memberCardEmpty]}
-                                        onPress={mine ? pickMyDeparture : undefined}
-                                        disabled={!mine || departureSaving}
-                                        accessibilityRole={mine ? 'button' : undefined}
-                                        accessibilityLabel={mine ? '내 출발역 설정' : undefined}
-                                    >
-                                        <View style={styles.memberHead}>
-                                            <View style={[styles.avatar, { backgroundColor: AVATAR_COLORS[index % AVATAR_COLORS.length] }]}>
-                                                <Text style={styles.avatarText}>{Array.from(member.nickname)[0]}</Text>
+                                    <View key={member.userId} style={[lv.memberRow, index === members.length - 1 && lv.memberRowLast]}>
+                                        <Passenger tone={memberTones.get(member.userId) ?? 'other'} size={30} />
+                                        <View style={styles.flex}>
+                                            <View style={lv.memberNameRow}>
+                                                <Text style={lv.memberName} numberOfLines={1}>{member.nickname}</Text>
+                                                {mine && <Text style={lv.meTag}>나</Text>}
+                                                {member.role === 'OWNER' && <Text style={lv.ownerTag}>방장</Text>}
                                             </View>
-                                            <Text style={styles.memberName} numberOfLines={1}>{member.nickname}</Text>
-                                            {mine && <Text style={styles.meTag}>나</Text>}
-                                            {mine && (departureSaving ? <ActivityIndicator size="small" color={MINT_DEEP} /> : <Ionicons name="pencil" size={14} color={MINT_DEEP} />)}
-                                        </View>
-                                        {member.departureStation ? (
-                                            <View style={styles.memberStationRow}>
-                                                <Text style={styles.memberStation}>{formatStationName(member.departureStation.name)}</Text>
-                                                <View style={styles.lineRow}>
-                                                    {member.departureStation.lines?.map(line => <LineDot key={line.lineId} color={line.color} name={line.lineName} />)}
+                                            {member.departureStation ? (
+                                                <View style={lv.memberStationRow}>
+                                                    <Text style={lv.memberStation} numberOfLines={1}>{formatStationName(member.departureStation.name)}</Text>
+                                                    {member.departureStation.lines?.map(line => (
+                                                        <LineBadge key={line.lineId} line={{ id: line.lineId, name: line.lineName, color: line.color }} size={15} />
+                                                    ))}
                                                 </View>
-                                            </View>
-                                        ) : (
-                                            <Text style={styles.memberStationEmpty}>{mine ? '출발역을 설정해 주세요' : '출발역 미설정'}</Text>
+                                            ) : (
+                                                <Text style={lv.memberStationEmpty}>{mine ? '출발역을 설정해 주세요' : '출발역 미설정'}</Text>
+                                            )}
+                                        </View>
+                                        {mine && (
+                                            <Pressable
+                                                style={({ pressed }) => [lv.pickButton, departureSaving && lv.pickButtonBusy, pressed && styles.pressed]}
+                                                onPress={pickMyDeparture}
+                                                disabled={departureSaving}
+                                                accessibilityRole="button"
+                                                accessibilityLabel="내 출발역 설정"
+                                                accessibilityState={{ disabled: departureSaving, busy: departureSaving }}
+                                            >
+                                                {departureSaving ? <ActivityIndicator size="small" color={LV_PURPLE} /> : <Text style={lv.pickText}>출발역</Text>}
+                                            </Pressable>
                                         )}
+                                    </View>
+                                );
+                            })}
+                        </View>
+
+                        {/* ❺ 추천 기준 (시안에 없지만 유지) */}
+                        <Text style={[lv.sectionTitle, lv.sectionGap]}>추천 기준</Text>
+                        <Text style={lv.sectionSub}>세 기준 모두 계산되고, 선택한 기준을 먼저 보여드려요</Text>
+                        <View style={lv.segment}>
+                            {CRITERIA.map(item => {
+                                const on = criterion === item.key;
+                                return (
+                                    <Pressable key={item.key} style={[lv.segmentItem, on && lv.segmentItemOn]} onPress={() => setCriterion(item.key)} accessibilityRole="button" accessibilityState={{ selected: on }}>
+                                        <Text style={[lv.segmentText, on && lv.segmentTextOn]}>{item.short}</Text>
                                     </Pressable>
                                 );
                             })}
                         </View>
 
-                        {/* ❺ 추천 기준 */}
-                        <Text style={styles.sectionTitle}>추천 기준</Text>
-                        <Text style={styles.sectionSub}>세 기준 모두 계산되고, 선택한 기준을 먼저 보여드려요</Text>
-                        <View style={styles.chipRow}>
-                            {CRITERIA.map(item => (
-                                <Pressable key={item.key} style={[styles.chip, criterion === item.key && styles.chipOn]} onPress={() => setCriterion(item.key)} accessibilityRole="button" accessibilityState={{ selected: criterion === item.key }}>
-                                    <Text style={[styles.chipText, criterion === item.key && styles.chipTextOn]}>{item.short}</Text>
-                                </Pressable>
-                            ))}
-                        </View>
-
                         {/* ❻ 이동 조건 입력 */}
-                        <View style={styles.rowBetween}>
-                            <View>
-                                <Text style={styles.sectionTitle}>어떤 곳이면 좋을까요?</Text>
-                                <Text style={styles.sectionSub}>원하는 조건을 편하게 말해주세요</Text>
-                            </View>
-                            <View style={styles.aiTag}><Ionicons name="sparkles" size={13} color={PURPLE} /><Text style={styles.aiTagText}>AI가 조건으로 바꿔요</Text></View>
+                        <View style={[lv.sectionHead, lv.sectionGap]}>
+                            <Text style={lv.sectionTitle}>조건 <Text style={lv.optional}>선택</Text></Text>
+                            <View style={lv.aiTag} accessible accessibilityLabel="AI가 조건을 해석해요"><Text style={lv.aiTagText}>AI</Text></View>
                         </View>
-                        <View style={styles.conditionBox}>
-                            <TextInput
-                                style={styles.conditionInput}
-                                value={conditionText}
-                                onChangeText={setConditionText}
-                                placeholder="예) 환승은 적고, 모두 30분 안쪽이면 좋겠어"
-                                placeholderTextColor="#a1a8b8"
-                                multiline
-                                maxLength={200}
-                                accessibilityLabel="이동 조건 입력"
-                            />
-                            <View style={styles.quickRow}>
-                                {QUICK_CHIPS.map(chip => {
-                                    const on = chips.has(chip.key);
-                                    return (
-                                        <Pressable key={chip.key} style={[styles.quickChip, on && styles.quickChipOn]} onPress={() => toggleChip(chip.key)} accessibilityRole="button" accessibilityState={{ selected: on }}>
-                                            {on && <Ionicons name="checkmark" size={13} color={WHITE} />}
-                                            <Text style={[styles.quickText, on && styles.quickTextOn]}>{chip.label}</Text>
-                                        </Pressable>
-                                    );
-                                })}
-                            </View>
+                        <TextInput
+                            style={lv.conditionInput}
+                            value={conditionText}
+                            onChangeText={setConditionText}
+                            placeholder="예: 다들 40분 안쪽이고 환승은 한 번 이하였으면 좋겠어"
+                            placeholderTextColor={LV_PLACEHOLDER}
+                            multiline
+                            maxLength={200}
+                            accessibilityLabel="이동 조건 입력"
+                        />
+                        <View style={lv.quickRow}>
+                            {QUICK_CHIPS.map(chip => {
+                                const on = chips.has(chip.key);
+                                return (
+                                    <Pressable key={chip.key} style={[lv.quickChip, on && lv.quickChipOn]} onPress={() => toggleChip(chip.key)} accessibilityRole="button" accessibilityState={{ selected: on }}>
+                                        {on && <Ionicons name="checkmark" size={13} color={WHITE} />}
+                                        <Text style={[lv.quickText, on && lv.quickTextOn]}>{chip.label}</Text>
+                                    </Pressable>
+                                );
+                            })}
                         </View>
-                        <Text style={styles.hint}>조건을 비우면 제약 없이 추천해요. 자연어와 필터 칩에 같은 항목이 있으면 필터가 우선이에요.</Text>
+                        <Text style={lv.hint}>조건을 비우면 제약 없이 추천해요. 자연어와 필터 칩에 같은 항목이 있으면 필터가 우선이에요.</Text>
 
-                        {/* 안내: 출발역 미설정 · 인원 부족 · 실행 실패 */}
+                        {/* 안내: 출발역 미설정, 인원 부족, 실행 실패 */}
                         {blockReason && (
-                            <View style={styles.warnBox}>
-                                <Ionicons name="alert-circle-outline" size={17} color={ORANGE} />
-                                <Text style={styles.warnText}>{blockReason}{missingMembers.length > 0 && !tooFew ? ' 모두 설정되면 계산할 수 있어요.' : ''}</Text>
+                            <View style={lv.warnBox}>
+                                <Ionicons name="alert-circle-outline" size={17} color={LV_WARN} />
+                                <Text style={lv.warnText}>{blockReason}{missingMembers.length > 0 && !tooFew ? ' 모두 설정되면 계산할 수 있어요.' : ''}</Text>
                             </View>
                         )}
                         {runError && (
-                            <View style={styles.errorBox}>
-                                <Ionicons name="warning-outline" size={17} color={RED} />
-                                <Text style={styles.errorText}>
+                            <View style={lv.errorBox}>
+                                <Ionicons name="warning-outline" size={17} color={LV_ERROR} />
+                                <Text style={lv.errorText}>
                                     {runError.message}
                                     {runError.missing?.length ? ` (${runError.missing.map(id => members.find(m => m.userId === id)?.nickname ?? id).join(', ')})` : ''}
                                 </Text>
                             </View>
                         )}
-                        {!!notice && <View style={styles.noticeBox}><Ionicons name="information-circle-outline" size={17} color={NAVY} /><Text style={styles.noticeText}>{notice}</Text></View>}
+                        {!!notice && <View style={lv.noticeBox}><Ionicons name="information-circle-outline" size={17} color={LV_PURPLE} /><Text style={lv.noticeText}>{notice}</Text></View>}
 
                         {run && (
-                            <Pressable style={styles.linkButton} onPress={() => setView('result')} accessibilityRole="button">
-                                <Text style={styles.linkText}>최근 추천 결과 보기</Text>
-                                <Ionicons name="chevron-forward" size={15} color={NAVY} />
+                            <Pressable style={lv.linkButton} onPress={() => setView('result')} accessibilityRole="button">
+                                <Text style={lv.linkText}>최근 추천 결과 보기</Text>
+                                <Ionicons name="chevron-forward" size={15} color={LV_PURPLE} />
                             </Pressable>
                         )}
                     </ScrollView>
 
                     {/* ❼ 중간역 계산하기 */}
-                    <View style={[styles.footer, { paddingBottom: insets.bottom + 14 }]}>
+                    <View style={[lv.footer, { paddingBottom: insets.bottom + 14 }]}>
                         <Pressable
-                            style={({ pressed }) => [styles.primaryButton, !!blockReason && styles.primaryDisabled, pressed && styles.pressed]}
+                            style={({ pressed }) => [lv.primaryButton, !!blockReason && lv.primaryDisabled, pressed && styles.pressed]}
                             onPress={runRecommendation}
                             disabled={!!blockReason || running}
                             accessibilityRole="button"
                             accessibilityState={{ disabled: !!blockReason || running }}
                         >
-                            <Ionicons name="git-network-outline" size={18} color={WHITE} />
-                            <Text style={styles.primaryText}>{runError ? '다시 시도' : run ? '다시 추천받기' : '중간역 계산하기'}</Text>
+                            <Text style={lv.primaryText}>{runError ? '다시 시도' : run ? '다시 추천받기' : '중간역 계산하기'}</Text>
                         </Pressable>
                     </View>
                 </KeyboardAvoidingView>
@@ -984,51 +1031,16 @@ const styles = StyleSheet.create({
     sectionTitle: { fontSize: 16, fontWeight: '800', color: NAVY, letterSpacing: -0.3 },
     sectionSub: { fontSize: 12.5, fontWeight: '500', color: SECONDARY, marginTop: 2 },
     rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-    counter: { fontSize: 12.5, fontWeight: '700', color: ORANGE },
-    counterDone: { color: MINT_DEEP },
-    hint: { fontSize: 12, lineHeight: 18, fontWeight: '500', color: SECONDARY },
 
-    memberGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 12 },
-    memberCard: { width: '48%', flexGrow: 1, padding: 14, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1.5, borderColor: BORDER, gap: 10 },
-    memberCardMine: { borderColor: MINT },
-    memberCardEmpty: { backgroundColor: '#fbfbfd' },
-    memberHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    avatar: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
-    avatarText: { color: WHITE, fontSize: 13, fontWeight: '800' },
-    memberName: { flex: 1, fontSize: 14, fontWeight: '800', color: NAVY },
-    meTag: { fontSize: 10, fontWeight: '800', color: MINT_DEEP, backgroundColor: '#e6f8f1', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
-    memberStationRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6 },
-    memberStation: { fontSize: 15, fontWeight: '700', color: NAVY, flexShrink: 1 },
-    memberStationEmpty: { fontSize: 13, fontWeight: '700', color: ORANGE },
     lineRow: { flexDirection: 'row', gap: 4 },
     lineDot: { paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
     lineDotText: { color: WHITE, fontWeight: '800' },
 
-    chipRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
-    chip: { flex: 1, height: 44, borderRadius: 12, borderWidth: 1.5, borderColor: BORDER, backgroundColor: WHITE, alignItems: 'center', justifyContent: 'center' },
-    chipOn: { borderColor: MINT, backgroundColor: '#e6f8f1' },
-    chipText: { fontSize: 14, fontWeight: '700', color: NAVY },
-    chipTextOn: { color: MINT_DEEP },
-    aiTag: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    aiTagText: { fontSize: 12, fontWeight: '700', color: PURPLE },
-    conditionBox: { borderRadius: 18, borderWidth: 1.5, borderColor: PURPLE, backgroundColor: WHITE, padding: 14, gap: 12 },
-    conditionInput: { minHeight: 64, fontSize: 15, fontWeight: '500', color: NAVY, textAlignVertical: 'top', ...Platform.select({ web: { outlineStyle: 'none' } as object }) },
-    quickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-    quickChip: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 34, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1.5, borderColor: PURPLE_SOFT, backgroundColor: PURPLE_SOFT },
-    quickChipOn: { backgroundColor: PURPLE, borderColor: PURPLE },
-    quickText: { fontSize: 13, fontWeight: '700', color: PURPLE },
-    quickTextOn: { color: WHITE },
-
-    warnBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 12, backgroundColor: ORANGE_SOFT },
-    warnText: { flex: 1, fontSize: 13, lineHeight: 19, fontWeight: '600', color: '#7a4e00' },
     errorBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 12, backgroundColor: '#fdecef' },
     errorText: { flex: 1, fontSize: 13, lineHeight: 19, fontWeight: '600', color: RED },
     noticeBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 12, backgroundColor: '#e9edf5' },
     noticeText: { flex: 1, fontSize: 13, lineHeight: 19, fontWeight: '600', color: NAVY },
-    linkButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 10 },
-    linkText: { fontSize: 14, fontWeight: '700', color: NAVY },
 
-    footer: { paddingHorizontal: 20, paddingTop: 12, backgroundColor: BG, borderTopWidth: 1, borderTopColor: BORDER },
     primaryButton: { height: 54, borderRadius: 16, backgroundColor: NAVY, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
     primaryDisabled: { backgroundColor: '#b9c0cf' },
     primaryText: { fontSize: 15, fontWeight: '800', color: WHITE },
@@ -1037,13 +1049,9 @@ const styles = StyleSheet.create({
     secondaryText: { fontSize: 15, fontWeight: '700', color: NAVY },
     pressed: { opacity: 0.85 },
 
-    center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 36, paddingBottom: 60, gap: 8 },
-    centerHint: { marginTop: 8, fontSize: 13, fontWeight: '600', color: SECONDARY },
     centerIcon: { width: 72, height: 72, borderRadius: 24, backgroundColor: WHITE, borderWidth: 1, borderColor: BORDER, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
-    runningIcon: { width: 72, height: 72, borderRadius: 24, backgroundColor: NAVY, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
     centerTitle: { fontSize: 17, fontWeight: '800', color: NAVY, textAlign: 'center', letterSpacing: -0.3 },
     centerBody: { fontSize: 13.5, lineHeight: 20, fontWeight: '500', color: SECONDARY, textAlign: 'center' },
-    centerActions: { alignSelf: 'stretch', gap: 10, marginTop: 18 },
 
     summary: { fontSize: 12.5, fontWeight: '600', color: SECONDARY, textAlign: 'center' },
     prevBox: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderRadius: 12, backgroundColor: '#e9edf5' },
@@ -1136,4 +1144,79 @@ const styles = StyleSheet.create({
     historyTitle: { fontSize: 13, fontWeight: '800', color: SECONDARY },
     historyRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
     historyText: { flex: 1, fontSize: 13, fontWeight: '600', color: NAVY },
+});
+
+/* 입력 보기·계산 중·불러오기 실패 화면 전용 (#204). 결과 보기 스타일(styles)은 건드리지 않아요. */
+const lv = StyleSheet.create({
+    container: { flex: 1, backgroundColor: LV_BG },
+    header: { flexDirection: 'row', alignItems: 'center', minHeight: 44, paddingHorizontal: 12, backgroundColor: LV_BG },
+    backButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+    headerRoom: { flex: 1, fontSize: 15, color: LV_GRAY, marginRight: 12 },
+    content: { paddingTop: 6, paddingHorizontal: 20 },
+
+    title: { fontSize: 24, fontWeight: '800', letterSpacing: -0.5, color: LV_TEXT },
+    desc: { fontSize: 13.5, color: LV_GRAY, marginTop: 6 },
+    crowd: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', gap: 2, height: 84, marginTop: 18, marginBottom: 4, paddingBottom: 10, borderRadius: 18, backgroundColor: LV_SOFT, overflow: 'hidden' },
+
+    sectionHead: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginTop: 20, marginBottom: 6 },
+    sectionGap: { marginTop: 22 },
+    sectionTitle: { fontSize: 15, fontWeight: '700', color: LV_TEXT },
+    sectionSub: { fontSize: 12.5, color: LV_GRAY, marginTop: 2, marginBottom: 8 },
+    optional: { fontSize: 13, fontWeight: '400', color: LV_GRAY },
+    counter: { fontSize: 13, fontWeight: '600', color: LV_WARN },
+    counterDone: { color: LV_PURPLE },
+
+    memberCard: { backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, borderRadius: 18, paddingVertical: 4, paddingHorizontal: 14 },
+    memberRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 62, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: LV_DIVIDER },
+    memberRowLast: { borderBottomWidth: 0 },
+    memberNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    memberName: { flexShrink: 1, fontSize: 15, fontWeight: '600', color: LV_TEXT },
+    meTag: { fontSize: 11, fontWeight: '700', color: LV_PURPLE },
+    ownerTag: { fontSize: 10.5, color: LV_GRAY, backgroundColor: LV_TAG_BG, paddingVertical: 2, paddingHorizontal: 6, borderRadius: 5, overflow: 'hidden' },
+    memberStationRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3 },
+    memberStation: { flexShrink: 1, fontSize: 13, color: LV_GRAY },
+    memberStationEmpty: { fontSize: 13, color: LV_WARN, marginTop: 3 },
+    pickButton: { height: 36, minWidth: 64, paddingHorizontal: 12, borderWidth: 1, borderColor: LV_FIELD_BORDER, borderRadius: 10, backgroundColor: WHITE, alignItems: 'center', justifyContent: 'center' },
+    pickButtonBusy: { opacity: 0.6 },
+    pickText: { fontSize: 13, fontWeight: '600', color: LV_PURPLE },
+
+    segment: { flexDirection: 'row', padding: 3, borderRadius: 12, backgroundColor: LV_SEGMENT },
+    segmentItem: { flex: 1, height: 36, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+    segmentItemOn: { backgroundColor: WHITE, shadowColor: '#3C285A', shadowOpacity: 0.12, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 1 },
+    segmentText: { fontSize: 13, fontWeight: '500', color: LV_GRAY },
+    segmentTextOn: { fontWeight: '700', color: LV_TEXT },
+
+    aiTag: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, backgroundColor: LV_SEGMENT },
+    aiTagText: { fontSize: 11.5, fontWeight: '700', color: LV_PURPLE },
+    conditionInput: { minHeight: 72, borderWidth: 1, borderColor: LV_FIELD_BORDER, borderRadius: 14, backgroundColor: WHITE, paddingVertical: 12, paddingHorizontal: 14, fontSize: 14.5, lineHeight: 22, color: LV_TEXT, textAlignVertical: 'top', ...Platform.select({ web: { outlineStyle: 'none' } as object }) },
+    quickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+    quickChip: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 34, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: LV_FIELD_BORDER, backgroundColor: WHITE },
+    quickChipOn: { backgroundColor: LV_PURPLE, borderColor: LV_PURPLE },
+    quickText: { fontSize: 13, fontWeight: '600', color: LV_PURPLE },
+    quickTextOn: { color: WHITE },
+    hint: { fontSize: 12, lineHeight: 18, color: LV_GRAY, marginTop: 6 },
+
+    warnBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 14, backgroundColor: LV_WARN_SOFT, marginTop: 14 },
+    warnText: { flex: 1, fontSize: 12.5, lineHeight: 19, fontWeight: '600', color: LV_WARN },
+    errorBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 14, backgroundColor: LV_ERROR_SOFT, marginTop: 10 },
+    errorText: { flex: 1, fontSize: 12.5, lineHeight: 19, fontWeight: '600', color: LV_ERROR },
+    noticeBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 14, backgroundColor: LV_SOFT, marginTop: 10 },
+    noticeText: { flex: 1, fontSize: 12.5, lineHeight: 19, fontWeight: '600', color: LV_TEXT },
+    linkButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 12, marginTop: 6 },
+    linkText: { fontSize: 13.5, fontWeight: '600', color: LV_PURPLE },
+
+    footer: { paddingHorizontal: 16, paddingTop: 10, backgroundColor: LV_BG },
+    primaryButton: { height: 54, borderRadius: 16, backgroundColor: LV_PURPLE, alignItems: 'center', justifyContent: 'center' },
+    primaryDisabled: { backgroundColor: LV_DISABLED },
+    primaryText: { fontSize: 16, fontWeight: '600', color: WHITE },
+    secondaryButton: { height: 50, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1, borderColor: LV_FIELD_BORDER, alignItems: 'center', justifyContent: 'center' },
+    secondaryText: { fontSize: 15, fontWeight: '600', color: LV_PURPLE },
+
+    center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 36, paddingBottom: 60, gap: 8 },
+    centerHint: { marginTop: 8, fontSize: 13, color: LV_GRAY },
+    centerIcon: { width: 72, height: 72, borderRadius: 24, backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+    runningCrowd: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', gap: 2, minWidth: 120, height: 72, paddingHorizontal: 16, paddingBottom: 8, borderRadius: 18, backgroundColor: LV_SOFT, marginBottom: 10 },
+    centerTitle: { fontSize: 17, fontWeight: '800', color: LV_TEXT, textAlign: 'center', letterSpacing: -0.3 },
+    centerBody: { fontSize: 13.5, lineHeight: 20, color: LV_GRAY, textAlign: 'center' },
+    centerActions: { alignSelf: 'stretch', gap: 10, marginTop: 18 },
 });
