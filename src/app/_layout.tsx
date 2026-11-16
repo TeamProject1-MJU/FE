@@ -1,4 +1,5 @@
 import AuthGate from '@/components/auth-gate';
+import SplashOverlay from '@/components/splash/splash-overlay';
 import type { ReactNode } from 'react';
 import { Stack } from 'expo-router';
 import {
@@ -21,6 +22,7 @@ export default function RootLayout() {
         return (
             <View style={styles.nativePage}>
                 <Stack screenOptions={{ headerShown: false }} screenLayout={screenLayout} />
+                <SplashOverlay />
             </View>
         );
     }
@@ -54,6 +56,7 @@ export default function RootLayout() {
                     ]}
                 >
                     <Stack screenOptions={{ headerShown: false }} screenLayout={screenLayout} />
+                    <SplashOverlay />
                 </View>
             </View>
         </View>
