@@ -19,6 +19,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { openStationPicker, type Station } from '@/app/station-search';
 import Passenger, { type PassengerTone } from '@/components/passenger';
+import TrainBlock from '@/components/train-block';
 import LineBadge from '@/components/route/LineBadge';
 import { formatMonthDay, formatTime } from '@/constants/home-mock';
 import {
@@ -54,18 +55,7 @@ import { roomEventsScope, useRoomEvents } from '@/hooks/use-room-events';
 import { mergeRoomUpdated, parseSelectedStationEvent, recommendationEventAction } from '@/services/room-events';
 import { getRoomCacheScope, removeCachedRoom } from '@/services/room-cache';
 
-const NAVY = '#0f1c3f';
-const MINT = '#2bcf9a';
-const MINT_DEEP = '#12a77a';
-const PURPLE = '#6a5ae0';
-const PURPLE_SOFT = '#eeecfb';
 const WHITE = '#ffffff';
-const BG = '#f3f5f8';
-const SECONDARY = '#6b7488';
-const BORDER = '#e6e9ef';
-const RED = '#d6455d';
-const ORANGE = '#c77a00';
-const ORANGE_SOFT = '#fff4e0';
 
 /* 입력 보기·계산 중·불러오기 실패 화면 라벤더 톤 (#204, design-ref 시안 07 중간역 찾기) */
 const LV_BG = '#F7F5FA';
@@ -84,6 +74,15 @@ const LV_WARN_SOFT = '#FBEFE8';
 const LV_ERROR = '#C2415B';
 const LV_ERROR_SOFT = '#FBECEF';
 const LV_PLACEHOLDER = '#B3AFBA';
+/* 결과 보기 라벤더 톤 (#206, design-ref 시안 08 추천 중간역) */
+const LV_SUBTEXT = '#4A4553';
+const LV_BAR = '#B89BC7';
+const LV_BAR_TRACK = '#F4F1F7';
+const LV_CHIP_BORDER = '#D9CCE4';
+const LV_ROW_BORDER = '#EFEBF3';
+const LV_CHEVRON = '#B4AFBC';
+const LV_STALE_SOFT = '#FBF1E8';
+const LV_STALE_TEXT = '#9A5022';
 /** 나는 'me', 다른 참여자는 이 순서로 돌려 써요 (캐릭터 줄과 참여자 목록이 같은 색) */
 const OTHER_TONES: PassengerTone[] = ['other', 'pink', 'sky', 'mint'];
 
@@ -102,7 +101,6 @@ const QUICK_CHIPS: { key: string; label: string; filter?: RecommendationFilter; 
 ];
 
 const CONGESTION_COLOR: Record<string, string> = { COMFORTABLE: '#2bcf9a', RELAXED: '#8fd14f', NORMAL: '#f2b705', CROWDED: '#f28c28', VERY_CROWDED: '#e5484d' };
-const AVATAR_COLORS = [NAVY, MINT, '#8792a8', '#c0c6d1'];
 
 type Params = { roomId: string; runId?: string; mock?: 'error' | 'latest-error' };
 type LoadError = 'ROOM_NOT_FOUND' | 'NOT_ROOM_MEMBER' | 'RUN_NOT_FOUND' | 'UNKNOWN';
@@ -153,6 +151,7 @@ export default function RoomRecommendationsScreen() {
 
     const [view, setView] = useState<'input' | 'result'>('result');
     const [criterion, setCriterion] = useState<RecommendationCriterion>('TIME');
+    const [stationNameWidth, setStationNameWidth] = useState(0);
     const [conditionText, setConditionText] = useState('');
     const [chips, setChips] = useState<Set<string>>(new Set());
     const [running, setRunning] = useState(false);
@@ -320,6 +319,10 @@ export default function RoomRecommendationsScreen() {
             : null;
     const isLatest = run ? run.isStale !== null : true;
     const result = run?.results.find(item => item.criterion === criterion) ?? run?.results[0] ?? null;
+    const stationName = formatStationName(result?.recommendedStation.name);
+    const stationNameFontSize = stationNameWidth > 0
+        ? Math.max(20, Math.min(34, Math.floor(stationNameWidth / (stationName.length * 0.98))))
+        : 34;
     const appointmentAt = detail?.appointmentAt ? new Date(detail.appointmentAt) : null;
     const me = members.find(member => member.userId === myUserId);
     const history = useMemo(() => listRecommendationRuns(roomId), [roomId, run]);
@@ -468,16 +471,6 @@ export default function RoomRecommendationsScreen() {
     };
 
     /* ───────── 렌더 ───────── */
-
-    const header = (title: string, right?: React.ReactNode) => (
-        <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-            <Pressable style={styles.backButton} onPress={goBack} accessibilityRole="button" accessibilityLabel="뒤로 가기" hitSlop={8}>
-                <Ionicons name="chevron-back" size={26} color={NAVY} />
-            </Pressable>
-            <Text style={styles.headerTitle}>{title}</Text>
-            <View style={styles.headerRight}>{right ?? (detail && <Text style={styles.roomChip} numberOfLines={1}>{detail.name}</Text>)}</View>
-        </View>
-    );
 
     /** 입력 보기·계산 중·불러오기 화면 위쪽 (시안 07): 뒤로 + 방 이름(작은 회색), 방 이름이 없으면 "중간역 찾기" */
     const lavenderHeader = () => (
@@ -697,7 +690,7 @@ export default function RoomRecommendationsScreen() {
         );
     }
 
-    /* ───────── 결과 보기 (그림 33·34·37) ───────── */
+    /* ───────── 결과 보기 (그림 33·34·37, 시안 08 추천 중간역) ───────── */
     const createdAt = new Date(run.createdAt);
     const serverEmptyResult = !isMockMode() && run.results.length === 0;
     const understoodMessage = serverEmptyResult ? null : run.message;
@@ -708,28 +701,36 @@ export default function RoomRecommendationsScreen() {
         ? '이미 약속역 후보에 있어요'
         : proposalsFull
             ? `후보가 가득 찼어요 (${proposals?.items.length}/${proposals?.maxProposals})`
-            : sharing ? '후보로 올리는 중' : '이 역으로 약속방에 공유';
+            : sharing ? '후보로 올리는 중' : '후보로 제안';
     const summary = [
         `${members.length}명`,
         appointmentAt ? `${formatMonthDay(appointmentAt)} ${formatTime(appointmentAt)} 약속` : '약속 시각 미정',
         CRITERIA.find(c => c.key === criterion)?.label ?? '',
         constraintSummary(run.appliedConstraints),
-    ].filter(Boolean).join(' · ');
+    ].filter(Boolean).join(', ');
+    /** 시안 "다른 기준 결과": 지금 실행(run.results)에 들어 있는 다른 기준만. 누르면 기준 탭만 바꿔요(새 요청 없음). */
+    const otherResults = result ? run.results.filter(item => item.criterion !== result.criterion) : [];
+    const showFooter = run.results.length > 0 && !!result;
 
     return (
         <View style={styles.container}>
             <StatusBar style="dark" />
-            {header('추천 중간역', (
-                <Pressable style={styles.headerAction} onPress={() => setView('input')} accessibilityRole="button" accessibilityLabel="조건 바꾸기">
-                    <Ionicons name="options-outline" size={20} color={NAVY} />
+            {/* 위쪽 (시안 08): 뒤로 + 제목 + 조건 바꾸기(시안의 공유 아이콘 자리) */}
+            <View style={[lv.header, { paddingTop: insets.top }]}>
+                <Pressable style={lv.backButton} onPress={goBack} accessibilityRole="button" accessibilityLabel="뒤로 가기" hitSlop={8}>
+                    <Ionicons name="chevron-back" size={24} color={LV_TEXT} />
                 </Pressable>
-            ))}
-            <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]} showsVerticalScrollIndicator={false}>
+                <Text style={styles.headerTitle} numberOfLines={1}>추천 중간역</Text>
+                <Pressable style={lv.backButton} onPress={() => setView('input')} accessibilityRole="button" accessibilityLabel="조건 바꾸기" hitSlop={8}>
+                    <Ionicons name="options-outline" size={21} color={LV_TEXT} />
+                </Pressable>
+            </View>
+            <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + (showFooter ? 110 : 32) }]} showsVerticalScrollIndicator={false}>
                 {newRecommendation && (
-                    <View style={styles.staleBox}>
-                        <Text style={styles.staleTitle}>새 추천이 있어요</Text>
-                        <Pressable accessibilityRole="button" onPress={() => void refreshLatest(undefined, true)} style={styles.staleButton}>
-                            <Text style={styles.staleButtonText}>보기</Text>
+                    <View style={styles.newBox}>
+                        <Text style={styles.newTitle}>새 추천이 있어요</Text>
+                        <Pressable accessibilityRole="button" onPress={() => void refreshLatest(undefined, true)} style={styles.smallButton}>
+                            <Text style={styles.smallButtonText}>보기</Text>
                         </Pressable>
                     </View>
                 )}
@@ -738,7 +739,7 @@ export default function RoomRecommendationsScreen() {
                 {/* 이전 실행(8.3) 표시: isStale === null 이면 판정 안 함, 다시 추천받기 없음 */}
                 {run.isStale === null && (
                     <View style={styles.prevBox}>
-                        <Ionicons name="time-outline" size={16} color={SECONDARY} />
+                        <Ionicons name="time-outline" size={16} color={LV_GRAY} />
                         <Text style={styles.prevText}>{formatMonthDay(createdAt)} {formatTime(createdAt)}에 실행한 이전 추천 결과예요. 최신 여부는 최근 결과에서만 확인할 수 있어요.</Text>
                         <Pressable onPress={() => router.setParams({ runId: '' })} hitSlop={6}><Text style={styles.prevLink}>최근 결과</Text></Pressable>
                     </View>
@@ -747,36 +748,35 @@ export default function RoomRecommendationsScreen() {
                 {/* ❶ 최신이 아님 안내 + 다시 추천받기 (최근 실행에서만) */}
                 {run.isStale === true && (
                     <View style={styles.staleBox}>
-                        <Ionicons name="alert-circle" size={18} color={ORANGE} />
                         <View style={styles.flex}>
                             <Text style={styles.staleTitle}>
                                 {staleReasonText(run.staleReasons)}
                             </Text>
                             <Text style={styles.staleBody}>{blockReason ?? '지금 조건으로 다시 추천받아 보세요. 기존 약속역 후보는 그대로 남아요.'}</Text>
                         </View>
-                        <Pressable style={[styles.staleButton, !!blockReason && styles.staleButtonOff]} onPress={runRecommendation} disabled={!!blockReason || running} accessibilityRole="button" accessibilityState={{ disabled: !!blockReason || running }}>
-                            <Text style={styles.staleButtonText}>다시 추천받기</Text>
+                        <Pressable style={[styles.smallButton, !!blockReason && styles.smallButtonOff]} onPress={runRecommendation} disabled={!!blockReason || running} accessibilityRole="button" accessibilityState={{ disabled: !!blockReason || running }}>
+                            <Text style={styles.smallButtonText}>다시 추천받기</Text>
                         </Pressable>
                     </View>
                 )}
                 {/* 결과 보기의 "다시 추천받기"가 실패한 경우에도 안내해요 (APPOINTMENT_PASSED 등) */}
                 {runError && (
-                    <View style={styles.errorBox}>
-                        <Ionicons name="warning-outline" size={17} color={RED} />
-                        <Text style={styles.errorText}>
+                    <View style={lv.errorBox}>
+                        <Ionicons name="warning-outline" size={17} color={LV_ERROR} />
+                        <Text style={lv.errorText}>
                             {runError.message}
                             {runError.missing?.length ? ` (${runError.missing.map(id => members.find(m => m.userId === id)?.nickname ?? id).join(', ')})` : ''}
                         </Text>
                     </View>
                 )}
                 {run.isStale === false && (
-                    <View style={styles.freshRow}><Ionicons name="checkmark-circle" size={15} color={MINT_DEEP} /><Text style={styles.freshText}>지금 약속 시각·참여자 기준 최신 결과예요 · {formatMonthDay(createdAt)} {formatTime(createdAt)} 실행</Text></View>
+                    <View style={styles.freshRow}><Ionicons name="checkmark-circle" size={15} color={LV_PURPLE} /><Text style={styles.freshText}>지금 약속 시각, 참여자 기준 최신 결과예요, {formatMonthDay(createdAt)} {formatTime(createdAt)} 실행</Text></View>
                 )}
 
                 {/* 이렇게 이해했어요 (conditionText → appliedConstraints) */}
                 {(run.conditionText || Object.keys(run.appliedConstraints).length > 0 || understoodMessage) && (
                     <View style={styles.understoodBox}>
-                        <View style={styles.understoodHead}><Ionicons name="sparkles" size={14} color={PURPLE} /><Text style={styles.understoodTitle}>이렇게 이해했어요</Text></View>
+                        <Text style={styles.understoodTitle}>이렇게 이해했어요</Text>
                         {!!run.conditionText && <Text style={styles.understoodQuote}>&quot;{run.conditionText}&quot;</Text>}
                         <View style={styles.constraintRow}>
                             {constraintChips(run.appliedConstraints, members).map(label => <View key={label} style={styles.constraintChip}><Text style={styles.constraintText}>{label}</Text></View>)}
@@ -789,117 +789,136 @@ export default function RoomRecommendationsScreen() {
                 {/* 결과 없음 (에러 아님, results: []) */}
                 {run.results.length === 0 ? (
                     <View style={styles.emptyBox}>
-                        <View style={styles.centerIcon}><Ionicons name="search-outline" size={28} color={SECONDARY} /></View>
-                        <Text style={styles.centerTitle}>조건에 맞는 중간역이 없어요</Text>
-                        <Text style={styles.centerBody}>{(serverEmptyResult && run.message) || '시간·환승·요금 조건을 조금 완화해서 다시 추천받아 보세요.'}</Text>
-                        <Pressable style={[styles.primaryButton, { marginTop: 16, alignSelf: 'stretch' }]} onPress={() => setView('input')} accessibilityRole="button"><Text style={styles.primaryText}>조건 바꾸기</Text></Pressable>
+                        <View style={lv.centerIcon}><Ionicons name="search-outline" size={28} color={LV_GRAY} /></View>
+                        <Text style={lv.centerTitle}>조건에 맞는 중간역이 없어요</Text>
+                        <Text style={lv.centerBody}>{(serverEmptyResult && run.message) || '시간, 환승, 요금 조건을 조금 완화해서 다시 추천받아 보세요.'}</Text>
+                        <Pressable style={[lv.primaryButton, { marginTop: 16, alignSelf: 'stretch' }]} onPress={() => setView('input')} accessibilityRole="button"><Text style={lv.primaryText}>조건 바꾸기</Text></Pressable>
                     </View>
                 ) : result && (
                     <>
-                        {/* ❷ 추천 기준 탭 */}
-                        <View style={styles.tabs}>
+                        {/* ❷ 추천 기준 탭 (시안 3칸 세그먼트) */}
+                        <View style={[lv.segment, styles.tabs]}>
                             {CRITERIA.map(item => {
                                 const has = run.results.some(r => r.criterion === item.key);
                                 const on = criterion === item.key;
                                 return (
-                                    <Pressable key={item.key} style={[styles.tab, on && styles.tabOn, !has && styles.tabOff]} onPress={() => { setCriterion(item.key); setOpenedParticipant(null); }} disabled={!has} accessibilityRole="tab" accessibilityState={{ selected: on }}>
-                                        <Text style={[styles.tabText, on && styles.tabTextOn]}>{item.label}</Text>
+                                    <Pressable key={item.key} style={[lv.segmentItem, on && lv.segmentItemOn, !has && styles.tabOff]} onPress={() => { setCriterion(item.key); setOpenedParticipant(null); }} disabled={!has} accessibilityRole="tab" accessibilityState={{ selected: on }}>
+                                        <Text style={[lv.segmentText, on && lv.segmentTextOn]}>{item.label}</Text>
                                     </Pressable>
                                 );
                             })}
                         </View>
 
-                        {/* 추천 카드 */}
-                        <View style={styles.card}>
-                            <View style={styles.cardBadge}><Text style={styles.cardBadgeText}>{CRITERIA.find(c => c.key === result.criterion)?.label} 최적 중간역</Text></View>
-                            <View style={styles.stationRow}>
-                                <Text style={styles.stationName}>{formatStationName(result.recommendedStation.name)}</Text>
-                                <View style={styles.lineRow}>{result.recommendedStation.lines?.map(line => <LineDot key={line.lineId} color={line.color} name={line.lineName} size={22} />)}</View>
+                        {/* 추천 역: 작은 보라 라벨(기준) + 큰 역 이름 + 노선 색 3D 열차 */}
+                        <View style={styles.stationRow}>
+                            <View style={styles.flex} onLayout={({ nativeEvent }) => setStationNameWidth(nativeEvent.layout.width)}>
+                                <Text style={styles.stationBadge}>{CRITERIA.find(c => c.key === result.criterion)?.label} 최적 중간역</Text>
+                                <Text style={[styles.stationName, { fontSize: stationNameFontSize }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{stationName}</Text>
                             </View>
-
-                            {/* 내 출발·도착 우선 (#153): 출발 → 도착, 약속까지 여유, 탑승 열차, 계산 근거, 이전 계획 안내 */}
-                            {(() => {
-                                const mine = result.participantTimes.find(p => p.userId === myUserId);
-                                if (!mine) return null;
-                                const slack = formatSlack(mine.slackSeconds);
-                                return (
-                                    <View style={styles.myTrip} accessibilityLabel="내 이동">
-                                        <Text style={styles.myTripLabel}>내 이동</Text>
-                                        <Text style={styles.myTripTime}>{formatTripLine(mine, detail?.appointmentAt ?? null)}</Text>
-                                        {!!slack && <Text style={[styles.myTripSlack, (mine.slackSeconds ?? 0) < 0 && styles.myTripLate]}>{slack}</Text>}
-                                        {mine.boardingTrain && (
-                                            <View style={styles.myTripTrain}>
-                                                <Ionicons name="train-outline" size={14} color={NAVY} />
-                                                <Text style={styles.myTripTrainText}>{formatBoardingTrain(mine.boardingTrain)}</Text>
-                                            </View>
-                                        )}
-                                        <Text style={styles.myTripNote}>{sourceNote(mine.source)}</Text>
-                                        {run.isStale === true && <Text style={styles.myTripStale}>{stalePlanText(run.staleReasons)}</Text>}
-                                    </View>
-                                );
-                            })()}
-
-                            {/* ❸ 이동 정보 요약 — 모두 추정치라 "예상" 라벨 */}
-                            <View style={styles.metrics}>
-                                <Metric label="평균 예상 시간" value={`${Math.round(result.metrics.averageMinutes)}분`} />
-                                <Metric label="최대 편차" value={`${result.metrics.maxDifferenceMinutes}분`} accent />
-                                <Metric label="평균 예상 요금" value={`${result.metrics.averageFare.toLocaleString()}원`} />
-                            </View>
-                            <Text style={styles.estimateNote}>시간·요금은 중간역을 고르기 위한 예상 값이에요. 실제 경로는 &apos;경로 자세히 보기&apos;에서 확인해요.</Text>
-
-                            {/* 참여자별 이동 (탭하면 그림 37 상세) */}
-                            <View style={styles.participants}>
-                                {result.participantTimes.map((p, index) => (
-                                    <ParticipantRow
-                                        key={p.userId}
-                                        participant={p}
-                                        color={AVATAR_COLORS[index % AVATAR_COLORS.length]}
-                                        maxMinutes={result.metrics.maxMinutes}
-                                        mine={p.userId === myUserId}
-                                        appointmentAt={detail?.appointmentAt ?? null}
-                                        stalePlan={run.isStale === true ? stalePlanText(run.staleReasons) : null}
-                                        opened={openedParticipant === p.userId}
-                                        onPress={() => setOpenedParticipant(prev => (prev === p.userId ? null : p.userId))}
-                                    />
-                                ))}
-                            </View>
-
-                            {/* ❹ AI 추천 이유 */}
-                            <View style={styles.reasonBox}>
-                                <View style={styles.reasonHead}><Ionicons name="sparkles" size={15} color={PURPLE} /><Text style={styles.reasonTitle}>AI 추천 이유</Text></View>
-                                <Text style={styles.reasonText}>{result.explanation}</Text>
-                                <Text style={styles.reasonSource}>{result.explanationSource === 'AI' ? '경로 계산 결과를 AI가 설명했어요' : '계산 결과로 만든 기본 설명이에요 (AI 설명 연동 전)'}</Text>
-                            </View>
-
-                            {/* ❺ 공유 · 경로 */}
-                            <Pressable style={({ pressed }) => [styles.primaryButton, shareDisabled && styles.primaryDisabled, pressed && styles.pressed]} onPress={() => shareAsCandidate(result)} disabled={shareDisabled} accessibilityRole="button">
-                                <Ionicons name={alreadyCandidate ? 'checkmark-done' : proposalsFull ? 'alert-circle-outline' : 'paper-plane-outline'} size={18} color={WHITE} />
-                                <Text style={styles.primaryText}>{shareLabel}</Text>
-                            </Pressable>
-                            <Pressable style={[styles.secondaryButton, !me?.departureStation && styles.secondaryOff]} onPress={() => openRoute(result)} disabled={!me?.departureStation} accessibilityRole="button">
-                                <Text style={styles.secondaryText}>경로 자세히 보기</Text>
-                            </Pressable>
+                            {!!result.recommendedStation.lines?.length && (
+                                <View style={styles.trainRow} accessible accessibilityLabel={result.recommendedStation.lines.map(line => line.lineName).join(', ')}>
+                                    {result.recommendedStation.lines.slice(0, 3).map(line => <TrainBlock key={line.lineId} line={line.lineId} size={40} />)}
+                                </View>
+                            )}
                         </View>
 
-                        {!!notice && <View style={styles.noticeBox}><Ionicons name="information-circle-outline" size={17} color={NAVY} /><Text style={styles.noticeText}>{notice}</Text></View>}
+                        {/* 내 출발·도착 우선 (#153): 출발 → 도착, 약속까지 여유, 탑승 열차, 계산 근거, 이전 계획 안내 */}
+                        {(() => {
+                            const mine = result.participantTimes.find(p => p.userId === myUserId);
+                            if (!mine) return null;
+                            const slack = formatSlack(mine.slackSeconds);
+                            return (
+                                <View style={styles.myTrip} accessibilityLabel="내 이동">
+                                    <Text style={styles.myTripLabel}>내 이동</Text>
+                                    <Text style={styles.myTripTime}>{formatTripLine(mine, detail?.appointmentAt ?? null)}</Text>
+                                    {!!slack && <Text style={[styles.myTripSlack, (mine.slackSeconds ?? 0) < 0 && styles.myTripLate]}>{slack}</Text>}
+                                    {mine.boardingTrain && (
+                                        <View style={styles.myTripTrain}>
+                                            <Ionicons name="train-outline" size={14} color={LV_PURPLE} />
+                                            <Text style={styles.myTripTrainText}>{formatBoardingTrain(mine.boardingTrain)}</Text>
+                                        </View>
+                                    )}
+                                    <Text style={styles.myTripNote}>{sourceNote(mine.source)}</Text>
+                                    {run.isStale === true && <Text style={styles.myTripStale}>{stalePlanText(run.staleReasons)}</Text>}
+                                </View>
+                            );
+                        })()}
 
-                        {/* ❻ 주변 대안역 (그림 34) */}
+                        {/* ❸ 이동 정보 요약 (흰 카드 3칸), 모두 추정치라 "예상" 라벨 */}
+                        <View style={styles.metrics}>
+                            <Metric label="평균 예상 시간" value={`${Math.round(result.metrics.averageMinutes)}분`} />
+                            <Metric label="최대 편차" value={`${result.metrics.maxDifferenceMinutes}분`} accent />
+                            <Metric label="평균 예상 요금" value={`${result.metrics.averageFare.toLocaleString()}원`} />
+                        </View>
+                        <Text style={styles.estimateNote}>시간, 요금은 중간역을 고르기 위한 예상 값이에요. 실제 경로는 &apos;경로 자세히 보기&apos;에서 확인해요.</Text>
+
+                        {/* 누가 얼마나 걸리나요 (탭하면 그림 37 상세) */}
+                        <Text style={styles.sectionTitle}>누가 얼마나 걸리나요</Text>
+                        <View style={styles.participants}>
+                            {result.participantTimes.map(p => (
+                                <ParticipantRow
+                                    key={p.userId}
+                                    participant={p}
+                                    tone={memberTones.get(p.userId) ?? 'other'}
+                                    maxMinutes={result.metrics.maxMinutes}
+                                    averageMinutes={result.metrics.averageMinutes}
+                                    mine={p.userId === myUserId}
+                                    appointmentAt={detail?.appointmentAt ?? null}
+                                    stalePlan={run.isStale === true ? stalePlanText(run.staleReasons) : null}
+                                    opened={openedParticipant === p.userId}
+                                    onPress={() => setOpenedParticipant(prev => (prev === p.userId ? null : p.userId))}
+                                />
+                            ))}
+                            <Text style={styles.legend}>세로선은 평균, 진한 막대가 가장 오래 걸리는 사람</Text>
+                        </View>
+
+                        {/* ❹ 추천 이유 */}
+                        <View style={styles.reasonBox}>
+                            <Text style={styles.reasonTitle}>왜 이 역인가요</Text>
+                            <Text style={styles.reasonText}>{result.explanation}</Text>
+                            <Text style={styles.reasonSource}>{result.explanationSource === 'AI' ? '경로 계산 결과를 AI가 설명했어요' : '계산 결과로 만든 기본 설명이에요 (AI 설명 연동 전)'}</Text>
+                        </View>
+
+                        {!!notice && <View style={lv.noticeBox}><Ionicons name="information-circle-outline" size={17} color={LV_PURPLE} /><Text style={lv.noticeText}>{notice}</Text></View>}
+
+                        {/* ❻ 주변 대안역 (그림 34, 시안 흰 칩) */}
                         {result.nearbyAlternatives.length > 0 && (
                             <>
-                                <Text style={[styles.sectionTitle, { marginTop: 8 }]}>이런 역도 있어요</Text>
+                                <Text style={styles.subSectionTitle}>이런 역도 있어요</Text>
                                 <Text style={styles.sectionSub}>최적 중간역 근처에서 함께 고려해볼 만한 역이에요</Text>
                                 <View style={styles.nearbyRow}>
                                     {result.nearbyAlternatives.map(alt => (
-                                        <View key={`${alt.station.id}-${alt.relation}`} style={styles.nearbyCard}>
-                                            <View style={styles.rowBetween}>
+                                        <View key={`${alt.station.id}-${alt.relation}`} style={styles.nearbyChip}>
+                                            <View style={styles.nearbyMain}>
+                                                <LineDot color={result.recommendedStation.lines?.find(l => l.lineId === alt.lineId)?.color ?? LV_GRAY} name={`${alt.lineId}호선`} size={16} />
                                                 <Text style={styles.nearbyName}>{formatStationName(alt.station.name)}</Text>
-                                                <LineDot color={result.recommendedStation.lines?.find(l => l.lineId === alt.lineId)?.color ?? NAVY} name={`${alt.lineId}호선`} />
+                                                <Text style={styles.nearbyMeta}>최대 {alt.maxMinutes}분</Text>
+                                                <Text style={styles.nearbyMeta}>예상 {alt.totalFareWon.toLocaleString()}원</Text>
                                             </View>
-                                            <View style={styles.nearbyTag}><Text style={styles.nearbyTagText}>{alt.relationLabel}</Text></View>
-                                            <Text style={styles.nearbyMeta}>최대 {alt.maxMinutes}분 · 예상 {alt.totalFareWon.toLocaleString()}원</Text>
+                                            <Text style={styles.nearbyTag}>{alt.relationLabel}</Text>
                                         </View>
                                     ))}
                                 </View>
+                            </>
+                        )}
+
+                        {/* 다른 기준 결과 (지금 실행 안의 다른 기준, 누르면 그 기준 탭으로) */}
+                        {otherResults.length > 0 && (
+                            <>
+                                <Text style={[styles.subSectionTitle, styles.otherTitle]}>다른 기준 결과</Text>
+                                {otherResults.map(item => (
+                                    <Pressable
+                                        key={item.criterion}
+                                        style={({ pressed }) => [styles.otherRow, pressed && styles.pressed]}
+                                        onPress={() => { setCriterion(item.criterion); setOpenedParticipant(null); }}
+                                        accessibilityRole="button"
+                                    >
+                                        <Text style={styles.otherLabel}>{CRITERIA.find(c => c.key === item.criterion)?.label}</Text>
+                                        <Text style={styles.otherStation} numberOfLines={1}>{formatStationName(item.recommendedStation.name)}</Text>
+                                        <Text style={styles.otherMax}>최대 {item.metrics.maxMinutes}분</Text>
+                                        <Ionicons name="chevron-forward" size={16} color={LV_CHEVRON} />
+                                    </Pressable>
+                                ))}
                             </>
                         )}
                     </>
@@ -911,14 +930,26 @@ export default function RoomRecommendationsScreen() {
                         <Text style={styles.historyTitle}>이전 추천 기록</Text>
                         {history.filter(item => item.runId !== run.runId).slice(0, 3).map(item => (
                             <Pressable key={item.runId} style={styles.historyRow} onPress={() => router.setParams({ runId: item.runId })} accessibilityRole="button">
-                                <Ionicons name="time-outline" size={15} color={SECONDARY} />
+                                <Ionicons name="time-outline" size={15} color={LV_GRAY} />
                                 <Text style={styles.historyText}>{formatMonthDay(new Date(item.createdAt))} {formatTime(new Date(item.createdAt))} 실행</Text>
-                                <Ionicons name="chevron-forward" size={15} color="#c0c6d1" />
+                                <Ionicons name="chevron-forward" size={15} color={LV_CHEVRON} />
                             </Pressable>
                         ))}
                     </View>
                 )}
             </ScrollView>
+
+            {/* ❺ 아래 고정 두 버튼 (시안 08): 경로 자세히 보기 + 후보 올리기 */}
+            {showFooter && result && (
+                <View style={[styles.footer, { paddingBottom: insets.bottom + 14 }]}>
+                    <Pressable style={({ pressed }) => [styles.footerSecondary, !me?.departureStation && styles.secondaryOff, pressed && styles.pressed]} onPress={() => openRoute(result)} disabled={!me?.departureStation} accessibilityRole="button">
+                        <Text style={styles.footerSecondaryText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>경로 자세히 보기</Text>
+                    </Pressable>
+                    <Pressable style={({ pressed }) => [styles.footerPrimary, shareDisabled && styles.footerPrimaryOff, pressed && styles.pressed]} onPress={() => shareAsCandidate(result)} disabled={shareDisabled} accessibilityRole="button" accessibilityState={{ disabled: shareDisabled, busy: sharing }}>
+                        <Text style={styles.footerPrimaryText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{shareLabel}</Text>
+                    </Pressable>
+                </View>
+            )}
         </View>
     );
 }
@@ -937,31 +968,47 @@ function Metric({ label, value, accent }: { label: string; value: string; accent
     return (
         <View style={styles.metric}>
             <Text style={styles.metricLabel}>{label}</Text>
-            <Text style={[styles.metricValue, accent && { color: MINT_DEEP }]}>{value}</Text>
+            <Text style={[styles.metricValue, accent && styles.metricAccent]}>{value}</Text>
         </View>
     );
 }
 
-/** 그림 33 참여자 막대 + 그림 37 상세(탭) */
-function ParticipantRow({ participant: p, color, maxMinutes, mine, appointmentAt, stalePlan, opened, onPress }: { participant: ParticipantTime; color: string; maxMinutes: number; mine: boolean; appointmentAt: string | null; stalePlan: string | null; opened: boolean; onPress: () => void }) {
+/** 그림 33 참여자 막대(시안 08 "누가 얼마나 걸리나요") + 그림 37 상세(탭) */
+function ParticipantRow({ participant: p, tone, maxMinutes, averageMinutes, mine, appointmentAt, stalePlan, opened, onPress }: { participant: ParticipantTime; tone: PassengerTone; maxMinutes: number; averageMinutes: number; mine: boolean; appointmentAt: string | null; stalePlan: string | null; opened: boolean; onPress: () => void }) {
     const slack = formatSlack(p.slackSeconds);
-    const ratio = maxMinutes > 0 ? Math.max(0.08, p.travelMinutes / maxMinutes) : 0;
+    // 시안처럼 가장 긴 시간의 1.1배를 막대 끝으로 두고, 평균 위치에 세로선을 그려요.
+    const scale = Math.max(maxMinutes, 1) * 1.1;
+    const width = Math.min(100, Math.max(3, (p.travelMinutes / scale) * 100));
+    const averageLeft = Math.min(100, Math.max(0, (averageMinutes / scale) * 100));
+    const longest = p.travelMinutes >= maxMinutes;
     // 서버는 혼잡도 데이터가 없으면 congestion: null 이에요. 이때는 점·라벨과 안내의 혼잡도 부분만 숨겨요.
-    const congestionColor = p.congestion ? CONGESTION_COLOR[p.congestion.level] ?? SECONDARY : SECONDARY;
+    const congestionColor = p.congestion ? CONGESTION_COLOR[p.congestion.level] ?? LV_GRAY : LV_GRAY;
     return (
         <Pressable style={styles.participant} onPress={onPress} accessibilityRole="button" accessibilityState={{ expanded: opened }} accessibilityLabel={`${p.nickname} 예상 ${p.travelMinutes}분`}>
             <View style={styles.participantRow}>
-                <View style={[styles.dot, { backgroundColor: color }]} />
-                <Text style={styles.participantName} numberOfLines={1}>{p.nickname}{mine ? ' (나)' : ''}</Text>
-                <View style={styles.bar}><View style={[styles.barFill, { width: `${Math.round(ratio * 100)}%`, backgroundColor: color }]} /></View>
-                <Text style={styles.participantMinutes}>{p.travelMinutes}분</Text>
-                <Ionicons name={opened ? 'chevron-up' : 'chevron-down'} size={14} color="#c0c6d1" />
+                <Passenger tone={tone} size={26} />
+                <View style={styles.participantWho}>
+                    <View style={styles.participantNameRow}>
+                        <Text style={styles.participantName} numberOfLines={1}>{p.nickname}</Text>
+                        {mine && <Text style={lv.meTag}>나</Text>}
+                    </View>
+                    <Text style={styles.participantDep} numberOfLines={1}>{formatStationName(p.departureStation.name)}</Text>
+                </View>
+                <View style={styles.bar}>
+                    <View style={[styles.barFill, { width: `${width}%`, backgroundColor: longest ? LV_PURPLE : LV_BAR }]} />
+                    <View style={[styles.barAverage, { left: `${averageLeft}%` }]} />
+                </View>
+                <View style={styles.participantRight}>
+                    <Text style={styles.participantMinutes}>{p.travelMinutes}분</Text>
+                    <Text style={styles.participantTransfer}>{p.transferCount === 0 ? '환승 없음' : `환승 ${p.transferCount}회`}</Text>
+                </View>
+                <Ionicons name={opened ? 'chevron-up' : 'chevron-down'} size={13} color={LV_CHEVRON} />
             </View>
             {opened && (
                 <View style={styles.participantDetail}>
-                    <Text style={styles.detailTitle}>{p.nickname}님의 경로 · {formatStationName(p.departureStation.name)} 출발</Text>
-                    {/* #153: 출발 → 도착(서울 기준)·여유·탑승 열차(열차 번호는 상세에서만) */}
-                    <Text style={styles.detailTrip}>{formatTripLine(p, appointmentAt)}{slack ? ` · ${slack}` : ''}</Text>
+                    <Text style={styles.detailTitle}>{p.nickname}님의 경로, {formatStationName(p.departureStation.name)} 출발</Text>
+                    {/* #153: 출발 → 도착(서울 기준), 여유, 탑승 열차(열차 번호는 상세에서만) */}
+                    <Text style={styles.detailTrip}>{formatTripLine(p, appointmentAt)}{slack ? `, ${slack}` : ''}</Text>
                     {p.boardingTrain && <Text style={styles.segmentText}>탑승 {formatBoardingTrain(p.boardingTrain, true)}</Text>}
                     {!!stalePlan && <Text style={styles.myTripStale}>{stalePlan}</Text>}
                     {p.legs.length > 0
@@ -971,7 +1018,7 @@ function ParticipantRow({ participant: p, color, maxMinutes, mine, appointmentAt
                                 <View key={i}>
                                     {!!transfer && <Text style={styles.legTransfer}>{transfer}</Text>}
                                     <View style={styles.segmentRow}>
-                                        <LineDot color={p.segments.find(seg => seg.lineId === leg.lineId)?.color ?? SECONDARY} name={leg.lineName} />
+                                        <LineDot color={p.segments.find(seg => seg.lineId === leg.lineId)?.color ?? LV_GRAY} name={leg.lineName} />
                                         <View style={styles.flex}>
                                             <Text style={styles.segmentText}>{formatLeg(leg)}</Text>
                                             <Text style={styles.legTrain}>{formatLegTrain(leg)}</Text>
@@ -983,14 +1030,14 @@ function ParticipantRow({ participant: p, color, maxMinutes, mine, appointmentAt
                         : p.segments.map((seg, i) => (
                             <View key={i} style={styles.segmentRow}>
                                 <LineDot color={seg.color} name={seg.lineName} />
-                                <Text style={styles.segmentText}>{seg.fromStationName} → {seg.toStationName} · {seg.stationCount}개 역</Text>
+                                <Text style={styles.segmentText}>{seg.fromStationName} → {seg.toStationName}, {seg.stationCount}개 역</Text>
                             </View>
                         ))}
                     <View style={styles.detailMeta}>
-                        <Text style={styles.detailMetaText}>환승 {p.transferCount}회 · 예상 {p.fareWon.toLocaleString()}원 · {(p.distanceM / 1000).toFixed(1)}km</Text>
+                        <Text style={styles.detailMetaText}>환승 {p.transferCount}회, 예상 {p.fareWon.toLocaleString()}원, {(p.distanceM / 1000).toFixed(1)}km</Text>
                         {p.congestion && <View style={styles.congestion}><View style={[styles.congestionDot, { backgroundColor: congestionColor }]} /><Text style={[styles.congestionText, { color: congestionColor }]}>{p.congestion.levelLabel}</Text></View>}
                     </View>
-                    <Text style={styles.detailHint}>출발 예정 {formatSeoulTime(p.departureAt)}{p.congestion ? ' 기준 혼잡도' : ''} · {sourceNote(p.source)}</Text>
+                    <Text style={styles.detailHint}>출발 예정 {formatSeoulTime(p.departureAt)}{p.congestion ? ' 기준 혼잡도' : ''}, {sourceNote(p.source)}</Text>
                 </View>
             )}
         </Pressable>
@@ -1012,141 +1059,138 @@ function constraintSummary(c: AppliedConstraints) {
     if (c.maxMinutes !== undefined) parts.push(`${c.maxMinutes}분 이내`);
     if (c.maxTransfers !== undefined) parts.push(`환승 ${c.maxTransfers}회 이하`);
     if (c.maxFareWon !== undefined) parts.push(`${c.maxFareWon.toLocaleString()}원 이내`);
-    return parts.join(' · ');
+    return parts.join(', ');
 }
 
 /* ───────────────────────── 스타일 ───────────────────────── */
 
+/* 결과 보기 전용 (#206, design-ref 시안 08 추천 중간역). 입력 보기 스타일(lv)과 같은 라벤더 톤이에요. */
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: BG },
+    container: { flex: 1, backgroundColor: LV_BG },
     flex: { flex: 1 },
-    header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingBottom: 10, backgroundColor: WHITE, borderBottomWidth: 1, borderBottomColor: BORDER },
-    backButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-    headerTitle: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '800', color: NAVY, letterSpacing: -0.3 },
-    headerRight: { minWidth: 44, maxWidth: 130, alignItems: 'flex-end' },
-    headerAction: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-    roomChip: { fontSize: 11, fontWeight: '800', color: MINT_DEEP, backgroundColor: '#e6f8f1', paddingHorizontal: 9, paddingVertical: 5, borderRadius: 999, overflow: 'hidden' },
-    content: { padding: 20, gap: 10 },
-
-    sectionTitle: { fontSize: 16, fontWeight: '800', color: NAVY, letterSpacing: -0.3 },
-    sectionSub: { fontSize: 12.5, fontWeight: '500', color: SECONDARY, marginTop: 2 },
-    rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-
-    lineRow: { flexDirection: 'row', gap: 4 },
-    lineDot: { paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
-    lineDotText: { color: WHITE, fontWeight: '800' },
-
-    errorBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 12, backgroundColor: '#fdecef' },
-    errorText: { flex: 1, fontSize: 13, lineHeight: 19, fontWeight: '600', color: RED },
-    noticeBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 12, backgroundColor: '#e9edf5' },
-    noticeText: { flex: 1, fontSize: 13, lineHeight: 19, fontWeight: '600', color: NAVY },
-
-    primaryButton: { height: 54, borderRadius: 16, backgroundColor: NAVY, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-    primaryDisabled: { backgroundColor: '#b9c0cf' },
-    primaryText: { fontSize: 15, fontWeight: '800', color: WHITE },
-    secondaryButton: { height: 50, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1, borderColor: BORDER, alignItems: 'center', justifyContent: 'center' },
-    secondaryOff: { opacity: 0.5 },
-    secondaryText: { fontSize: 15, fontWeight: '700', color: NAVY },
     pressed: { opacity: 0.85 },
+    headerTitle: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: LV_TEXT, letterSpacing: -0.3 },
+    content: { paddingTop: 4, paddingHorizontal: 20 },
 
-    centerIcon: { width: 72, height: 72, borderRadius: 24, backgroundColor: WHITE, borderWidth: 1, borderColor: BORDER, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
-    centerTitle: { fontSize: 17, fontWeight: '800', color: NAVY, textAlign: 'center', letterSpacing: -0.3 },
-    centerBody: { fontSize: 13.5, lineHeight: 20, fontWeight: '500', color: SECONDARY, textAlign: 'center' },
+    sectionTitle: { fontSize: 15, fontWeight: '700', color: LV_TEXT, marginTop: 22, marginBottom: 10 },
+    subSectionTitle: { fontSize: 14, fontWeight: '700', color: LV_TEXT, marginTop: 20 },
+    sectionSub: { fontSize: 12, color: LV_GRAY, marginTop: 2, marginBottom: 8 },
 
-    summary: { fontSize: 12.5, fontWeight: '600', color: SECONDARY, textAlign: 'center' },
-    prevBox: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderRadius: 12, backgroundColor: '#e9edf5' },
-    prevText: { flex: 1, fontSize: 12.5, lineHeight: 18, fontWeight: '600', color: SECONDARY },
-    prevLink: { fontSize: 12.5, fontWeight: '800', color: NAVY },
-    staleBox: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: 14, backgroundColor: ORANGE_SOFT },
-    staleTitle: { fontSize: 13.5, fontWeight: '800', color: '#7a4e00' },
-    staleBody: { fontSize: 12, lineHeight: 17, fontWeight: '500', color: '#7a4e00', marginTop: 2 },
-    staleButton: { height: 36, paddingHorizontal: 12, borderRadius: 10, backgroundColor: NAVY, alignItems: 'center', justifyContent: 'center' },
-    staleButtonOff: { backgroundColor: '#b9c0cf' },
-    staleButtonText: { fontSize: 12.5, fontWeight: '800', color: WHITE },
-    freshRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-    freshText: { fontSize: 12, fontWeight: '600', color: MINT_DEEP },
+    lineDot: { paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
+    lineDotText: { color: WHITE, fontWeight: '700' },
 
-    understoodBox: { padding: 14, borderRadius: 14, backgroundColor: PURPLE_SOFT, gap: 8 },
-    understoodHead: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-    understoodTitle: { fontSize: 13, fontWeight: '800', color: PURPLE },
-    understoodQuote: { fontSize: 13, fontWeight: '600', color: NAVY, fontStyle: 'italic' },
-    constraintRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-    constraintChip: { paddingHorizontal: 9, paddingVertical: 5, borderRadius: 8, backgroundColor: WHITE },
-    constraintText: { fontSize: 12, fontWeight: '700', color: PURPLE },
-    constraintNone: { fontSize: 12, fontWeight: '600', color: SECONDARY },
-    understoodMessage: { fontSize: 12.5, lineHeight: 18, fontWeight: '600', color: ORANGE },
+    summary: { fontSize: 12.5, color: LV_GRAY, marginTop: 6 },
+    newBox: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10, paddingVertical: 10, paddingLeft: 14, paddingRight: 10, borderRadius: 12, backgroundColor: LV_SOFT },
+    newTitle: { flex: 1, fontSize: 13, fontWeight: '600', color: LV_PURPLE },
+    prevBox: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, paddingVertical: 11, paddingHorizontal: 14, borderRadius: 12, backgroundColor: LV_SOFT },
+    prevText: { flex: 1, fontSize: 12.5, lineHeight: 18, color: LV_GRAY },
+    prevLink: { fontSize: 12.5, fontWeight: '700', color: LV_PURPLE },
+    staleBox: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10, paddingVertical: 11, paddingLeft: 14, paddingRight: 10, borderRadius: 12, backgroundColor: LV_STALE_SOFT },
+    staleTitle: { fontSize: 13, lineHeight: 19.5, fontWeight: '600', color: LV_STALE_TEXT },
+    staleBody: { fontSize: 12, lineHeight: 18, color: LV_STALE_TEXT, marginTop: 2 },
+    smallButton: { height: 34, paddingHorizontal: 12, borderRadius: 10, backgroundColor: LV_PURPLE, alignItems: 'center', justifyContent: 'center' },
+    smallButtonOff: { backgroundColor: LV_DISABLED },
+    smallButtonText: { fontSize: 12.5, fontWeight: '600', color: WHITE },
+    freshRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8 },
+    freshText: { flexShrink: 1, fontSize: 12, color: LV_GRAY },
 
-    emptyBox: { alignItems: 'center', padding: 24, borderRadius: 18, backgroundColor: WHITE, borderWidth: 1, borderColor: BORDER, gap: 6 },
+    understoodBox: { marginTop: 12, padding: 14, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, gap: 8 },
+    understoodTitle: { fontSize: 11.5, fontWeight: '700', color: LV_PURPLE },
+    understoodQuote: { fontSize: 13.5, lineHeight: 20, color: LV_TEXT, fontStyle: 'italic' },
+    constraintRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
+    constraintChip: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1, borderColor: LV_CHIP_BORDER },
+    constraintText: { fontSize: 12, fontWeight: '600', color: LV_PURPLE },
+    constraintNone: { fontSize: 12, color: LV_GRAY },
+    understoodMessage: { fontSize: 12.5, lineHeight: 18, fontWeight: '600', color: LV_WARN },
 
-    tabs: { flexDirection: 'row', gap: 8, marginTop: 4 },
-    tab: { flex: 1, height: 42, borderRadius: 12, borderWidth: 1.5, borderColor: BORDER, backgroundColor: WHITE, alignItems: 'center', justifyContent: 'center' },
-    tabOn: { borderColor: MINT, backgroundColor: '#e6f8f1' },
+    emptyBox: { alignItems: 'center', paddingVertical: 48, paddingHorizontal: 10, gap: 6 },
+
+    tabs: { marginTop: 14 },
     tabOff: { opacity: 0.4 },
-    tabText: { fontSize: 13.5, fontWeight: '700', color: NAVY },
-    tabTextOn: { color: MINT_DEEP },
 
-    card: { padding: 18, borderRadius: 22, backgroundColor: WHITE, borderWidth: 2, borderColor: NAVY, gap: 14 },
-    cardBadge: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, backgroundColor: NAVY },
-    cardBadgeText: { fontSize: 11.5, fontWeight: '800', color: WHITE },
-    stationRow: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
-    stationName: { fontSize: 30, fontWeight: '800', color: NAVY, letterSpacing: -0.8 },
-    metrics: { flexDirection: 'row', borderTopWidth: 1, borderBottomWidth: 1, borderColor: BORDER, paddingVertical: 12 },
-    metric: { flex: 1, alignItems: 'center', gap: 4, borderRightWidth: 1, borderRightColor: BORDER },
-    metricLabel: { fontSize: 11.5, fontWeight: '600', color: SECONDARY },
-    metricValue: { fontSize: 20, fontWeight: '800', color: NAVY },
-    myTrip: { marginTop: 12, padding: 12, borderRadius: 12, backgroundColor: '#f3f5f8', gap: 4 },
-    myTripLabel: { color: SECONDARY, fontSize: 12, fontWeight: '700' },
-    myTripTime: { color: NAVY, fontSize: 18, fontWeight: '800' },
-    myTripSlack: { color: MINT_DEEP, fontSize: 13, fontWeight: '700' },
-    myTripLate: { color: RED },
+    stationRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 20 },
+    stationBadge: { fontSize: 12.5, fontWeight: '600', color: LV_PURPLE },
+    stationName: { fontSize: 34, fontWeight: '800', letterSpacing: -1, color: LV_TEXT, marginTop: 2 },
+    trainRow: { flexDirection: 'row', gap: 2 },
+
+    myTrip: { marginTop: 14, paddingVertical: 12, paddingHorizontal: 14, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, gap: 4 },
+    myTripLabel: { color: LV_PURPLE, fontSize: 11.5, fontWeight: '700' },
+    myTripTime: { color: LV_TEXT, fontSize: 17, fontWeight: '700' },
+    myTripSlack: { color: LV_PURPLE, fontSize: 13, fontWeight: '600' },
+    myTripLate: { color: LV_ERROR },
     myTripTrain: { flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' },
-    myTripTrainText: { flexShrink: 1, color: NAVY, fontSize: 13, fontWeight: '600' },
-    myTripNote: { color: SECONDARY, fontSize: 11.5 },
-    myTripStale: { color: ORANGE, fontSize: 12, fontWeight: '600' },
-    detailTrip: { color: NAVY, fontSize: 13, fontWeight: '700', marginBottom: 4 },
-    legTransfer: { color: SECONDARY, fontSize: 12, marginLeft: 26, marginVertical: 2 },
-    legTrain: { color: SECONDARY, fontSize: 11.5 },
-    estimateNote: { fontSize: 11.5, lineHeight: 16, fontWeight: '500', color: SECONDARY, marginTop: -6 },
+    myTripTrainText: { flexShrink: 1, color: LV_TEXT, fontSize: 13 },
+    myTripNote: { color: LV_GRAY, fontSize: 11.5 },
+    myTripStale: { color: LV_WARN, fontSize: 12, fontWeight: '600' },
 
-    participants: { gap: 4 },
-    participant: { paddingVertical: 4 },
-    participantRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    dot: { width: 20, height: 20, borderRadius: 10 },
-    participantName: { width: 64, fontSize: 13.5, fontWeight: '700', color: NAVY },
-    bar: { flex: 1, height: 10, borderRadius: 5, backgroundColor: '#eef1f6', overflow: 'hidden' },
-    barFill: { height: 10, borderRadius: 5 },
-    participantMinutes: { width: 40, textAlign: 'right', fontSize: 13.5, fontWeight: '800', color: NAVY },
-    participantDetail: { marginTop: 8, marginLeft: 30, padding: 12, borderRadius: 12, backgroundColor: BG, gap: 8 },
-    detailTitle: { fontSize: 13, fontWeight: '800', color: NAVY },
+    metrics: { flexDirection: 'row', gap: 1, marginTop: 14, borderRadius: 16, borderWidth: 1, borderColor: LV_CARD_BORDER, backgroundColor: LV_CARD_BORDER, overflow: 'hidden' },
+    metric: { flex: 1, padding: 12, backgroundColor: WHITE },
+    metricLabel: { fontSize: 11.5, color: LV_GRAY },
+    metricValue: { fontSize: 18, fontWeight: '700', color: LV_TEXT, marginTop: 3 },
+    metricAccent: { color: LV_PURPLE },
+    estimateNote: { fontSize: 11.5, lineHeight: 16, color: LV_GRAY, marginTop: 6 },
+
+    participants: { backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, borderRadius: 18, paddingTop: 12, paddingHorizontal: 14, paddingBottom: 6 },
+    participant: { paddingVertical: 8 },
+    participantRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    participantWho: { width: 72 },
+    participantNameRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    participantName: { flexShrink: 1, fontSize: 13.5, fontWeight: '600', color: LV_TEXT },
+    participantDep: { fontSize: 11, color: LV_GRAY },
+    bar: { flex: 1, height: 22, borderRadius: 6, backgroundColor: LV_BAR_TRACK },
+    barFill: { position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 6 },
+    barAverage: { position: 'absolute', top: -3, bottom: -3, width: 2, marginLeft: -1, backgroundColor: LV_TEXT, opacity: 0.35 },
+    participantRight: { width: 58, alignItems: 'flex-end' },
+    participantMinutes: { fontSize: 14, fontWeight: '700', color: LV_TEXT },
+    participantTransfer: { fontSize: 10.5, color: LV_GRAY },
+    legend: { fontSize: 11, color: LV_GRAY, paddingTop: 4, paddingBottom: 6 },
+    participantDetail: { marginTop: 8, marginLeft: 34, padding: 12, borderRadius: 12, backgroundColor: LV_BG, gap: 8 },
+    detailTitle: { fontSize: 13, fontWeight: '700', color: LV_TEXT },
+    detailTrip: { color: LV_TEXT, fontSize: 13, fontWeight: '600', marginBottom: 4 },
     segmentRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    segmentText: { fontSize: 12.5, fontWeight: '600', color: NAVY },
+    segmentText: { fontSize: 12.5, color: LV_TEXT },
+    legTransfer: { color: LV_GRAY, fontSize: 12, marginLeft: 26, marginVertical: 2 },
+    legTrain: { color: LV_GRAY, fontSize: 11.5 },
     detailMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-    detailMetaText: { fontSize: 12, fontWeight: '600', color: SECONDARY, flexShrink: 1 },
+    detailMetaText: { fontSize: 12, color: LV_GRAY, flexShrink: 1 },
     congestion: { flexDirection: 'row', alignItems: 'center', gap: 4 },
     congestionDot: { width: 8, height: 8, borderRadius: 4 },
-    congestionText: { fontSize: 12, fontWeight: '800' },
-    detailHint: { fontSize: 11, fontWeight: '500', color: SECONDARY },
+    congestionText: { fontSize: 12, fontWeight: '700' },
+    detailHint: { fontSize: 11, color: LV_GRAY },
 
-    reasonBox: { padding: 14, borderRadius: 14, backgroundColor: PURPLE_SOFT, gap: 6 },
-    reasonHead: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-    reasonTitle: { fontSize: 13.5, fontWeight: '800', color: PURPLE },
-    reasonText: { fontSize: 14, lineHeight: 21, fontWeight: '600', color: NAVY },
-    reasonSource: { fontSize: 11.5, fontWeight: '500', color: SECONDARY },
+    reasonBox: { marginTop: 12, padding: 14, borderRadius: 16, backgroundColor: LV_SEGMENT },
+    reasonTitle: { fontSize: 11.5, fontWeight: '700', color: LV_PURPLE },
+    reasonText: { fontSize: 14.5, lineHeight: 22.5, color: LV_TEXT, marginTop: 6 },
+    reasonSource: { fontSize: 11, color: LV_GRAY, marginTop: 8 },
 
-    nearbyRow: { flexDirection: 'row', gap: 10, marginTop: 8 },
-    nearbyCard: { flex: 1, padding: 14, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1, borderColor: BORDER, gap: 8 },
-    nearbyName: { fontSize: 15, fontWeight: '800', color: NAVY },
-    nearbyTag: { alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7, backgroundColor: '#e6f8f1' },
-    nearbyTagText: { fontSize: 11, fontWeight: '800', color: MINT_DEEP },
-    nearbyMeta: { fontSize: 12, fontWeight: '600', color: SECONDARY },
+    nearbyRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    nearbyChip: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 12, backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, gap: 3 },
+    nearbyMain: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+    nearbyName: { fontSize: 13.5, fontWeight: '600', color: LV_TEXT },
+    nearbyMeta: { fontSize: 12, color: LV_GRAY },
+    nearbyTag: { fontSize: 11, color: LV_PURPLE, marginLeft: 22 },
 
-    historyBox: { marginTop: 12, padding: 14, borderRadius: 14, backgroundColor: WHITE, borderWidth: 1, borderColor: BORDER, gap: 8 },
-    historyTitle: { fontSize: 13, fontWeight: '800', color: SECONDARY },
-    historyRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
-    historyText: { flex: 1, fontSize: 13, fontWeight: '600', color: NAVY },
+    otherTitle: { marginBottom: 4 },
+    otherRow: { flexDirection: 'row', alignItems: 'center', gap: 10, height: 48, borderBottomWidth: 1, borderBottomColor: LV_ROW_BORDER },
+    otherLabel: { width: 64, fontSize: 12.5, color: LV_GRAY },
+    otherStation: { flex: 1, fontSize: 15, fontWeight: '600', color: LV_TEXT },
+    otherMax: { fontSize: 13, color: LV_SUBTEXT },
+
+    historyBox: { marginTop: 20, paddingVertical: 12, paddingHorizontal: 14, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, gap: 4 },
+    historyTitle: { fontSize: 12.5, fontWeight: '700', color: LV_GRAY },
+    historyRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
+    historyText: { flex: 1, fontSize: 13.5, color: LV_TEXT },
+
+    footer: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', gap: 8, paddingTop: 12, paddingHorizontal: 16, backgroundColor: LV_BG },
+    footerSecondary: { flex: 1, height: 52, paddingHorizontal: 10, borderRadius: 14, borderWidth: 1, borderColor: LV_FIELD_BORDER, backgroundColor: WHITE, alignItems: 'center', justifyContent: 'center' },
+    secondaryOff: { opacity: 0.5 },
+    footerSecondaryText: { fontSize: 15, fontWeight: '600', color: LV_TEXT },
+    footerPrimary: { flex: 1.3, height: 52, paddingHorizontal: 10, borderRadius: 14, backgroundColor: LV_PURPLE, alignItems: 'center', justifyContent: 'center' },
+    footerPrimaryOff: { backgroundColor: LV_DISABLED },
+    footerPrimaryText: { fontSize: 15, fontWeight: '600', color: WHITE },
 });
 
-/* 입력 보기·계산 중·불러오기 실패 화면 전용 (#204). 결과 보기 스타일(styles)은 건드리지 않아요. */
+/* 입력 보기·계산 중·불러오기 실패 화면 전용 (#204). 결과 보기 위쪽·세그먼트·안내 상자에서도 같이 써요(#206). */
 const lv = StyleSheet.create({
     container: { flex: 1, backgroundColor: LV_BG },
     header: { flexDirection: 'row', alignItems: 'center', minHeight: 44, paddingHorizontal: 12, backgroundColor: LV_BG },

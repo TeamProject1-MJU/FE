@@ -4704,7 +4704,7 @@ test('추천 화면(서버): 빈 기록은 입력 보기, 계산 버튼 연타�
 });
 
 test('추천 빈 결과는 서버 안내를 한 번 표시하고, 안내가 없을 때만 조건 완화를 안내해요', async () => {
-    const fallback = '시간·환승·요금 조건을 조금 완화해서 다시 추천받아 보세요.';
+    const fallback = '시간, 환승, 요금 조건을 조금 완화해서 다시 추천받아 보세요.';
     for (const message of [
         '첫차 시각이 가까워 약속 시각까지 도착할 수 있는 역이 없습니다. 약속 시간을 늦춰 주세요.',
         '조건에 맞는 중간역이 없습니다. 조건을 완화해 보세요.',
@@ -5345,7 +5345,7 @@ test('추천 화면에서 올린 후보가 방 상세 후보 패널의 서버 �
     const reco = recoScreen();
     reco.context.fetch = async (url, options) => { reco.calls.push({ url, options }); return respond(url, options); };
     let view = await pumpScreen(reco);
-    findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '이 역으로 약속방에 공유')).props.onPress();
+    findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '후보로 제안')).props.onPress();
     view = await pumpScreen(reco);
     const post = reco.calls.find(call => call.options.method === 'POST' && call.url.includes('/station-proposals'));
     assert.deepEqual(JSON.parse(post.options.body), { stationId: 77001, resultId: 'result-TIME' });
@@ -8671,7 +8671,7 @@ test('153 화면 TIMETABLE: 내 출발→도착·여유·탑승 열차(번호는
     const { r, box, detail } = await reco153Screen(reco153Run(reco153Timetable()));
     assert.deepEqual(box, ['내 이동', '18:33 출발 → 18:52 도착', '약속 8분 전 도착', '강남역 18:38 · 2호선 성수행(내선)', '열차 시각표 기준이에요']);
     assert.ok(!box.some(text => text.includes('2314')));
-    for (const text of ['18:33 출발 → 18:52 도착 · 약속 8분 전 도착', '탑승 강남역 18:38 · 2호선 성수행(내선) · 열차 2314', '강남역 18:38 → 교대역 18:42 (2개 역)',
+    for (const text of ['18:33 출발 → 18:52 도착, 약속 8분 전 도착', '탑승 강남역 18:38 · 2호선 성수행(내선) · 열차 2314', '강남역 18:38 → 교대역 18:42 (2개 역)',
         '2호선 성수행(내선) · 열차 2314', '환승 도보 3분 · 열차 대기 2분', '교대역 18:47 → 고속터미널역 18:52 (1개 역)', '3호선 대화행(하행) · 열차 S3101']) {
         assert.ok(detail.includes(text), text);
     }
