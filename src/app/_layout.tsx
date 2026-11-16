@@ -1,5 +1,6 @@
 import AuthGate from '@/components/auth-gate';
 import SplashOverlay from '@/components/splash/splash-overlay';
+import { tabScreenOptions } from '@/utils/tab-navigation';
 import { WEB_APP_WIDTH as DESIGN_WIDTH, WEB_APP_HEIGHT as DESIGN_HEIGHT, webAppScale } from '@/constants/web-app-frame';
 import type { ReactNode } from 'react';
 import { Stack } from 'expo-router';
@@ -16,11 +17,17 @@ export default function RootLayout() {
     const { width, height } = useWindowDimensions();
 
     const isWeb = Platform.OS === 'web';
+    const stack = <Stack screenOptions={{ headerShown: false }} screenLayout={screenLayout}>
+        <Stack.Screen name="home" options={tabScreenOptions} />
+        <Stack.Screen name="route-search" options={tabScreenOptions} />
+        <Stack.Screen name="rooms/index" options={tabScreenOptions} />
+        <Stack.Screen name="my" options={tabScreenOptions} />
+    </Stack>;
 
     if (!isWeb) {
         return (
             <View style={styles.nativePage}>
-                <Stack screenOptions={{ headerShown: false }} screenLayout={screenLayout} />
+                {stack}
                 <SplashOverlay />
             </View>
         );
@@ -48,7 +55,7 @@ export default function RootLayout() {
                         },
                     ]}
                 >
-                    <Stack screenOptions={{ headerShown: false }} screenLayout={screenLayout} />
+                    {stack}
                     <SplashOverlay />
                 </View>
             </View>

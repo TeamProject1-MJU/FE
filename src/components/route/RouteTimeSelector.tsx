@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text } from '@/components/app-text';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { DateTimeWheel } from '@/components/time-wheel/date-time-wheel';
@@ -36,6 +37,13 @@ type Props = {
 };
 
 export default function RouteTimeSelector({ value, open, onOpen, onClose, onChange }: Props) {
+    const { height } = useWindowDimensions();
+    const insets = useSafeAreaInsets();
+    const compact = height < 700;
+    const availableHeight = height - insets.top - 12;
+    const bottomPadding = Math.max(insets.bottom, compact ? 12 : 34);
+    // Reserve space for wrapped help/error text and the fixed actions before sizing the wheel viewport.
+    const wheelHeight = Math.max(44, Math.min(220, availableHeight - bottomPadding - 400));
     const [mode, setMode] = useState<RouteTimeSelection['mode']>(value.mode);
     const [date, setDate] = useState('');
     const [time, setTime] = useState('');
@@ -73,8 +81,8 @@ export default function RouteTimeSelector({ value, open, onOpen, onClose, onChan
             <Modal visible={open} transparent animationType="fade" onRequestClose={onClose}>
                 <View style={styles.overlay}>
                     <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="시각 선택 닫기" />
-                    <ScrollView style={styles.sheet} contentContainerStyle={styles.sheetContent} keyboardShouldPersistTaps="handled">
-                        <View style={styles.header}>
+                    <View style={[styles.sheet, styles.sheetContent, { maxHeight: availableHeight, paddingBottom: bottomPadding }]}>
+                        <View style={[styles.header, compact && styles.compactHeader]}>
                             <View style={styles.headerSide} />
                             <Text style={styles.title}>{mode === 'arrival' ? '도착 시각 설정' : '출발 시각 설정'}</Text>
                             <Pressable style={styles.close} onPress={onClose} accessibilityRole="button" accessibilityLabel="닫기" hitSlop={4}>
@@ -84,7 +92,7 @@ export default function RouteTimeSelector({ value, open, onOpen, onClose, onChan
                         {TOGGLES.map(item => {
                             const on = mode === item.mode;
                             return (
-                                <Pressable key={item.mode} style={[styles.toggleRow, item.mode === 'arrival' && styles.toggleRowNext]}
+                                <Pressable key={item.mode} style={[styles.toggleRow, compact && styles.compactToggle, item.mode === 'arrival' && styles.toggleRowNext]}
                                     accessibilityRole="switch" accessibilityLabel={item.title} accessibilityState={{ checked: on }}
                                     onPress={() => { setMode(on ? 'now' : item.mode); setError(''); }}>
                                     <View style={styles.toggleText}>
@@ -99,7 +107,7 @@ export default function RouteTimeSelector({ value, open, onOpen, onClose, onChan
                         })}
                         {mode !== 'now' && (
                             <>
-                                <DateTimeWheel date={date} time={time} minDate={seoulDateTime()!.date} maxDate={mode === 'arrival' ? arrivalLastDate() : departureLastDate()}
+                                <DateTimeWheel date={date} time={time} viewportHeight={wheelHeight} minDate={seoulDateTime()!.date} maxDate={mode === 'arrival' ? arrivalLastDate() : departureLastDate()}
                                     onChange={(nextDate, nextTime) => { setDate(nextDate); setTime(nextTime); setError(''); }} />
                                 <Text style={styles.summary}>{dayLabel(date)} {timeLabel(time)} {mode === 'arrival' ? '도착' : '출발'}</Text>
                                 <Text style={[styles.caption, styles.note, styles.noteFirst]}>{mode === 'arrival' ? '도착' : '출발'} 날짜는 {mode === 'arrival' ? arrivalLastDate() : departureLastDate()}까지 선택할 수 있어요.</Text>
@@ -113,7 +121,7 @@ export default function RouteTimeSelector({ value, open, onOpen, onClose, onChan
                             </Pressable>
                             <Pressable style={[styles.button, styles.confirm]} onPress={apply} accessibilityRole="button"><Text style={styles.confirmText}>확인</Text></Pressable>
                         </View>
-                    </ScrollView>
+                    </View>
                 </View>
             </Modal>
         </>
@@ -128,9 +136,11 @@ const styles = StyleSheet.create({
     triggerValue: { marginTop: 1, color: LV_TEXT, fontSize: 15.5, fontWeight: '600' },
     // 출발 시각 설정 시트(#184 시안)
     overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: LV_BACKDROP },
-    sheet: { flexGrow: 0, maxHeight: '90%', width: '100%', backgroundColor: LV_CARD, borderTopLeftRadius: 26, borderTopRightRadius: 26 },
+    sheet: { width: '100%', backgroundColor: LV_CARD, borderTopLeftRadius: 26, borderTopRightRadius: 26 },
     sheetContent: { paddingTop: 8, paddingHorizontal: 20, paddingBottom: 34 },
     header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', height: 56 },
+    compactHeader: { height: 48 },
+    compactToggle: { paddingVertical: 10 },
     headerSide: { width: 36 },
     title: { color: LV_TEXT, fontSize: 17, fontWeight: '700' },
     close: { width: 36, height: 36, borderRadius: 18, backgroundColor: LV_CLOSE_BG, alignItems: 'center', justifyContent: 'center' },
@@ -149,7 +159,7 @@ const styles = StyleSheet.create({
     note: { textAlign: 'center' },
     noteFirst: { marginTop: 6 },
     error: { marginTop: 10, color: LV_ERROR, fontSize: 13, lineHeight: 20 },
-    actions: { flexDirection: 'row', gap: 8, marginTop: 16 },
+    actions: { flexDirection: 'row', flexShrink: 0, gap: 8, marginTop: 16 },
     button: { flex: 1, height: 52, alignItems: 'center', justifyContent: 'center', borderRadius: 14 },
     nowButton: { backgroundColor: LV_MAIN_SOFT },
     nowText: { color: LV_MAIN, fontSize: 15.5, fontWeight: '600' },

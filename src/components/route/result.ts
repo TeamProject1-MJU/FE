@@ -1,6 +1,7 @@
 import type { Route } from '@/types/route';
+import { routeDurationSec } from '@/components/route/format';
 
-const duration = (route: Route) => route.summary.totalWithWaitSec ?? route.summary.totalTimeSec;
+const duration = (route: Route) => routeDurationSec(route.summary);
 
 export function sortRoutes(routes: Route[]) {
     return [...routes].sort((a, b) => duration(a) - duration(b) || a.summary.transferCount - b.summary.transferCount);

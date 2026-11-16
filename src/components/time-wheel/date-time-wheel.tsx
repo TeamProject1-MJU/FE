@@ -28,9 +28,10 @@ type ColumnProps = {
     label: string;
     value: string;
     onSelect: (index: number) => void;
+    viewportHeight: number;
 };
 
-function WheelColumn({ items, index, flex, alignLeft, label, value, onSelect }: ColumnProps) {
+function WheelColumn({ items, index, flex, alignLeft, label, value, onSelect, viewportHeight }: ColumnProps) {
     const list = useRef<FlatList<string>>(null);
     // 이 칸이 지금 멈춰 있는 칸 번호예요. 고른 값이 다시 props 로 돌아와도 또 스크롤하지 않게 해요.
     const settled = useRef(index);
@@ -84,7 +85,7 @@ function WheelColumn({ items, index, flex, alignLeft, label, value, onSelect }: 
     };
 
     return (
-        <View style={[styles.column, { flex }]} accessible accessibilityRole="adjustable" accessibilityLabel={label}
+        <View style={[styles.column, { flex, height: viewportHeight }]} accessible accessibilityRole="adjustable" accessibilityLabel={label}
             accessibilityValue={{ text: value }} accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
             onAccessibilityAction={onAccessibilityAction}>
             <FlatList
@@ -95,7 +96,7 @@ function WheelColumn({ items, index, flex, alignLeft, label, value, onSelect }: 
                 // 위 빈 공간(PAD)은 빼고 셈해서 offset = 칸 번호 × 44 가 곧 그 칸이 가운데 오는 위치예요.
                 getItemLayout={(_data, i) => ({ length: ITEM, offset: ITEM * i, index: i })}
                 initialScrollIndex={index}
-                contentContainerStyle={styles.columnContent}
+                contentContainerStyle={{ paddingVertical: (viewportHeight - ITEM) / 2 }}
                 showsVerticalScrollIndicator={false}
                 nestedScrollEnabled
                 snapToInterval={ITEM}
@@ -123,9 +124,11 @@ type Props = {
     minDate: string;
     maxDate: string;
     onChange: (date: string, time: string) => void;
+    /** Short sheets keep the same row size and snapping, with fewer visible rows. */
+    viewportHeight?: number;
 };
 
-export function DateTimeWheel({ date, time, minDate, maxDate, onChange }: Props) {
+export function DateTimeWheel({ date, time, minDate, maxDate, onChange, viewportHeight = ITEM * VISIBLE }: Props) {
     const range = useMemo(() => dateRange(minDate, maxDate), [minDate, maxDate]);
     // 범위 밖 날짜(예: 예전에 고른 과거 출발일)는 목록 앞이나 뒤에 붙여 값이 바뀌지 않게 해요.
     // 다른 날로 옮겨도 목록 길이가 바뀌지 않도록 한 번 붙인 날짜는 계속 둬요.
@@ -142,16 +145,16 @@ export function DateTimeWheel({ date, time, minDate, maxDate, onChange }: Props)
     const setTime = (pm: boolean, hour: number, minute: number) => onChange(date, fromTwelveHour(pm, hour, minute));
 
     return (
-        <View style={styles.box}>
-            <View style={styles.band} pointerEvents="none" />
-            <WheelColumn items={dateLabels} index={dateIndex} flex={1.7} alignLeft label="날짜" value={dateLabels[dateIndex] ?? ''}
+        <View style={[styles.box, { height: viewportHeight }]}>
+            <View style={[styles.band, { top: (viewportHeight - ITEM) / 2 }]} pointerEvents="none" />
+            <WheelColumn viewportHeight={viewportHeight} items={dateLabels} index={dateIndex} flex={1.7} alignLeft label="날짜" value={dateLabels[dateIndex] ?? ''}
                 onSelect={i => { if (dates[i]) onChange(dates[i], time); }} />
-            <WheelColumn items={MERIDIEMS} index={parts.pm ? 1 : 0} flex={0.9} label="오전 오후" value={parts.pm ? '오후' : '오전'}
+            <WheelColumn viewportHeight={viewportHeight} items={MERIDIEMS} index={parts.pm ? 1 : 0} flex={0.9} label="오전 오후" value={parts.pm ? '오후' : '오전'}
                 onSelect={i => setTime(i === 1, parts.hour, parts.minute)} />
-            <WheelColumn items={HOURS} index={parts.hour - 1} flex={0.6} label="시" value={`${parts.hour}시`}
+            <WheelColumn viewportHeight={viewportHeight} items={HOURS} index={parts.hour - 1} flex={0.6} label="시" value={`${parts.hour}시`}
                 onSelect={i => setTime(parts.pm, i + 1, parts.minute)} />
-            <View style={styles.colon} pointerEvents="none"><Text style={styles.colonText}>:</Text></View>
-            <WheelColumn items={MINUTES} index={parts.minute} flex={0.6} label="분" value={`${parts.minute}분`}
+            <View style={[styles.colon, { height: viewportHeight }]} pointerEvents="none"><Text style={styles.colonText}>:</Text></View>
+            <WheelColumn viewportHeight={viewportHeight} items={MINUTES} index={parts.minute} flex={0.6} label="분" value={`${parts.minute}분`}
                 onSelect={i => setTime(parts.pm, parts.hour, i)} />
         </View>
     );

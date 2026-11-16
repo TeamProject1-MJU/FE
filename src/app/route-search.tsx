@@ -338,13 +338,6 @@ export default function RouteSearchScreen() {
                     <Text style={styles.resultCount}>경로 {sortedRoutes.length}개</Text>
                 )}
 
-                {/* INTERNAL은 계산 출처이며 조회 실패 여부를 뜻하지 않아요. */}
-                {search.status === 'success' && search.data.routeSource === 'INTERNAL' && (
-                    <View style={styles.notice}>
-                        <Ionicons name="information-circle-outline" size={17} color={LV_MAIN} />
-                        <Text style={styles.noticeText}>자체 계산한 경로예요.</Text>
-                    </View>
-                )}
 
                 {search.status === 'idle' && (
                     <View style={styles.empty}>

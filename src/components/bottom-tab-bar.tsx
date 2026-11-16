@@ -9,10 +9,10 @@ export const TAB_BAR_CONTENT_HEIGHT = 54;
 
 type TabKey = 'home' | 'route' | 'rooms' | 'my';
 const TABS: { key: TabKey; label: string; go: () => void }[] = [
-    { key: 'home', label: '홈', go: () => router.navigate('/home') },
-    { key: 'route', label: '경로', go: () => router.push('/route-search') },
-    { key: 'rooms', label: '약속방', go: () => router.navigate('/rooms') },
-    { key: 'my', label: '마이', go: () => router.navigate('/my') },
+    { key: 'home', label: '홈', go: () => router.replace({ pathname: '/home', params: { tabSwitch: '1' } }) },
+    { key: 'route', label: '경로', go: () => router.replace({ pathname: '/route-search', params: { tabSwitch: '1' } }) },
+    { key: 'rooms', label: '약속방', go: () => router.replace({ pathname: '/rooms', params: { tabSwitch: '1' } }) },
+    { key: 'my', label: '마이', go: () => router.replace({ pathname: '/my', params: { tabSwitch: '1' } }) },
 ];
 
 const ICON_PATHS: Record<TabKey, string> = {

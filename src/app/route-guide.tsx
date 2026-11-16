@@ -132,12 +132,6 @@ export default function RouteGuideScreen() {
                             <Text style={styles.noticeText}>{selected.notice}</Text>
                         </View>
                     )}
-                    {selected.routeSource === 'INTERNAL' && (
-                        <View style={[styles.notice, styles.inlineNotice]}>
-                            <Ionicons name="information-circle-outline" size={18} color={LV_MAIN} />
-                            <Text style={[styles.noticeText, styles.inlineNoticeText]}>자체 계산한 경로예요.</Text>
-                        </View>
-                    )}
                     <View style={styles.card}>
                         <Text style={styles.title}>지하철 이동이 필요 없어요</Text>
                         <Text style={styles.meta}>선택한 출발역과 도착역이 같아요.</Text>
@@ -204,12 +198,6 @@ export default function RouteGuideScreen() {
                             </View>
                         )}
 
-                        {selected.routeSource === 'INTERNAL' && (
-                            <View style={[styles.notice, styles.inlineNotice]}>
-                                <Ionicons name="information-circle-outline" size={18} color={LV_MAIN} />
-                                <Text style={[styles.noticeText, styles.inlineNoticeText]}>자체 계산한 경로예요.</Text>
-                            </View>
-                        )}
                     </View>
 
                     {/* 지도 미리보기 */}

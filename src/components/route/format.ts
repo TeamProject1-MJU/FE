@@ -8,9 +8,22 @@ export function formatClock(iso: string) {
     return `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`;
 }
 
+/** Total duration only. Segment, walking and waiting labels remain in minutes. */
+export function formatDurationMinutes(value: number) {
+    const minutes = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+    if (minutes < 60) return `${minutes}분`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}시간${minutes % 60 ? ` ${minutes % 60}분` : ''}`;
+}
+
+/** BE totalTimeSec = arrivalAt - departureAt, including transfers but excluding the initial wait. */
+export function routeDurationSec(summary: RouteSummary) {
+    return summary.noService ? summary.totalTimeSec : summary.totalWithWaitSec ?? summary.totalTimeSec;
+}
+
 export function formatTotalTime(summary: RouteSummary) {
-    const minutes = Math.floor((summary.totalWithWaitSec ?? summary.totalTimeSec) / 60);
-    return `${summary.totalWithWaitSec != null ? '대기 포함 ' : ''}${summary.totalWithWaitSec != null && summary.waitKind === 'ESTIMATED' ? '약 ' : ''}${minutes}분`;
+    const includesWait = summary.totalWithWaitSec != null;
+    return `${includesWait ? '대기 포함 ' : ''}${includesWait && summary.waitKind === 'ESTIMATED' ? '약 ' : ''}${formatDurationMinutes(routeDurationSec(summary) / 60)}`;
 }
 
 /** 승차·환승 대기 줄. waitSec 이 없거나(null) 0 이하이거나 waitKind 가 없으면 줄을 그리지 않아요(빈 문자열). */
