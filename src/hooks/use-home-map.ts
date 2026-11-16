@@ -6,6 +6,9 @@ import { getSessionGeneration } from '@/services/auth';
 import { fetchStationsInBounds } from '@/services/station';
 import { resolveLocation, type MapBounds, type LocationResult } from '@/utils/home-map';
 import type { MapMarker } from '@/components/KakaoMap';
+import type { Station } from '@/types/station';
+
+const EMPTY_STATIONS: Station[] = [];
 
 /** 웹 권한 팝업도 응답 없이 남을 수 있어요. 네이티브 권한 대기는 기존대로 둡니다. */
 async function waitForPermission<T>(pending: Promise<T>): Promise<T> {
@@ -34,7 +37,8 @@ async function readLocation(): Promise<LocationResult> {
 
 export function useHomeMap(enabled: boolean, account: string | null) {
     const [location, setLocation] = useState(() => ({ ...resolveLocation({ kind: 'denied' }), account }));
-    const [stations, setStations] = useState<{ markers: MapMarker[]; truncated: boolean; account: string | null }>({ markers: [], truncated: false, account });
+    const [stations, setStations] = useState<{ markers: MapMarker[]; items: Station[]; truncated: boolean; account: string | null }>({ markers: [], items: [], truncated: false, account });
+    const [locationLoading, setLocationLoading] = useState(false);
     const [centerRevision, setCenterRevision] = useState(0);
     const focused = useRef(false);
     const locationId = useRef(0);
@@ -48,6 +52,7 @@ export function useHomeMap(enabled: boolean, account: string | null) {
         const id = ++locationId.current;
         const generation = getSessionGeneration();
         const valid = () => focused.current && id === locationId.current && generation === getSessionGeneration() && activeAccount.current === account;
+        setLocationLoading(true);
         try {
             let permission = await waitForPermission(Location.getForegroundPermissionsAsync());
             if (!valid()) return;
@@ -64,7 +69,7 @@ export function useHomeMap(enabled: boolean, account: string | null) {
         } catch {
             if (valid()) setLocation({ ...resolveLocation({ kind: 'failed' }), account });
             if (valid() && Platform.OS === 'web') setCenterRevision(v => v + 1);
-        }
+        } finally { if (valid()) setLocationLoading(false); }
     }, [enabled, account]);
 
     const onRegionChange = useCallback((bounds: MapBounds) => {
@@ -77,7 +82,7 @@ export function useHomeMap(enabled: boolean, account: string | null) {
             try {
                 const result = await fetchStationsInBounds(bounds);
                 if (!focused.current || id !== stationId.current || generation !== getSessionGeneration() || activeAccount.current !== account) return;
-                setStations({ markers: result.items, truncated: result.totalElements > result.items.length, account });
+                setStations({ markers: result.items, items: result.items, truncated: result.totalElements > result.items.length, account });
             } catch { /* 이전 마커 유지. 인증 오류는 API 클라이언트에서 처리해요. */ }
         }, 400);
     }, [enabled, account]);
@@ -94,12 +99,15 @@ export function useHomeMap(enabled: boolean, account: string | null) {
             clearTimeout(debounce.current);
             // 위치는 이 화면의 메모리에만 두고 화면을 떠나면 제거해요.
             setLocation({ ...resolveLocation({ kind: 'denied' }), account: null });
+            setLocationLoading(false);
         };
     }, [locate, onRegionChange, account]));
 
     return {
         ...(location.account === account ? location : resolveLocation({ kind: 'denied' })),
         markers: stations.account === account ? stations.markers : [],
+        stations: stations.account === account ? stations.items : EMPTY_STATIONS,
+        locationLoading,
         truncated: stations.account === account && stations.truncated,
         centerRevision, onRegionChange,
         locate: () => { void locate(true); },
