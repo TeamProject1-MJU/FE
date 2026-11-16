@@ -151,6 +151,7 @@ export default function RoomRecommendationsScreen() {
 
     const [view, setView] = useState<'input' | 'result'>('result');
     const [criterion, setCriterion] = useState<RecommendationCriterion>('TIME');
+    const [stationNameWidth, setStationNameWidth] = useState(0);
     const [conditionText, setConditionText] = useState('');
     const [chips, setChips] = useState<Set<string>>(new Set());
     const [running, setRunning] = useState(false);
@@ -318,6 +319,10 @@ export default function RoomRecommendationsScreen() {
             : null;
     const isLatest = run ? run.isStale !== null : true;
     const result = run?.results.find(item => item.criterion === criterion) ?? run?.results[0] ?? null;
+    const stationName = formatStationName(result?.recommendedStation.name);
+    const stationNameFontSize = stationNameWidth > 0
+        ? Math.max(20, Math.min(34, Math.floor(stationNameWidth / (stationName.length * 0.98))))
+        : 34;
     const appointmentAt = detail?.appointmentAt ? new Date(detail.appointmentAt) : null;
     const me = members.find(member => member.userId === myUserId);
     const history = useMemo(() => listRecommendationRuns(roomId), [roomId, run]);
@@ -806,9 +811,9 @@ export default function RoomRecommendationsScreen() {
 
                         {/* 추천 역: 작은 보라 라벨(기준) + 큰 역 이름 + 노선 색 3D 열차 */}
                         <View style={styles.stationRow}>
-                            <View style={styles.flex}>
+                            <View style={styles.flex} onLayout={({ nativeEvent }) => setStationNameWidth(nativeEvent.layout.width)}>
                                 <Text style={styles.stationBadge}>{CRITERIA.find(c => c.key === result.criterion)?.label} 최적 중간역</Text>
-                                <Text style={styles.stationName} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{formatStationName(result.recommendedStation.name)}</Text>
+                                <Text style={[styles.stationName, { fontSize: stationNameFontSize }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{stationName}</Text>
                             </View>
                             {!!result.recommendedStation.lines?.length && (
                                 <View style={styles.trainRow} accessible accessibilityLabel={result.recommendedStation.lines.map(line => line.lineName).join(', ')}>
