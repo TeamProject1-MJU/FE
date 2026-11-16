@@ -43,3 +43,26 @@ export function dateRange(minDate: string, maxDate: string) {
     for (let at = start; at <= end; at += DAY_MS) dates.push(new Date(at).toISOString().slice(0, 10));
     return dates;
 }
+
+const DAY_MINUTES = 1440;
+
+/**
+ * 휠의 날짜 목록(dates)을 "날짜 번호 × 1440 + 그날의 분" 으로 이어 붙여 보고 deltaMinutes 만큼 옮겨요.
+ * 분·시를 넘기면 시, 오전/오후, 날짜가 이어서 바뀌고, 첫 날 00:00 보다 앞이나 마지막 날 23:59 보다 뒤로는 못 가요.
+ * date 가 목록에 없거나 time 을 읽을 수 없으면 받은 값을 그대로 돌려줘요.
+ */
+export function shiftWheelValue(dates: string[], date: string, time: string, deltaMinutes: number) {
+    const day = dates.indexOf(date);
+    const match = /^(\d{2}):(\d{2})$/.exec(time);
+    if (day < 0 || !match || !Number.isFinite(deltaMinutes)) return { date, time };
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (hour > 23 || minute > 59) return { date, time };
+    const at = day * DAY_MINUTES + hour * 60 + minute + Math.trunc(deltaMinutes);
+    const total = Math.min(dates.length * DAY_MINUTES - 1, Math.max(0, at));
+    const minutes = total % DAY_MINUTES;
+    return {
+        date: dates[Math.floor(total / DAY_MINUTES)],
+        time: `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`,
+    };
+}
