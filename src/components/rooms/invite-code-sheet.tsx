@@ -14,9 +14,9 @@ import { ApiError, isAuthError } from '@/services/api/errors';
 import { fetchInviteCode } from '@/services/room';
 import { RoomError, type RoomErrorCode } from '@/types/room';
 
-const NAVY = '#0f1c3f';
+const NAVY = '#5C3F78';
 const MINT = '#2bcf9a';
-const MINT_DEEP = '#12a77a';
+const MINT_DEEP = '#5C3F78';
 const WHITE = '#ffffff';
 const BG = '#f3f5f8';
 const SECONDARY = '#6b7488';

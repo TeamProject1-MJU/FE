@@ -10,14 +10,14 @@ import { createProposal, deleteProposal, voteProposal } from '@/services/room';
 import { UNKNOWN_PROPOSER_NAME } from '@/services/room-proposals';
 import { RoomError, type RoomStation, type StationProposal, type StationProposalList } from '@/types/room';
 
-const NAVY = '#0f1c3f';
-const MINT = '#2bcf9a';
-const MINT_DEEP = '#12a77a';
-const MINT_SOFT = '#e6f8f1';
+const NAVY = '#25212D';
+const MINT = '#5C3F78';
+const MINT_DEEP = '#5C3F78';
+const MINT_SOFT = '#EDE8F3';
 const WHITE = '#ffffff';
-const BG = '#f3f5f8';
-const SECONDARY = '#6b7488';
-const BORDER = '#e6e9ef';
+const BG = '#F7F5FA';
+const SECONDARY = '#83808B';
+const BORDER = '#EEEAF2';
 const RED = '#d6455d';
 const ORANGE = '#c77a00';
 
@@ -176,7 +176,7 @@ export default function ProposalPanel({
         return (
             <View style={styles.panel}>
                 <View style={styles.stateBox}>
-                    <ActivityIndicator color={NAVY} />
+                    <ActivityIndicator color={MINT_DEEP} />
                     <Text style={styles.stateText}>약속역 후보를 불러오고 있어요</Text>
                 </View>
             </View>
@@ -227,7 +227,7 @@ export default function ProposalPanel({
                         const ratio = memberCount > 0 ? Math.min(1, item.voteCount / memberCount) : 0;
                         const votable = !myVote;
                         return (
-                            <View key={item.id} style={[styles.item, item.isSelected && styles.itemSelected]}>
+                            <View key={item.id} style={[styles.item, item.votedByMe && styles.itemSelected]}>
                                 <Pressable
                                     style={({ pressed }) => [styles.itemMain, pressed && votable && styles.pressed]}
                                     onPress={() => votable && setDialog({ kind: 'vote', proposal: item })}
@@ -317,7 +317,7 @@ export default function ProposalPanel({
                     accessibilityRole="button"
                     accessibilityState={{ disabled: full || !!proposing }}
                 >
-                    {proposing ? <ActivityIndicator size="small" color={NAVY} /> : <Ionicons name="search" size={16} color={NAVY} />}
+                    {proposing ? <ActivityIndicator size="small" color={MINT_DEEP} /> : <Ionicons name="search" size={16} color={MINT_DEEP} />}
                     <Text style={styles.proposeText}>{proposing ? `${formatStationName(proposing.name)} 제안 중` : '역 검색해서 제안'}</Text>
                 </Pressable>
                 <Pressable style={({ pressed }) => [styles.recommendButton, pressed && styles.pressed]} onPress={onOpenRecommendations} accessibilityRole="button">
@@ -397,32 +397,32 @@ function dialogBody(dialog: NonNullable<Dialog>) {
 }
 
 const styles = StyleSheet.create({
-    panel: { marginTop: 12, padding: 16, borderRadius: 20, backgroundColor: WHITE, borderWidth: 1, borderColor: BORDER, gap: 12 },
+    panel: { marginTop: 12, padding: 16, borderRadius: 22, backgroundColor: WHITE, borderWidth: 1, borderColor: BORDER, gap: 12 },
     rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
     title: { fontSize: 16, fontWeight: '800', color: NAVY, letterSpacing: -0.3 },
     counter: { fontSize: 13, fontWeight: '800', color: SECONDARY },
-    counterFull: { color: ORANGE },
+    counterFull: { color: SECONDARY },
     pressed: { opacity: 0.8 },
     disabled: { opacity: 0.45 },
 
     stateBox: { alignItems: 'center', paddingVertical: 28, gap: 8 },
     stateTitle: { fontSize: 15, fontWeight: '800', color: NAVY, textAlign: 'center' },
     stateText: { fontSize: 12.5, lineHeight: 18, fontWeight: '500', color: SECONDARY, textAlign: 'center' },
-    retryButton: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 6, height: 42, paddingHorizontal: 18, borderRadius: 12, backgroundColor: NAVY },
+    retryButton: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 6, height: 42, paddingHorizontal: 18, borderRadius: 12, backgroundColor: MINT_DEEP },
     retryText: { fontSize: 14, fontWeight: '800', color: WHITE },
 
     emptyBox: { alignItems: 'center', paddingVertical: 20, gap: 6, borderRadius: 16, backgroundColor: BG },
     emptyIcon: { width: 52, height: 52, borderRadius: 18, backgroundColor: WHITE, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
 
-    voteBox: { padding: 14, borderRadius: 16, borderWidth: 1, borderColor: '#cdeee1', backgroundColor: '#f4fcf8', gap: 10 },
+    voteBox: { padding: 14, borderRadius: 18, borderWidth: 1, borderColor: '#EDE8F3', backgroundColor: '#F8F5FB', gap: 10 },
     voteTitle: { fontSize: 15, fontWeight: '800', color: NAVY },
     voteCount: { fontSize: 13, fontWeight: '800', color: MINT_DEEP },
-    item: { padding: 12, borderRadius: 14, backgroundColor: WHITE, borderWidth: 1, borderColor: BORDER, gap: 8 },
+    item: { padding: 12, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1, borderColor: BORDER, gap: 8 },
     itemSelected: { borderColor: MINT, borderWidth: 1.5 },
     itemMain: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    mark: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#c0c6d1', alignItems: 'center', justifyContent: 'center' },
+    mark: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#D9D3E0', backgroundColor: WHITE, alignItems: 'center', justifyContent: 'center' },
     markOn: { backgroundColor: MINT_DEEP, borderColor: MINT_DEEP },
-    markOff: { borderColor: '#e1e5ec', backgroundColor: '#f6f7f9' },
+    markOff: { borderColor: '#D9D3E0', backgroundColor: WHITE },
     itemBody: { flex: 1, gap: 7 },
     nameRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
     name: { fontSize: 15, fontWeight: '800', color: NAVY, flexShrink: 1 },
@@ -430,29 +430,29 @@ const styles = StyleSheet.create({
     lineDotText: { fontSize: 10, fontWeight: '800', color: WHITE },
     selectedTag: { fontSize: 10.5, fontWeight: '800', color: MINT_DEEP, backgroundColor: MINT_SOFT, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, overflow: 'hidden' },
     barRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    bar: { flex: 1, height: 8, borderRadius: 4, backgroundColor: '#e8ebf0', overflow: 'hidden' },
-    barFill: { height: 8, borderRadius: 4, backgroundColor: '#b4bccb' },
+    bar: { flex: 1, height: 8, borderRadius: 4, backgroundColor: '#F1EEF4', overflow: 'hidden' },
+    barFill: { height: 8, borderRadius: 4, backgroundColor: MINT_DEEP },
     barLead: { backgroundColor: MINT_DEEP },
     votes: { width: 34, textAlign: 'right', fontSize: 14, fontWeight: '800', color: NAVY },
     meta: { marginLeft: 34, fontSize: 12, fontWeight: '600', color: SECONDARY },
     actions: { marginLeft: 34, flexDirection: 'row', justifyContent: 'flex-end', gap: 6 },
-    deleteButton: { height: 30, paddingHorizontal: 10, borderRadius: 9, borderWidth: 1, borderColor: BORDER, backgroundColor: WHITE, justifyContent: 'center' },
-    deleteText: { fontSize: 12, fontWeight: '700', color: SECONDARY },
-    confirmButton: { height: 30, paddingHorizontal: 10, borderRadius: 9, backgroundColor: NAVY, justifyContent: 'center' },
+    deleteButton: { height: 30, paddingHorizontal: 10, borderRadius: 15, borderWidth: 1, borderColor: '#D9CCE4', backgroundColor: WHITE, justifyContent: 'center' },
+    deleteText: { fontSize: 12, fontWeight: '700', color: MINT_DEEP },
+    confirmButton: { height: 30, paddingHorizontal: 10, borderRadius: 15, backgroundColor: MINT_DEEP, justifyContent: 'center' },
     confirmText: { fontSize: 12, fontWeight: '800', color: WHITE },
     voteHint: { fontSize: 12, lineHeight: 17, fontWeight: '600', color: SECONDARY },
     roleHint: { fontSize: 12.5, lineHeight: 18, fontWeight: '600', color: SECONDARY },
 
     proposeRow: { flexDirection: 'row', gap: 8 },
-    proposeButton: { flex: 1, height: 46, borderRadius: 14, borderWidth: 1.5, borderColor: NAVY, backgroundColor: WHITE, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-    proposeText: { fontSize: 14, fontWeight: '800', color: NAVY },
-    recommendButton: { flex: 1, height: 46, borderRadius: 14, backgroundColor: NAVY, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+    proposeButton: { flex: 1, height: 46, borderRadius: 23, borderWidth: 1.5, borderColor: '#D9CCE4', backgroundColor: WHITE, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+    proposeText: { fontSize: 14, fontWeight: '800', color: MINT_DEEP },
+    recommendButton: { flex: 1, height: 46, borderRadius: 23, backgroundColor: MINT_DEEP, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
     recommendText: { fontSize: 14, fontWeight: '800', color: WHITE },
     warnBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, padding: 11, borderRadius: 12, backgroundColor: '#fff4e0' },
-    warnText: { flex: 1, fontSize: 12.5, lineHeight: 18, fontWeight: '600', color: '#7a4e00' },
+    warnText: { flex: 1, fontSize: 12.5, lineHeight: 18, fontWeight: '600', color: SECONDARY },
     notice: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, padding: 11, borderRadius: 12, backgroundColor: MINT_SOFT },
     noticeError: { backgroundColor: '#fdecef' },
-    noticeText: { flex: 1, fontSize: 12.5, lineHeight: 18, fontWeight: '600', color: '#0b6b4e' },
+    noticeText: { flex: 1, fontSize: 12.5, lineHeight: 18, fontWeight: '600', color: MINT_DEEP },
     noticeTextError: { color: RED },
 
     backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,28,63,0.42)' },
@@ -465,7 +465,7 @@ const styles = StyleSheet.create({
     sheetActions: { flexDirection: 'row', gap: 10, marginTop: 6 },
     sheetCancel: { flex: 1, height: 52, borderRadius: 16, borderWidth: 1, borderColor: BORDER, alignItems: 'center', justifyContent: 'center' },
     sheetCancelText: { fontSize: 15, fontWeight: '700', color: NAVY },
-    sheetPrimary: { flex: 1.4, height: 52, borderRadius: 16, backgroundColor: NAVY, alignItems: 'center', justifyContent: 'center' },
+    sheetPrimary: { flex: 1.4, height: 52, borderRadius: 16, backgroundColor: MINT_DEEP, alignItems: 'center', justifyContent: 'center' },
     sheetDanger: { backgroundColor: RED },
     sheetPrimaryText: { fontSize: 15, fontWeight: '800', color: WHITE },
 });

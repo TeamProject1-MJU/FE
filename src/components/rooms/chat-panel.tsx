@@ -1,3 +1,4 @@
+import MemberAvatar, { memberTone } from '@/components/rooms/member-avatar';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { router } from 'expo-router';
 import {
@@ -8,6 +9,7 @@ import {
     ScrollView,
     StyleSheet,
     View,
+    useWindowDimensions,
 } from 'react-native';
 import { Text, TextInput } from '@/components/app-text';
 
@@ -17,9 +19,9 @@ import { useMock as isMockMode } from '@/services/api/config';
 import type { PendingChatMessage } from '@/types/chat';
 import type { RoomMember } from '@/types/room';
 
-const NAVY = '#0f1c3f';
-const MINT = '#2bcf9a';
-const SECONDARY = '#6b7488';
+const NAVY = '#25212D';
+const MINT = '#5C3F78';
+const SECONDARY = '#83808B';
 
 const clock = new Intl.DateTimeFormat('ko-KR', {
     timeZone: 'Asia/Seoul',
@@ -55,13 +57,17 @@ export default function RoomChatPanel({
                                           controller,
                                           myUserId,
                                           members,
+                                          ownerId,
                                           onInputFocus,
                                       }: {
     controller: ReturnType<typeof useRoomChat>;
     myUserId: string;
     members: RoomMember[];
+    ownerId?: string;
     onInputFocus?: () => void;
 }) {
+    const { height: windowHeight } = useWindowDimensions();
+    const listHeight = Math.max(360, windowHeight - 260);
     const list = useRef<ScrollView>(null);
     const input = useRef<TextInput>(null);
     const nearBottom = useRef(true);
@@ -198,6 +204,8 @@ export default function RoomChatPanel({
         );
     }
 
+    const messageSenders = new Map(controller.messages.map(message => [message.id, message.senderId]));
+
     return (
         <View style={styles.panel}>
             {controller.error && (
@@ -220,7 +228,7 @@ export default function RoomChatPanel({
 
             <ScrollView
                 ref={list}
-                style={styles.list}
+                style={[styles.list, { height: listHeight }]}
                 contentContainerStyle={styles.listContent}
                 nestedScrollEnabled
                 keyboardShouldPersistTaps="handled"
@@ -326,6 +334,8 @@ export default function RoomChatPanel({
                 )}
 
                 {rows.map((message, index) => {
+                    const senderId = messageSenders.get(message.id);
+                    const sender = members.find(member => member.userId === senderId);
                     const day = dateLabel(
                         message.createdAt,
                         true,
@@ -361,71 +371,76 @@ export default function RoomChatPanel({
                                         styles.mine,
                                     ]}
                                 >
-                                    <Text style={styles.meta}>
-                                        {message.name} ·{' '}
-                                        {dateLabel(message.createdAt)}
-                                    </Text>
+                                    {message.kind === 'other' && (
+                                        <MemberAvatar tone={sender ? memberTone(sender.userId, myUserId) : 'off'} size={26} isOwner={!!sender && sender.userId === ownerId} />
+                                    )}
+                                    {message.kind === 'ai' && <View style={styles.aiAvatar}><Text style={styles.aiAvatarText}>LR</Text></View>}
+                                    <View style={[styles.messageBody, message.kind === 'mine' && styles.mineBody]}>
+                                        <Text style={[styles.meta, message.kind === 'ai' && styles.aiName]}>
+                                            {message.kind === 'mine' ? dateLabel(message.createdAt) : `${message.name} · ${dateLabel(message.createdAt)}`}
+                                        </Text>
 
-                                    <View
-                                        style={[
-                                            styles.bubble,
-                                            message.kind === 'mine' &&
-                                            styles.mineBubble,
-                                            message.kind === 'ai' &&
-                                            styles.aiBubble,
-                                        ]}
-                                    >
-                                        <Text
-                                            selectable
+                                        <View
                                             style={[
-                                                styles.messageText,
-                                                message.kind ===
-                                                'mine' &&
-                                                styles.mineText,
+                                                styles.bubble,
+                                                message.kind === 'mine' &&
+                                                styles.mineBubble,
+                                                message.kind === 'ai' &&
+                                                styles.aiBubble,
                                             ]}
                                         >
-                                            {message.content}
-                                        </Text>
-                                    </View>
-
-                                    {message.pending?.status ===
-                                        'sending' && (
-                                            <Text style={styles.meta}>
-                                                보내는 중이에요…
-                                            </Text>
-                                        )}
-
-                                    {message.pending?.status ===
-                                        'failed' && (
-                                            <View
-                                                style={styles.failure}
-                                                accessibilityLiveRegion="polite"
+                                            <Text
+                                                selectable
+                                                style={[
+                                                    styles.messageText,
+                                                    message.kind ===
+                                                    'mine' &&
+                                                    styles.mineText,
+                                                ]}
                                             >
-                                                <Text
-                                                    style={
-                                                        styles.errorText
-                                                    }
-                                                >
-                                                    {
-                                                        message.pending
-                                                            .errorMessage
-                                                    }
+                                                {message.content}
+                                            </Text>
+                                        </View>
+
+                                        {message.pending?.status ===
+                                            'sending' && (
+                                                <Text style={styles.meta}>
+                                                    보내는 중이에요…
                                                 </Text>
-                                                <Action
-                                                    // 저장 여부를 확인하지 못했으면 한 번 더 누를 때 확인 없이 보내요(#139).
-                                                    label={message.pending.unconfirmed ? '그래도 다시 보내기' : '다시 시도'}
-                                                    onPress={() => {
-                                                        if (
-                                                            message.pending
-                                                        ) {
-                                                            controller.retrySend(
-                                                                message.pending,
-                                                            );
+                                            )}
+
+                                        {message.pending?.status ===
+                                            'failed' && (
+                                                <View
+                                                    style={styles.failure}
+                                                    accessibilityLiveRegion="polite"
+                                                >
+                                                    <Text
+                                                        style={
+                                                            styles.errorText
                                                         }
-                                                    }}
-                                                />
-                                            </View>
-                                        )}
+                                                    >
+                                                        {
+                                                            message.pending
+                                                                .errorMessage
+                                                        }
+                                                    </Text>
+                                                    <Action
+                                                        // 저장 여부를 확인하지 못했으면 한 번 더 누를 때 확인 없이 보내요(#139).
+                                                        label={message.pending.unconfirmed ? '그래도 다시 보내기' : '다시 시도'}
+                                                        onPress={() => {
+                                                            if (
+                                                                message.pending
+                                                            ) {
+                                                                controller.retrySend(
+                                                                    message.pending,
+                                                                );
+                                                            }
+                                                        }}
+                                                    />
+                                                </View>
+                                            )}
+                                    </View>
                                 </View>
                             )}
                         </View>
@@ -447,7 +462,7 @@ export default function RoomChatPanel({
                 >
                     <ActivityIndicator
                         size="small"
-                        color="#15664e"
+                        color={MINT}
                     />
                     <Text style={styles.aiText}>
                         {isMockMode() ? '@링크로가 답변을 작성하고 있어요…' : '링크로가 답변 중...'}
@@ -559,21 +574,26 @@ function Action({
 }
 
 const styles = StyleSheet.create({
+    messageBody: { flexShrink: 1, minWidth: 0, alignItems: 'flex-start', gap: 5 },
+    mineBody: { alignItems: 'flex-end' },
+    aiAvatar: { width: 26, height: 26, borderRadius: 8, backgroundColor: MINT, alignItems: 'center', justifyContent: 'center' },
+    aiAvatarText: { color: '#fff', fontSize: 10, fontWeight: '800' },
+    aiName: { color: MINT },
     panel: {
-        padding: 14,
-        gap: 12,
+        padding: 10,
+        gap: 10,
         borderRadius: 18,
         borderWidth: 1,
-        borderColor: '#e6e9ef',
+        borderColor: '#EEEAF2',
         backgroundColor: '#fff',
     },
     list: {
-        height: 360,
+        flexShrink: 0,
     },
     listContent: {
         flexGrow: 1,
         gap: 12,
-        paddingBottom: 8,
+        paddingBottom: 16,
     },
     history: {
         alignItems: 'center',
@@ -597,12 +617,21 @@ const styles = StyleSheet.create({
         lineHeight: 20,
     },
     day: {
+        alignSelf: 'center',
+        backgroundColor: '#F1EEF4',
+        borderRadius: 12,
+        overflow: 'hidden',
+        paddingHorizontal: 10,
+        paddingVertical: 4,
         color: SECONDARY,
         textAlign: 'center',
         fontSize: 12,
         marginVertical: 8,
     },
     system: {
+        alignSelf: 'center',
+        backgroundColor: '#F1EEF4',
+        borderRadius: 14,
         alignItems: 'center',
         gap: 4,
         paddingVertical: 6,
@@ -617,7 +646,9 @@ const styles = StyleSheet.create({
     message: {
         alignItems: 'flex-start',
         alignSelf: 'flex-start',
-        maxWidth: '90%',
+        maxWidth: '84%',
+        flexDirection: 'row',
+        columnGap: 7,
         gap: 5,
     },
     mine: {
@@ -626,22 +657,27 @@ const styles = StyleSheet.create({
     },
     meta: {
         color: SECONDARY,
-        fontSize: 11,
+        fontSize: 11.5,
         lineHeight: 17,
     },
     bubble: {
         padding: 12,
-        backgroundColor: '#f3f5f8',
-        borderRadius: 14,
+        backgroundColor: '#fff',
+        borderWidth: 1,
+        borderColor: '#EEEAF2',
+        borderRadius: 16,
+        borderTopLeftRadius: 4,
         flexShrink: 1,
     },
     mineBubble: {
-        backgroundColor: NAVY,
+        backgroundColor: MINT,
+        borderColor: MINT,
+        borderTopLeftRadius: 16,
+        borderBottomRightRadius: 4,
     },
     aiBubble: {
-        backgroundColor: '#eafaf4',
-        borderLeftWidth: 3,
-        borderLeftColor: MINT,
+        backgroundColor: '#EDE8F3',
+        borderColor: '#EDE8F3',
     },
     messageText: {
         color: NAVY,
@@ -668,7 +704,7 @@ const styles = StyleSheet.create({
         gap: 8,
     },
     aiStatus: {
-        backgroundColor: '#eafaf4',
+        backgroundColor: '#EDE8F3',
         borderRadius: 10,
         padding: 10,
         gap: 8,
@@ -676,14 +712,14 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     aiText: {
-        color: '#15664e',
+        color: MINT,
         fontSize: 12,
         lineHeight: 20,
         flex: 1,
     },
     composer: {
         borderTopWidth: 1,
-        borderTopColor: '#e6e9ef',
+        borderTopColor: '#EEEAF2',
         paddingTop: 12,
         gap: 8,
     },
@@ -698,9 +734,9 @@ const styles = StyleSheet.create({
         maxHeight: 120,
         padding: 10,
         borderWidth: 1,
-        borderColor: '#e6e9ef',
+        borderColor: '#EEEAF2',
         borderRadius: 12,
-        backgroundColor: '#f3f5f8',
+        backgroundColor: '#F4F1F7',
         color: NAVY,
         fontSize: 16,
         lineHeight: 23,
@@ -717,7 +753,7 @@ const styles = StyleSheet.create({
         minHeight: 44,
         borderRadius: 12,
         borderWidth: 1,
-        borderColor: '#e6e9ef',
+        borderColor: '#EEEAF2',
         backgroundColor: '#fff',
         paddingVertical: 10,
         paddingHorizontal: 13,
@@ -728,8 +764,8 @@ const styles = StyleSheet.create({
         fontWeight: '700',
     },
     primary: {
-        backgroundColor: NAVY,
-        borderColor: NAVY,
+        backgroundColor: MINT,
+        borderColor: MINT,
     },
     disabled: {
         opacity: 0.45,
