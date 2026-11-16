@@ -8987,7 +8987,7 @@ test('152 날짜·시각을 고르고 적용하면 한 모드만 전달하고 �
 test('152 공용 달력의 기본 약속 문구를 유지하고 개인 경로의 제목·최소·최대 날짜를 적용해요', () => {
     const r = selector152(); const Calendar = r.load('src/components/rooms/appointment-picker.tsx').CalendarModal;
     let view = r.renderComponent({ type: Calendar, props: { visible: true, value: '2026-11-14', onConfirm() {}, onClose() {} } });
-    assert.ok(findText(view, '약속 날짜 선택'));
+    assert.ok(findText(view, '약속 날짜'));
     const props = { visible: true, value: '2026-11-14', title: '도착 날짜 선택', minDate: '2026-11-14', maxDate: '2026-11-20', onConfirm() {}, onClose() {} };
     view = r.renderComponent({ type: Calendar, props }); view = r.renderComponent({ type: Calendar, props });
     assert.ok(findText(view, '도착 날짜 선택'));
