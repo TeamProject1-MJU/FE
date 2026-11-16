@@ -75,6 +75,7 @@ function createRuntime(env = {}, react = require('react')) {
             getCurrentPositionAsync: async () => { throw Error('위치 응답을 지정하세요'); },
         },
         'expo-image-picker': { requestCameraPermissionsAsync: async () => ({ granted: false }) },
+        'expo-file-system': { Paths: { cache: { uri: 'file:///cache/' } }, File: class { constructor(uri) { this.uri = uri; } bytes() { return new Uint8Array(0); } } },
         // #187 공용 글자 컴포넌트는 화면 검사에서 react-native 의 Text·TextInput 과 같은 가짜 요소로 연결해요.
         '@/components/app-text': { Text: 'Text', TextInput: 'TextInput' },
     };
