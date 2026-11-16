@@ -182,6 +182,8 @@ export default function RouteCard({ route, expanded, badgeLabels = [], onPress, 
     const firstSlot = subwaySteps[0]?.stations?.[0];
     const arrival = formatRouteRelativeDateTime(summary.arrivalAt);
     const departure = summary.departureAt ? formatRouteRelativeDateTime(summary.departureAt) : '';
+    const firstTrainInfo = summary.noService && departure ? `${departure} 출발 ~`
+        : firstSlot?.firstTrain ? `첫차 ${formatSlot(firstSlot)} 기준` : '';
     const totalSec = route.steps.reduce((sum, step) => sum + Math.max(step.durationSec, 0), 0);
     const lastStop = subwaySteps.at(-1)?.stops.at(-1)?.name ?? '';
 
@@ -193,14 +195,13 @@ export default function RouteCard({ route, expanded, badgeLabels = [], onPress, 
                 </View>
                 <CongestionMark congestion={summary.congestion} />
             </View>
-            {!!firstSlot?.firstTrain && <View style={styles.tags}><View style={styles.tag}><Text style={styles.tagText}>첫차 {formatSlot(firstSlot)} 기준</Text></View></View>}
             <View style={[styles.headline, styles.headlineGap]}>
                 <Text style={styles.time} accessibilityLabel={`총 소요 시간 ${formatTotalTime(summary)}`}>{formatDurationMinutes(routeDurationSec(summary) / 60)}</Text>
                 {!!arrival && <Text style={styles.arrival}>{arrival} 도착</Text>}
             </View>
-            {summary.noService && !!departure && <View style={styles.firstDeparture}>
+            {!!firstTrainInfo && <View style={styles.firstDeparture}>
                 <Ionicons name="information-circle-outline" size={16} color={LV_MAIN} />
-                <Text style={styles.firstDepartureText}>{departure} 출발 ~</Text>
+                <Text style={styles.firstDepartureText}>{firstTrainInfo}</Text>
             </View>}
             <Text style={styles.meta}>
                 {summary.fareSource === 'ESTIMATED' && <Text>예상</Text>}{summary.fareSource === 'ESTIMATED' ? ' ' : ''}{formatFare(route)} · 환승 {summary.transferCount}회
@@ -267,7 +268,7 @@ export default function RouteCard({ route, expanded, badgeLabels = [], onPress, 
 }
 
 const styles = StyleSheet.create({
-    firstDeparture: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6 },
+    firstDeparture: { flexDirection: 'row', alignItems: 'center', gap: 5, marginVertical: 8 },
     firstDepartureText: { flexShrink: 1, color: LV_MAIN, fontSize: 13, fontWeight: '700' },
     timelineDeparture: { marginBottom: 16 },
     lastTimelineLine: { bottom: 0 },

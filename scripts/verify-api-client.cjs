@@ -10326,3 +10326,28 @@ test('241 약속방 추천의 총 소요 시간과 접근성 라벨도 시간/�
     assert.ok(detail.some(text => text.includes('환승 도보 3분')));
     r.unmount();
 });
+
+test('241 B안 첫차 기준은 시간 아래 한 줄이며 noService 출발 안내와 중복하지 않아요', () => {
+    const r = clock152(createRuntime());
+    const Card = r.load('src/components/route/RouteCard.tsx').default;
+    for (const firstTrain of [false, true]) for (const noService of [false, true]) for (const expanded of [false, true]) for (const badgeLabels of [[], ['최소시간', '최저요금']]) {
+        const route = r.load('src/services/route.ts').__parseRouteSearch(routeData()).routes[0];
+        Object.assign(route.summary, { noService, departureAt: '2026-11-15T05:31:00+09:00' });
+        const slot = route.steps.find(step => step.type === 'SUBWAY').stations[0];
+        Object.assign(slot, { firstTrain, slotDate: '2026-11-17', slotStart: '05:30' });
+        const original = JSON.stringify(route);
+        const view = Card({ route, expanded, badgeLabels, onPress() {}, onStart() {} });
+        const children = view.props.children.filter(Boolean);
+        assert.doesNotMatch(textOf(children[0]), /첫차|출발 ~/);
+        for (const label of badgeLabels) assert.ok(findText(children[0], label));
+        const expected = noService ? '내일 오전 5:31 출발 ~' : firstTrain ? '첫차 11/17 05:30 기준' : null;
+        const infos = findElements(view, node => node.type === 'Text' && /^(첫차 .* 기준|.* 출발 ~)$/.test(textOf(node)));
+        assert.equal(infos.length, expected ? 1 : 0);
+        if (expected) {
+            assert.equal(textOf(infos[0]), expected);
+            assert.ok(findText(children[2], expected), '큰 소요 시간 줄 바로 아래에 표시해요');
+            assert.ok(findElement(children[2], node => node.props?.name === 'information-circle-outline'));
+        }
+        assert.equal(JSON.stringify(route), original);
+    }
+});
