@@ -53,7 +53,7 @@ const UNDERLINE_DURATION = 500;
 const TITLE_DELAY = 1200;
 const TITLE_DURATION = 450;
 
-const HOLD_MS = 150;
+const HOLD_MS = 900;
 const FADE_MS = 300;
 const REDUCED_MOTION_HOLD_MS = 600;
 
