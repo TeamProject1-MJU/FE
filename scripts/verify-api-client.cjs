@@ -75,6 +75,7 @@ function createRuntime(env = {}, react = require('react')) {
             getCurrentPositionAsync: async () => { throw Error('위치 응답을 지정하세요'); },
         },
         'expo-image-picker': { requestCameraPermissionsAsync: async () => ({ granted: false }) },
+        'expo-file-system': { Paths: { cache: { uri: 'file:///cache/' } }, File: class { constructor(uri) { this.uri = uri; } bytes() { return new Uint8Array(0); } } },
         // #187 공용 글자 컴포넌트는 화면 검사에서 react-native 의 Text·TextInput 과 같은 가짜 요소로 연결해요.
         '@/components/app-text': { Text: 'Text', TextInput: 'TextInput' },
     };
@@ -7013,7 +7014,7 @@ test('129 HTML 에 경로·역 데이터가 들어가지 않고 CSP·이동 차�
     const html = buildMapHtml('test');
     assert.equal(buildMapHtml.length, 1);
     for (const value of ['127.01', '37.51', '2호선', '#00a84d', '#00a5de', 'route-129']) assert.ok(!html.includes(value), value);
-    assert.ok(html.includes(`content="default-src 'none'; form-action 'none'; base-uri 'none'; script-src 'unsafe-inline' 'unsafe-eval' https://*.kakao.com https://*.daum.net https://*.daumcdn.net; style-src 'unsafe-inline'; img-src data: https://*.kakao.com https://*.daumcdn.net https://*.daum.net; connect-src https://*.kakao.com https://*.daum.net https://*.daumcdn.net"`));
+    assert.ok(html.includes(`content="default-src 'none'; form-action 'none'; base-uri 'none'; script-src 'unsafe-inline' 'unsafe-eval' https://*.kakao.com https://*.daum.net https://*.daumcdn.net https://*.kakaocdn.net; style-src 'unsafe-inline'; img-src data: https://*.kakao.com https://*.daumcdn.net https://*.kakaocdn.net https://*.daum.net; connect-src https://*.kakao.com https://*.daum.net https://*.daumcdn.net https://*.kakaocdn.net"`));
     for (const url of ['https://kakao.com.evil.test', 'http://dapi.kakao.com', 'https://localhost:9999']) assert.equal(isAllowedMapNavigation(url), false);
 });
 
@@ -8853,6 +8854,34 @@ test('142 방에서 개인 검색으로 바꾸면 이전 방 오류를 지우고
     }
 });
 
+/* ---------- 선택 시각의 한국 연도 표기 (#243) ---------- */
+test('243 선택 시각은 올해의 연도만 생략하고 다른 연도와 지금 출발은 유지해요', () => {
+    const time = createRuntime().load('src/utils/route-time.ts');
+    const now = Date.parse('2026-11-16T10:33:00+09:00');
+    for (const [mode, suffix] of [['departure', ' 출발'], ['arrival', '까지 도착']]) {
+        for (const [at, label] of [
+            ['2026-11-16T23:00:00+09:00', '11.16 23:00'],
+            ['2027-01-10T23:00:00+09:00', '2027.01.10 23:00'],
+            ['2025-12-31T23:00:00+09:00', '2025.12.31 23:00'],
+        ]) {
+            const selection = { mode, at };
+            assert.equal(time.formatRouteTimeSelection(selection, now), label + suffix);
+            assert.deepEqual(plain(time.routeTimeOptions(selection)), { [mode === 'departure' ? 'departAt' : 'arriveAt']: at });
+        }
+    }
+    assert.equal(time.formatRouteTimeSelection({ mode: 'now' }, now), '지금 출발');
+    assert.equal(time.formatRouteDateTime('2026-11-16T23:00:00+09:00'), '2026.11.16 23:00');
+});
+
+test('243 올해 판정과 선택 날짜는 기기 시간대 대신 서울의 연말·연초 경계를 따라요', () => {
+    const { formatRouteTimeSelection: format } = createRuntime().load('src/utils/route-time.ts');
+    const newYear = { mode: 'arrival', at: '2026-12-31T15:00:00Z' };
+    assert.equal(format(newYear, Date.parse('2026-12-31T14:59:59Z')), '2027.01.01 00:00까지 도착');
+    assert.equal(format(newYear, Date.parse('2026-12-31T15:00:00Z')), '01.01 00:00까지 도착');
+    const lastYear = { mode: 'departure', at: '2026-12-31T14:59:00Z' };
+    assert.equal(format(lastYear, Date.parse('2026-12-31T15:00:00Z')), '2026.12.31 23:59 출발');
+});
+
 /* ---------- 개인 경로 시각 선택·시각표 계약 (#152, BE #130) ---------- */
 const NOW152 = Date.parse('2026-11-14T12:34:56.900+09:00');
 const DEPART152 = '2026-11-14T23:50:00+09:00';
@@ -9027,7 +9056,7 @@ test('152 결과·안내는 검색한 조건과 자정 다음 날의 서버 날�
     assert.ok(findText(card.type({ ...card.props, expanded: true }), `${relative(card.props.route.summary.departureAt)} 출발`)); assert.ok(findText(view, `${relative(card.props.route.summary.arrivalAt)} 도착`));
     assert.ok(findText(view, '지정한 도착 시각보다 3분 일찍 도착해요.'));
     const notice = findElement(r.render(), element => element.type === r.load('src/components/route/RouteTimeNotice.tsx').default);
-    assert.ok(findText(notice.type(notice.props), '경로 1개 2026.11.15 00:08까지 도착 기준'));
+    assert.ok(findText(notice.type(notice.props), '경로 1개 11.15 00:08까지 도착 기준'));
     card.props.onStart(); const selected = r.load('src/stores/route-store.ts').getSelectedRoute(); const guide = clock152(route147Guide(selected));
     const guideView = guide.render(); assert.ok(findTextIncluding(guideView, `${relative(selected.route.summary.departureAt)} → ${relative(selected.route.summary.arrivalAt)} 도착`));
     const guideNotice = findElement(guideView, element => element.type === guide.load('src/components/route/RouteTimeNotice.tsx').default);
@@ -10242,6 +10271,91 @@ function findElements(node, predicate) {
     return [...(predicate(node) ? [node] : []), ...findElements(node.props?.children, predicate)];
 }
 
+test('244 시각 휠 자리 올림: 분·시를 넘기면 시·오전/오후·날짜가 이어서 바뀌고 날짜 목록 끝에서 멈춰요', () => {
+    const { shiftWheelValue: shift, dayLabel, toTwelveHour, fromTwelveHour, timeLabel, dateRange } = createRuntime().load('src/components/time-wheel/labels.ts');
+    const dates = ['2026-11-16', '2026-11-17', '2026-11-18'];
+    const at = (date, time, delta) => plain(shift(dates, date, time, delta));
+    assert.deepEqual(at('2026-11-16', '23:59', 1), { date: '2026-11-17', time: '00:00' });
+    assert.deepEqual(at('2026-11-17', '00:00', -1), { date: '2026-11-16', time: '23:59' });
+    assert.deepEqual(at('2026-11-16', '23:30', 60), { date: '2026-11-17', time: '00:30' });
+    assert.deepEqual(at('2026-11-16', '11:30', 60), { date: '2026-11-16', time: '12:30' });
+    assert.deepEqual(at('2026-11-17', '00:30', -60), { date: '2026-11-16', time: '23:30' });
+    assert.deepEqual(at('2026-11-16', '00:00', -1), { date: '2026-11-16', time: '00:00' });
+    assert.deepEqual(at('2026-11-18', '23:59', 1), { date: '2026-11-18', time: '23:59' });
+    assert.deepEqual(at('2026-11-16', '10:00', 1500), { date: '2026-11-17', time: '11:00' });
+    assert.deepEqual(at('2026-11-18', '10:00', -1500), { date: '2026-11-17', time: '09:00' });
+    assert.deepEqual(at('2026-11-16', '10:00', 1440 * 5), { date: '2026-11-18', time: '23:59' });
+    assert.deepEqual(at('2026-11-18', '10:00', -1440 * 5), { date: '2026-11-16', time: '00:00' });
+    assert.deepEqual(at('2026-11-17', '08:15', 0), { date: '2026-11-17', time: '08:15' });
+    // 범위 밖이라 붙여 둔 날짜도 목록의 한 칸으로 보고 이어 붙여요.
+    assert.deepEqual(plain(shift(['2026-11-01', ...dates], '2026-11-01', '23:59', 1)), { date: '2026-11-16', time: '00:00' });
+    for (const [date, time] of [['2026-11-20', '10:00'], ['', '10:00'], ['2026-11-16', ''], ['2026-11-16', '24:00'], ['2026-11-16', '10:60'], ['2026-11-16', '9:00']])
+        assert.deepEqual(at(date, time, 1), { date, time }, `${date} ${time}`);
+    assert.deepEqual(plain(shift([], '2026-11-16', '10:00', 1)), { date: '2026-11-16', time: '10:00' });
+    // 기존 함수의 동작은 그대로예요.
+    assert.deepEqual(plain(toTwelveHour('00:05')), { pm: false, hour: 12, minute: 5 });
+    assert.equal(fromTwelveHour(true, 12, 0), '12:00');
+    assert.equal(timeLabel('23:59'), '오후 11:59');
+    assert.deepEqual(plain(dateRange('2026-12-31', '2027-01-01')), ['2026-12-31', '2027-01-01']);
+    assert.equal(dayLabel('2027-01-03'), '1월 3일(일)');
+});
+
+function wheel244(date, time, minDate = '2026-11-16', maxDate = '2026-11-18') {
+    const r = createScreenRuntime({}, 'src/components/time-wheel/date-time-wheel.tsx');
+    const changes = [];
+    const wheel = r.renderComponent({ type: r.screen.DateTimeWheel, props: { date, time, minDate, maxDate, onChange: (...value) => changes.push(value) } });
+    const columns = findElements(wheel, node => typeof node.type === 'function' && node.props?.label);
+    const column = label => columns.find(node => node.props.label === label);
+    // 한 칸(WheelColumn)씩만 그려요. 검사용 훅 저장소가 컴포넌트 종류마다 하나라 칸을 바꿀 땐 새 런타임을 써요.
+    const list = label => findElement(r.renderComponent(column(label)), node => node.type === 'FlatList');
+    return { r, changes, column, list };
+}
+
+test('244 분·시 칸은 반복 목록의 가운데에서 시작해 움직인 칸 수만큼 자리 올림하고 끝에서는 알리지 않아요', () => {
+    const scroll = (flat, at) => flat.props.onMomentumScrollEnd({ nativeEvent: { contentOffset: { y: at * 44 } } });
+    // 오늘 오후 11:59 에서 분을 한 칸 앞으로 → 내일 오전 12:00
+    let w = wheel244('2026-11-16', '23:59');
+    assert.equal(w.column('분').props.cyclic, true); assert.equal(w.column('시').props.cyclic, true);
+    assert.equal(w.column('날짜').props.cyclic, undefined); assert.equal(w.column('오전 오후').props.cyclic, undefined);
+    assert.equal(w.column('분').props.value, '59분'); assert.equal(w.column('시').props.value, '11시');
+    let flat = w.list('분');
+    assert.equal(flat.props.data.length, 60 * 200); assert.equal(flat.props.initialScrollIndex, 100 * 60 + 59);
+    scroll(flat, 100 * 60 + 60);
+    assert.deepEqual(w.changes, [['2026-11-17', '00:00']]);
+    // 내일 오전 12:00 에서 분을 한 칸 뒤로 → 오늘 오후 11:59
+    w = wheel244('2026-11-17', '00:00');
+    flat = w.list('분'); scroll(flat, 100 * 60 - 1);
+    assert.deepEqual(w.changes, [['2026-11-16', '23:59']]);
+    // 오후 11:30 에서 시를 한 칸 앞으로(접근성 increment) → 다음 날 오전 12:30
+    w = wheel244('2026-11-16', '23:30');
+    assert.equal(w.list('시').props.initialScrollIndex, 100 * 12 + 10);
+    w.r.renderComponent(w.column('시')).props.onAccessibilityAction({ nativeEvent: { actionName: 'increment' } });
+    assert.deepEqual(w.changes, [['2026-11-17', '00:30']]);
+    // 오전 11:30 에서 시 항목을 눌러 한 칸 앞으로 → 같은 날 오후 12:30, 세 칸 뒤로 → 오전 8:30
+    w = wheel244('2026-11-16', '11:30');
+    const hours = w.list('시');
+    hours.props.renderItem({ item: '12', index: 100 * 12 + 11 }).props.onPress();
+    assert.deepEqual(w.changes, [['2026-11-16', '12:30']]);
+    w = wheel244('2026-11-16', '11:30');
+    w.list('시').props.onScrollEndDrag({ nativeEvent: { contentOffset: { y: (100 * 12 + 7) * 44 } } });
+    assert.deepEqual(w.changes, [['2026-11-16', '08:30']]);
+    // 웹에서 멈춘 뒤 붙이기: 스크롤 후 타이머가 지나면 자리 올림을 알려요.
+    w = wheel244('2026-11-16', '23:59');
+    w.list('분').props.onScroll({ nativeEvent: { contentOffset: { y: (100 * 60 + 61) * 44 + 10 } } });
+    assert.equal(w.changes.length, 0); w.r.advance(120);
+    assert.deepEqual(w.changes, [['2026-11-17', '00:01']]);
+    // 범위 끝: 첫 날 00:00 에서 뒤로, 마지막 날 23:59 에서 앞으로는 알리지 않아요.
+    w = wheel244('2026-11-16', '00:00'); scroll(w.list('분'), 100 * 60 - 1); assert.deepEqual(w.changes, []);
+    w = wheel244('2026-11-18', '23:59'); scroll(w.list('분'), 100 * 60 + 60); assert.deepEqual(w.changes, []);
+    w = wheel244('2026-11-18', '23:59'); w.r.renderComponent(w.column('시')).props.onAccessibilityAction({ nativeEvent: { actionName: 'increment' } });
+    assert.deepEqual(w.changes, []);
+    // 마지막 날 23:30 에서 시를 앞으로 → 23:59 에서 멈춰요.
+    w = wheel244('2026-11-18', '23:30'); w.r.renderComponent(w.column('시')).props.onAccessibilityAction({ nativeEvent: { actionName: 'increment' } });
+    assert.deepEqual(w.changes, [['2026-11-18', '23:59']]);
+    // 오전/오후·날짜 칸은 지금처럼: 날짜는 그대로 12시간만, 시각은 그대로 날짜만 바뀌어요.
+    w = wheel244('2026-11-16', '23:30'); w.column('오전 오후').props.onSelect(0, -1); w.column('날짜').props.onSelect(2, 2);
+    assert.deepEqual(w.changes, [['2026-11-16', '11:30'], ['2026-11-18', '23:30']]);
+});
 
 test('241 총시간 59·60·63·120분·0·NaN과 초 버림, 대기 접두어 및 시간/분 분리를 확인해요', () => {
     const r = createRuntime(); const f = r.load('src/components/route/format.ts');

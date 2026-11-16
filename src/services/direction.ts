@@ -9,6 +9,8 @@
  * mock 모드에서는 기존 예시 사진 5종을 사용합니다.
  */
 
+import { File } from 'expo-file-system';
+
 import { post } from '@/services/api/client';
 import { useMock as isMockMode } from '@/services/api/config';
 import { ApiError, isAuthError } from '@/services/api/errors';
@@ -202,7 +204,11 @@ export async function checkDirection(input: DirectionPhoto | Sample, route: Dire
     const photo = input as DirectionPhoto;
     const form = new FormData();
     if (photo.file) form.append('image', photo.file, photo.fileName);
-    else form.append('image', { uri: photo.uri, type: photo.mimeType, name: photo.fileName } as unknown as Blob);
+    // expo/fetch(Expo 57 기본 fetch)는 RN식 { uri } 파트를 못 보내요. 파일 내용을 bytes()로 읽어 보내요.
+    else {
+        const file = new File(photo.uri);
+        form.append('image', { name: photo.fileName, type: photo.mimeType, bytes: () => file.bytes() } as unknown as Blob);
+    }
     form.append('route', JSON.stringify(normalized));
     try {
         return parseDirectionResponse(await post<unknown>('/ai/direction-check', form, { timeoutMs: DIRECTION_CHECK_TIMEOUT_MS }));
