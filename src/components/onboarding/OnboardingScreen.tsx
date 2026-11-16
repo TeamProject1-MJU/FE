@@ -11,11 +11,11 @@ import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { onboardingPages } from '@/constants/onboarding';
+import { onboardingButton, onboardingPages } from '@/constants/onboarding';
 import OnboardingIllustration from './OnboardingIllustration';
 
-const NAVY = '#0f1c3f';
-const MINT = '#2bcf9a';
+const PURPLE = '#5C3F78';
+const BACKGROUND = '#F7F5FA';
 const LAST_PAGE = onboardingPages.length - 1;
 
 export default function OnboardingScreen({
@@ -67,13 +67,8 @@ export default function OnboardingScreen({
     );
 
     return (
-        <View
-            style={[
-                styles.root,
-                { backgroundColor: data.background },
-            ]}
-        >
-            <StatusBar style={last ? 'light' : 'dark'} />
+        <View style={styles.root}>
+            <StatusBar style="dark" />
 
             <SafeAreaView
                 edges={['top', 'left', 'right']}
@@ -103,10 +98,8 @@ export default function OnboardingScreen({
                                         {
                                             backgroundColor:
                                                 index <= page
-                                                    ? last
-                                                        ? MINT
-                                                        : NAVY
-                                                    : '#d5dae3',
+                                                    ? PURPLE
+                                                    : '#E4DCEB',
                                         },
                                     ]}
                                 />
@@ -159,7 +152,6 @@ export default function OnboardingScreen({
                                     { color: data.accent },
                                 ]}
                             >
-                                {page === 1 ? '✦ ' : ''}
                                 {data.label}
                             </Text>
 
@@ -186,15 +178,11 @@ export default function OnboardingScreen({
                         onPress={next}
                         style={({ pressed }) => [
                             styles.button,
-                            last && styles.startButton,
                             pressed && styles.pressed,
                         ]}
                     >
                         <Text
-                            style={[
-                                styles.buttonText,
-                                last && styles.startText,
-                            ]}
+                            style={styles.buttonText}
                         >
                             {last ? '시작하기' : '다음'}  →
                         </Text>
@@ -208,6 +196,7 @@ export default function OnboardingScreen({
 const styles = StyleSheet.create({
     root: {
         flex: 1,
+        backgroundColor: BACKGROUND,
     },
     header: {
         height: 52,
@@ -241,13 +230,13 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     skipText: {
-        color: '#697386',
+        color: '#746B7F',
         fontSize: 13,
         fontWeight: '600',
     },
     body: {
         flex: 1,
-        backgroundColor: '#fff',
+        backgroundColor: BACKGROUND,
     },
     scroll: {
         flex: 1,
@@ -256,18 +245,19 @@ const styles = StyleSheet.create({
         flexGrow: 1,
     },
     visual: {
-        height: 380,
-        paddingHorizontal: 28,
+        height: 340,
+        marginHorizontal: 12,
+        marginTop: 12,
+        paddingHorizontal: 16,
         alignItems: 'center',
         justifyContent: 'center',
-        borderBottomLeftRadius: 26,
-        borderBottomRightRadius: 26,
+        borderRadius: 28,
     },
     copy: {
         paddingHorizontal: 28,
         paddingTop: 28,
         paddingBottom: 24,
-        backgroundColor: '#fff',
+        backgroundColor: BACKGROUND,
     },
     label: {
         fontSize: 13,
@@ -277,7 +267,7 @@ const styles = StyleSheet.create({
     title: {
         marginTop: 8,
         minHeight: 74,
-        color: NAVY,
+        color: '#25212D',
         fontSize: 28,
         lineHeight: 37,
         fontWeight: '800',
@@ -285,12 +275,12 @@ const styles = StyleSheet.create({
     },
     description: {
         marginTop: 12,
-        color: '#697386',
+        color: '#746B7F',
         fontSize: 16,
         lineHeight: 25,
     },
     footer: {
-        backgroundColor: '#fff',
+        backgroundColor: BACKGROUND,
         paddingHorizontal: 20,
         paddingTop: 12,
         paddingBottom: 16,
@@ -300,21 +290,15 @@ const styles = StyleSheet.create({
         borderRadius: 18,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: NAVY,
-    },
-    startButton: {
-        backgroundColor: MINT,
+        backgroundColor: onboardingButton.background,
     },
     buttonText: {
-        color: '#fff',
-        fontSize: 15,
-        lineHeight: 22,
-        fontWeight: '700',
-    },
-    startText: {
-        color: NAVY,
+        color: onboardingButton.foreground,
+        fontSize: onboardingButton.fontSize,
+        lineHeight: onboardingButton.lineHeight,
+        fontWeight: onboardingButton.fontWeight,
     },
     pressed: {
-        opacity: 0.75,
+        backgroundColor: onboardingButton.pressed,
     },
 });
