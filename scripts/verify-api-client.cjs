@@ -6077,7 +6077,7 @@ test('114 화면 이중 제출·이탈 및 계정 전환 후 응답 폐기·임�
         if (stale === 'account') await r.load('src/services/auth.ts').clearLocalSession();
         finish(jsonResponse({ success: true, data: directionData114() }));
         for (let i = 0; i < 4; i++) await settle();
-        if (stale !== 'unmount') assert.equal(!!findElement(r.render(), e => e.props?.children === '올바른 방향이에요'), stale === 'none');
+        if (stale !== 'unmount') assert.equal(!!findElement(r.render(), e => e.props?.children === '맞는 방향이에요'), stale === 'none');
         assert.ok(r.deleted.includes('file:///cache/output.jpg')); r.unmount();
     }
 });
@@ -6231,14 +6231,15 @@ function findAll125(node, predicate, found = []) {
     return found;
 }
 const texts125 = view => findAll125(deep125(view), e => e.type === 'Text').map(textOf);
-const photoUri125 = view => findElement(view, e => e.type === 'Image')?.props.source.uri ?? null;
+// #198 승객 아이콘도 Image이므로 실제 선택 사진만 검사해요.
+const photoUri125 = view => findElement(view, e => e.type === 'Image' && e.props.accessibilityLabel === '선택한 표지판 사진')?.props.source.uri ?? null;
 const alertText125 = view => { const alert = findElement(deep125(view), e => e.props?.accessibilityRole === 'alert'); return alert ? textOf(alert) : null; };
 const SERVER_ERROR_TEXT125 = {
     AI_UNAVAILABLE: 'AI가 잠시 응답하지 않아요. 잠시 후 다시 시도해 주세요.',
     AI_QUOTA_EXCEEDED: '분석 요청이 많아요. 잠시 후 다시 시도해 주세요.',
     NETWORK_ERROR: '인터넷 연결을 확인한 뒤 다시 시도해 주세요.',
     UNKNOWN_ERROR: '분석 응답을 확인하지 못했어요. 다시 시도해 주세요.',
-    IMAGE_INVALID: '다른 사진을 선택해 주세요. JPG·PNG 5MB 이하 사진이 필요해요.',
+    IMAGE_INVALID: '다른 사진을 선택해 주세요. JPG / PNG 5MB 이하 사진이 필요해요.',
     STATION_NOT_FOUND: '경로를 다시 선택해 주세요.',
     VALIDATION_ERROR: '경로를 다시 선택해 주세요.',
 };
@@ -6277,9 +6278,9 @@ test('125 재시도 가능한 오류 4종은 사진을 유지하고 다시 시�
         assert.equal(r.sent[1].photo, r.sent[0].photo, `${code}: 같은 사진`); assert.equal(r.sent[1].photo.uri, OUTPUT125);
         assert.deepEqual(r.sent[1].route, r.sent[0].route); assert.deepEqual(r.sent[1].route, { stationId: 105, lineId: 2, headsign: '사당 방면' });
         view = r.render(); assert.equal(r.button('AI로 확인하기').props.disabled, true); assert.equal(r.button('다시 시도'), null);
-        assert.ok(texts125(view).includes('AI가 표지판을 읽고 있어요')); assert.ok(findElement(view, e => e.type?.name === 'ScanLine'));
+        assert.ok(texts125(view).includes('표지판을 읽는 중…')); assert.ok(findElement(view, e => e.type?.name === 'ScanLine'));
         finish(jsonResponse({ success: true, data: directionData114() })); view = await r.pump();
-        assert.ok(texts125(view).includes('올바른 방향이에요')); assert.equal(photoUri125(view), null); assert.equal(deletedCount125(r), 1);
+        assert.ok(texts125(view).includes('맞는 방향이에요')); assert.equal(photoUri125(view), null); assert.equal(deletedCount125(r), 1);
         r.unmount();
     }
 });
@@ -6312,7 +6313,7 @@ test('125 IMAGE_INVALID는 사진을 지우고 다른 사진을, 경로 오류�
     auth.load('src/services/api/client.ts').setAuthFailureHandler(() => { authFailures++; });
     await auth.press('표지판 촬영'); auth.respond(failure125('TOKEN_INVALID')); view = await auth.press('AI로 확인하기');
     assert.equal(authFailures, 1); assert.equal(alertText125(view), null); assert.equal(photoUri125(view), null); assert.equal(deletedCount125(auth), 1);
-    assert.equal(auth.alerts.length, 0); assert.ok(texts125(view).includes('표지판을 찍어 방향을 확인해요')); auth.unmount();
+    assert.equal(auth.alerts.length, 0); assert.ok(texts125(view).includes('표지판을 찍어 주세요')); auth.unmount();
 });
 
 test('125 결과 3종은 제목·색·아이콘이 다르고 읽은 값·내 경로 값을 나란히, null은 읽지 못했어요로 보여주며 사진을 정리해요', async () => {
@@ -6324,29 +6325,29 @@ test('125 결과 3종은 제목·색·아이콘이 다르고 읽은 값·내 경
         r.respond(async () => jsonResponse({ success: true, data: { ...directionData114(result), recognized, message: `서버 안내 ${result}` } }));
         const view = deep125(await r.press('AI로 확인하기'));
         assert.equal(photoUri125(view), null, `${result}: 사진 정리`); assert.equal(deletedCount125(r), 1);
-        const title = findAll125(view, e => e.type === 'Text' && e.props.style?.some?.(s => s?.fontSize === 19)).map(e => ({ text: textOf(e), color: e.props.style[1].color }))[0];
-        const icon = findAll125(view, e => e.type === 'Ionicons' && e.props.size === 22)[0].props.name;
+        const titleNode = findAll125(view, e => e.type === 'Text' && e.props.accessibilityRole === 'header')[0];
+        const title = { text: textOf(titleNode), color: flattenStyle125(titleNode.props.style).color };
+        const icon = findAll125(view, e => e.type === 'Ionicons' && e.props.size === 18)[0].props.name;
         looks[result] = { ...title, icon };
         assert.ok(texts125(view).includes(`서버 안내 ${result}`), `${result}: 서버 message`);
-        const cellViews = findAll125(view, e => e.type === 'View' && e.props.style?.width === '50%');
-        const cells = cellViews.map(cell => findAll125(cell, e => e.type === 'Text').map(textOf));
-        const read = value => value ?? '읽지 못했어요';
-        assert.deepEqual(cells, [
-            ['읽은 역 이름', recognized.stationName ? '강남역' : read(null)], ['내 경로 역 이름', '강남역'],
-            ['읽은 호선', read(recognized.lineName)], ['내 경로 호선', '2호선'],
-            ['읽은 방면', read(recognized.headsign)], ['내 경로 방면', '사당 방면'],
+        const rows = findAll125(view, e => e.type === 'View' && e.props.style?.[0]?.paddingVertical === 11);
+        assert.equal(rows.length, 2, '인식한 문구와 가야 할 방향 두 행으로 보여줘요');
+        const fields = findAll125(view, e => e.type === 'Text' && /^(읽은|내 경로) (역 이름|호선|방면)$/.test(e.props.accessibilityLabel ?? ''));
+        assert.deepEqual(fields.map(field => [field.props.accessibilityLabel, textOf(field)]), [
+            ['읽은 역 이름', recognized.stationName ? '강남역' : '읽지 못했어요'],
+            ['읽은 호선', recognized.lineName ?? '읽지 못했어요'], ['읽은 방면', recognized.headsign ?? '읽지 못했어요'],
+            ['내 경로 역 이름', '강남역'], ['내 경로 호선', '2호선'], ['내 경로 방면', '사당 방면'],
         ], result);
-        const headsignCell = findAll125(cellViews[4], e => e.type === 'Text')[1];
-        const color = Object.assign({}, ...headsignCell.props.style.filter(Boolean)).color;
-        assert.equal(color, { CORRECT: '#12a77a', WRONG: '#e5484d', RETAKE: '#6b7488' }[result], `${result}: 방면 비교 색`);
+        const headsignCell = fields.find(field => field.props.accessibilityLabel === '읽은 방면');
+        assert.equal(flattenStyle125(headsignCell.props.style).color, { CORRECT: '#5C3F78', WRONG: '#8C4166', RETAKE: '#83808B' }[result], `${result}: 방면 비교 색`);
         assert.equal(headsignCell.props.numberOfLines, undefined, '값은 자르지 않아요');
         assert.equal(r.button('표지판 촬영').props.disabled, false); assert.equal(!!r.button('경로 안내로 돌아가기'), true);
         r.unmount();
     }
     assert.deepEqual(looks, {
-        CORRECT: { text: '올바른 방향이에요', color: '#12a77a', icon: 'checkmark-circle' },
-        WRONG: { text: '경로와 다른 표지판이에요', color: '#e5484d', icon: 'close-circle' },
-        RETAKE: { text: '다시 촬영해 주세요', color: '#b7791f', icon: 'camera-reverse-outline' },
+        CORRECT: { text: '맞는 방향이에요', color: '#5C3F78', icon: 'checkmark-circle' },
+        WRONG: { text: '경로와 다른 표지판이에요', color: '#8C4166', icon: 'close-circle' },
+        RETAKE: { text: '다시 촬영해 주세요', color: '#725B86', icon: 'camera-reverse-outline' },
     });
 });
 
@@ -6363,7 +6364,7 @@ test('125 유지하던 사진은 화면을 떠나면 정리되고, 요청 중 �
         finish(late === 'success' ? jsonResponse({ success: true, data: directionData114() }) : await failure125(late)()); await r.pump();
         assert.equal(deletedCount125(r), 1, `${late}: 요청이 끝난 뒤 정리`);
         r.focus(); view = r.render();
-        assert.equal(texts125(view).includes('올바른 방향이에요'), false); assert.equal(alertText125(view), null); assert.equal(photoUri125(view), null);
+        assert.equal(texts125(view).includes('맞는 방향이에요'), false); assert.equal(alertText125(view), null); assert.equal(photoUri125(view), null);
         assert.equal(r.button('표지판 촬영').props.disabled, false); r.unmount();
     }
     const gone = await directionScreen125(); await gone.press('표지판 촬영');
@@ -6377,7 +6378,7 @@ test('125 계정이 바뀌면 재시도 응답을 버리고 유지하던 사진�
     const finish = r.hold(); r.button('다시 시도').props.onPress(); await settle();
     await r.load('src/services/auth.ts').clearLocalSession();
     finish(jsonResponse({ success: true, data: directionData114() })); let view = await r.pump();
-    assert.equal(texts125(view).includes('올바른 방향이에요'), false); assert.equal(alertText125(view), null); assert.equal(photoUri125(view), null);
+    assert.equal(texts125(view).includes('맞는 방향이에요'), false); assert.equal(alertText125(view), null); assert.equal(photoUri125(view), null);
     assert.equal(deletedCount125(r), 1); assert.equal(r.button('표지판 촬영').props.disabled, false, '처리 중 잠금 해제'); r.unmount();
     const kept = await directionScreen125(); await kept.press('표지판 촬영');
     kept.respond(failure125('NETWORK_ERROR')); await kept.press('AI로 확인하기'); const calls = kept.calls;
@@ -6394,9 +6395,9 @@ test('125 경로 정보가 없으면 안내와 경로 검색 버튼, 있으면 �
         await r.press('경로 검색'); assert.deepEqual(r.routes, ['/route-search']); r.unmount();
     }
     const full = await directionScreen125({ stationId: '105', stationName: '강남', lineId: '2', lineName: '2호선', headsign: '사당 방면', direction: 'INNER' });
-    // 내 경로 칩: '내 경로' 글자, 노선 배지 숫자, 요약 순서예요.
-    const chipText = view => { const texts = texts125(view); assert.ok(texts.includes('내 경로')); assert.equal(texts[texts.indexOf('내 경로') + 1], '2'); return texts[texts.indexOf('내 경로') + 2]; };
-    assert.equal(chipText(full.render()), '강남역 · 2호선 사당 방면');
+    // #198 시안의 찾는 방향 안내로 바뀌어도 서버에 보내는 route는 같아요.
+    const chipText = view => { const texts = texts125(view); assert.ok(texts.includes('찾는 방향')); return texts[texts.indexOf('찾는 방향') + 1]; };
+    assert.equal(chipText(full.render()), '강남역 / 2호선 사당 방면');
     await full.press('표지판 촬영'); full.respond(async () => jsonResponse({ success: true, data: directionData114() })); await full.press('AI로 확인하기');
     assert.deepEqual(full.sent[0].route, { stationId: 105, lineId: 2, headsign: '사당 방면', direction: 'INNER' }); full.unmount();
     const partial = await directionScreen125({ stationId: '105', lineId: '2', headsign: '사당 방면' });
@@ -6412,13 +6413,13 @@ test('125 경로 정보가 없으면 안내와 경로 검색 버튼, 있으면 �
  */
 const MOCK_FIXTURE125 = path.join(root, 'scripts/fixtures/ai-direction-mock-125.json');
 const MOCK_FIXTURE_UPDATE125 = 'UPDATE_FIXTURES=1 node scripts/verify-api-client.cjs';
-test('125 mock 모드 화면은 #125 이전과 같은 트리·스타일·동작이에요', async () => {
+test('125 mock 모드 화면은 #198 디자인 기준의 단계별 트리·스타일·동작을 유지해요', async () => {
     const crypto = require('node:crypto');
     const actual = Object.fromEntries(Object.entries(await mockDirectionSnapshots125())
         .map(([key, value]) => [key, crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex')]));
     if (process.env.UPDATE_FIXTURES === '1') {
         fs.writeFileSync(MOCK_FIXTURE125, JSON.stringify({
-            note: 'mock 화면 단계별 트리의 sha256. scripts/verify-api-client.cjs 의 serialize125 로 만들고 UPDATE_FIXTURES=1 로 갱신해요.',
+            note: '#198 밝은 시안 디자인(블록 승객·두 행 비교표·촬영 프레임)을 반영해 mock 화면 기준을 갱신했어요. serialize125 로 만들고 UPDATE_FIXTURES=1 로 갱신해요.',
             snapshots: actual,
         }, null, 1) + '\n');
         return;
@@ -9725,11 +9726,11 @@ test('151 서버 방향 코드 경로는 안내 버튼에서 승차역·노선·
         const href = guide.pushes151[0]; assert.equal(href.pathname, '/ai-direction');
         assert.deepEqual(plain(href.params), { stationId: '88001', stationName: '승차역', lineId: String(lineId), lineName: `${lineId}호선`, direction });
         const screen = await directionScreen125(plain(href.params)); assert.ok(screen.button('표지판 촬영')); assert.ok(screen.button('갤러리 선택'));
-        assert.ok(texts125(screen.render()).includes(`승차역 · ${lineId}호선 ${label}`));
+        assert.ok(texts125(screen.render()).includes(`승차역 / ${lineId}호선 ${label}`));
         await screen.press(direction === 'UP' || direction === 'INNER' ? '표지판 촬영' : '갤러리 선택');
         screen.respond(async () => jsonResponse({ success: true, data: response151() })); const result = await screen.press('AI로 확인하기');
         assert.deepEqual(screen.sent[0].route, { stationId: 88001, lineId, direction });
-        assert.ok(texts125(result).includes('올바른 방향이에요')); assert.equal(screen.calls, 1); screen.unmount(); guide.unmount(); search.unmount();
+        assert.ok(texts125(result).includes('맞는 방향이에요')); assert.equal(screen.calls, 1); screen.unmount(); guide.unmount(); search.unmount();
     }
 });
 
@@ -9770,7 +9771,7 @@ test('151 CORRECT·WRONG·MISSING_INFO는 null 방면을 유지하고 서버 결
         const r = await directionScreen125({ stationId: '88001', stationName: '승차역', lineId: '2', lineName: '2호선', direction: 'INNER' });
         await r.press('표지판 촬영'); const data = response151(result, reason, read);
         r.respond(async () => jsonResponse({ success: true, data })); const view = await r.press('AI로 확인하기');
-        const text = texts125(view); assert.ok(text.includes(data.message)); assert.ok(text.includes('읽은 방향 표시')); assert.ok(text.includes('내 경로 방향')); assert.ok(text.includes('내선'));
+        const text = texts125(view); assert.ok(text.includes(data.message)); assert.ok(findElement(deep125(view), e => e.props?.accessibilityLabel === '읽은 방향 표시')); assert.ok(findElement(deep125(view), e => e.props?.accessibilityLabel === '내 경로 방향')); assert.match(textOf(findElement(deep125(view), e => e.props?.accessibilityLabel === '내 경로 방향')), /내선$/);
         assert.equal(text.includes('내 경로 방면'), false); assert.equal(r.button('다시 시도'), null);
         if (result === 'RETAKE') assert.ok(text.includes('행선지 이름만으로는 방향을 확정할 수 없어요'));
         assert.equal(data.expected.headsign, null); assert.deepEqual(r.sent[0].route, { stationId: 88001, lineId: 2, direction: 'INNER' }); r.unmount();
@@ -9886,4 +9887,23 @@ test('187 공용 글자 컴포넌트는 원래 style 순서·위치를 지키고
         assert.equal(element.props.numberOfLines, 2); assert.equal(element.props.onPress, onPress); assert.equal(element.props.onChangeText, onChangeText);
         assert.equal(element.props.accessibilityLabel, '라벨'); assert.equal(element.props.testID, 'id'); assert.equal(element.props.children, '글자');
     }
+});
+
+test('198 서버 화면은 블록 승객과 실제 판정·재촬영·갤러리·경로 복귀를 함께 제공하고 시연 컨트롤을 넣지 않아요', async () => {
+    const r = await directionScreen125();
+    const shutter = r.button('표지판 촬영');
+    assert.ok(shutter);
+    assert.equal(shutter.props.disabled, false);
+    assert.ok(r.button('갤러리 선택'));
+    await r.press('표지판 촬영');
+    r.respond(async () => jsonResponse({ success: true, data: directionData114('WRONG') }));
+    let view = await r.press('AI로 확인하기');
+    assert.ok(findElement(deep125(view), e => e.type === 'Image' && e.props.source?.uri.startsWith('data:image/svg+xml')));
+    assert.ok(r.button('표지판 촬영')); assert.ok(r.button('갤러리 선택')); assert.ok(r.button('경로 안내로 돌아가기'));
+    assert.equal(photoUri125(view), null, '결과 후 원본 사진 정리 정책은 그대로예요');
+    assert.equal(texts125(view).some(text => /시연용|시연 결과|AI OCR 미연결/.test(text)), false);
+    await r.press('표지판 촬영');
+    view = r.render();
+    assert.equal(findElement(deep125(view), e => e.props?.accessibilityRole === 'header'), null, '재촬영 시 이전 판정은 사라져요');
+    assert.ok(r.button('AI로 확인하기')); r.unmount();
 });
