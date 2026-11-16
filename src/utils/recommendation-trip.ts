@@ -2,7 +2,7 @@
  * 추천 결과의 참여자 이동 문구 (#153, 명세 v1.13 participantTimes 추가 필드)
  *
  * 시각은 서비스 기준(서울)으로 보여주고, 값이 없으면 문구를 만들지 않아요(0분·현재 시각으로 채우지 않아요).
- * 분 계산은 경로 화면(#146)과 같은 stepMinutes(반올림, 최소 1분)를 써요. 여유 시간만 아래 규칙을 따로 써요.
+ * 분 계산은 경로 화면(#146)과 같은 stepMinutes(버림, 최소 1분)를 써요. 여유 시간만 아래 규칙을 따로 써요.
  */
 import { DIRECTION_LABELS, formatDestination, stepMinutes } from '@/components/route/format';
 import type { BoardingTrain, ParticipantTime, RecommendationSource, StaleReason, TrainLeg } from '@/types/recommendation';

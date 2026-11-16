@@ -9,14 +9,14 @@ export function formatClock(iso: string) {
 }
 
 export function formatTotalTime(summary: RouteSummary) {
-    const minutes = Math.round((summary.totalWithWaitSec ?? summary.totalTimeSec) / 60);
+    const minutes = Math.floor((summary.totalWithWaitSec ?? summary.totalTimeSec) / 60);
     return `${summary.totalWithWaitSec != null ? '대기 포함 ' : ''}${summary.totalWithWaitSec != null && summary.waitKind === 'ESTIMATED' ? '약 ' : ''}${minutes}분`;
 }
 
 /** 승차·환승 대기 줄. waitSec 이 없거나(null) 0 이하이거나 waitKind 가 없으면 줄을 그리지 않아요(빈 문자열). */
 export function formatWait(step: RouteStep, transfer: boolean) {
     if (step.waitSec == null || step.waitSec <= 0 || step.waitKind === 'NONE' || !step.waitKind) return '';
-    return `${transfer ? '환승 대기' : '승차 대기'} ${step.waitKind === 'ESTIMATED' ? '약 ' : ''}${Math.round(step.waitSec / 60)}분`;
+    return `${transfer ? '환승 대기' : '승차 대기'} ${step.waitKind === 'ESTIMATED' ? '약 ' : ''}${Math.floor(step.waitSec / 60)}분`;
 }
 
 /** 방면 코드 표기 (경로 화면·추천 탑승 열차가 같이 써요) */
@@ -98,7 +98,7 @@ export function hasSeparateTransferWait(steps: readonly RouteStep[], index: numb
 
 /** 단계 시간(초) → 분. 0분으로 보이지 않게 최소 1분이에요. 환승·도보 표시가 모두 이 값을 써요. */
 export function stepMinutes(durationSec: number) {
-    return Math.max(1, Math.round((Number.isFinite(durationSec) ? durationSec : 0) / 60));
+    return Math.max(1, Math.floor((Number.isFinite(durationSec) ? durationSec : 0) / 60));
 }
 
 /** "환승 소요 N분". 대기가 섞여 있을 수 있는 환승 단계에 써요. 도보와 대기를 나누는 필드가 없어 "도보"라고 쓰지 않아요. */

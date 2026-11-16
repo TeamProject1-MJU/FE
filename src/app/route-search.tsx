@@ -15,9 +15,10 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { openStationPicker, type Station } from '@/app/station-search';
 import { MOCK_STATIONS } from '@/mocks/stations';
-import RouteCard, { RouteResultSummary } from '@/components/route/RouteCard';
+import RouteCard from '@/components/route/RouteCard';
 import RouteTimeSelector from '@/components/route/RouteTimeSelector';
 import RouteTimeNotice from '@/components/route/RouteTimeNotice';
+import { routeBadges, sortRoutes } from '@/components/route/result';
 import BottomTabBar, { useTabBarHeight } from '@/components/bottom-tab-bar';
 import TrainBlock from '@/components/train-block';
 import { personalRouteTimeBasis, roomRouteTimeBasis, routeTimeOptions } from '@/utils/route-time';
@@ -52,14 +53,6 @@ const LV_SUB = '#4A4553';
 const LV_SOFT = '#EDE8F3';
 
 type Field = 'departure' | 'destination';
-type SortKey = 'FASTEST' | 'FEWER_TRANSFERS' | 'CHEAPEST';
-
-const SORT_TABS: { key: SortKey; label: string }[] = [
-    { key: 'FASTEST', label: '최소시간' },
-    { key: 'FEWER_TRANSFERS', label: '최소환승' },
-    { key: 'CHEAPEST', label: '최저요금' },
-];
-
 type SearchState =
     | { status: 'idle' }
     | { status: 'loading' }
@@ -91,19 +84,6 @@ async function roomAppointmentAt(roomId: string): Promise<string | null | undefi
     }
 }
 
-/** 탭 기준 정렬. 같으면 소요 시간 → 환승 순으로 비교합니다. */
-function sortRoutes(routes: Route[], key: SortKey) {
-    const time = (r: Route) => r.summary.totalTimeSec;
-    const transfer = (r: Route) => r.summary.transferCount;
-    const fare = (r: Route) => r.summary.fare;
-
-    return [...routes].sort((a, b) => {
-        if (key === 'FEWER_TRANSFERS') return transfer(a) - transfer(b) || time(a) - time(b);
-        if (key === 'CHEAPEST') return fare(a) - fare(b) || time(a) - time(b) || transfer(a) - transfer(b);
-        return time(a) - time(b) || transfer(a) - transfer(b);
-    });
-}
-
 export default function RouteSearchScreen() {
     const insets = useSafeAreaInsets();
     const tabBarHeight = useTabBarHeight();
@@ -123,10 +103,9 @@ export default function RouteSearchScreen() {
     const [departure, setDeparture] = useState<StationSummary | null>(null);
     const [destination, setDestination] = useState<StationSummary | null>(null);
     const [search, setSearch] = useState<SearchState>({ status: 'idle' });
-    const [sortKey, setSortKey] = useState<SortKey>('FASTEST');
     const [searchTime, setSearchTime] = useState<RouteTimeSelection>({ mode: 'now' });
     const [timePickerOpen, setTimePickerOpen] = useState(false);
-    const [expandedId, setExpandedId] = useState<string | null>(null);
+    const [expandedIds, setExpandedIds] = useState<Set<string>>(() => new Set());
     const sameStation = !!departure && !!destination && departure.id === destination.id;
 
     const requestId = useRef(0);
@@ -229,13 +208,13 @@ export default function RouteSearchScreen() {
     }, [departure, destination, runSearch]);
 
     const sortedRoutes = useMemo(
-        () => (search.status === 'success' ? sortRoutes(search.data.routes, sortKey) : []),
-        [search, sortKey],
+        () => (search.status === 'success' ? sortRoutes(search.data.routes) : []),
+        [search],
     );
 
-    // 탭이 바뀌거나 결과가 새로 오면 맨 위 경로를 펼칩니다.
+    // 새 검색 결과는 모두 접힌 상태로 시작해요.
     useEffect(() => {
-        setExpandedId(sortedRoutes[0]?.routeId ?? null);
+        setExpandedIds(new Set());
     }, [sortedRoutes]);
 
     const goBack = () => {
@@ -280,7 +259,6 @@ export default function RouteSearchScreen() {
     const hasBack = [params.roomId, params.departure, params.destination, params.departureId, params.destinationId, params.focus]
         .some(value => !!value);
 
-    const badgeLabel = SORT_TABS.find(tab => tab.key === sortKey)?.label ?? '';
 
     return (
         <View style={styles.container}>
@@ -346,7 +324,7 @@ export default function RouteSearchScreen() {
                         }} />
                 )}
                 {search.status === 'success' && search.searchTime && (
-                    <RouteTimeNotice selection={search.searchTime} routes={sameStation ? [] : search.data.routes} mock={isMockMode()} />
+                    <RouteTimeNotice selection={search.searchTime} routes={sameStation ? [] : search.data.routes} mock={isMockMode()} resultCount={!sameStation && sortedRoutes.length > 0 ? sortedRoutes.length : undefined} />
                 )}
 
                 {search.status === 'success' && search.data.appointmentPassed && !!search.data.notice && (
@@ -356,38 +334,15 @@ export default function RouteSearchScreen() {
                     </View>
                 )}
 
+                {search.status === 'success' && !search.searchTime && !sameStation && sortedRoutes.length > 0 && (
+                    <Text style={styles.resultCount}>경로 {sortedRoutes.length}개</Text>
+                )}
+
                 {/* INTERNAL은 계산 출처이며 조회 실패 여부를 뜻하지 않아요. */}
                 {search.status === 'success' && search.data.routeSource === 'INTERNAL' && (
                     <View style={styles.notice}>
                         <Ionicons name="information-circle-outline" size={17} color={LV_MAIN} />
                         <Text style={styles.noticeText}>자체 계산한 경로예요.</Text>
-                    </View>
-                )}
-
-                {/* 결과 요약 (탭 기준 맨 위 경로) */}
-                {search.status === 'success' && !sameStation && !!sortedRoutes[0] && (
-                    <RouteResultSummary topRoute={sortedRoutes[0]} showDates={!params.roomId} />
-                )}
-
-                {/* 정렬 탭 */}
-                {!sameStation && (search.status === 'loading' || search.status === 'success') && (
-                    <View style={[styles.tabs, search.status !== 'success' && styles.tabsSpaced]}>
-                        {SORT_TABS.map(tab => {
-                            const active = tab.key === sortKey;
-                            return (
-                                <Pressable
-                                    key={tab.key}
-                                    style={[styles.tab, active && styles.tabActive]}
-                                    onPress={() => setSortKey(tab.key)}
-                                    accessibilityRole="tab"
-                                    accessibilityState={{ selected: active }}
-                                >
-                                    <Text style={[styles.tabText, active && styles.tabTextActive]}>
-                                        {tab.label}
-                                    </Text>
-                                </Pressable>
-                            );
-                        })}
                     </View>
                 )}
 
@@ -436,14 +391,19 @@ export default function RouteSearchScreen() {
                 )}
 
                 {search.status === 'success' && !sameStation &&
-                    sortedRoutes.map((route, index) => (
+                    sortedRoutes.map(route => (
                         <RouteCard
                             key={route.routeId}
                             route={route}
                             showDates={!params.roomId}
-                            expanded={route.routeId === expandedId}
-                            badgeLabel={index === 0 ? badgeLabel : undefined}
-                            onPress={() => setExpandedId(route.routeId)}
+                            expanded={expandedIds.has(route.routeId)}
+                            badgeLabels={routeBadges(route, sortedRoutes)}
+                            onPress={() => setExpandedIds(current => {
+                                const next = new Set(current);
+                                if (next.has(route.routeId)) next.delete(route.routeId);
+                                else next.add(route.routeId);
+                                return next;
+                            })}
                             onStart={() => startGuide(route)}
                         />
                     ))}
@@ -759,42 +719,7 @@ const styles = StyleSheet.create({
         lineHeight: 18,
     },
 
-    // 시안 "03 경로 결과"의 정렬 탭
-    tabs: {
-        marginBottom: 12,
-        padding: 3,
-        flexDirection: 'row',
-        borderRadius: 12,
-        backgroundColor: LV_SOFT,
-    },
-
-    tabsSpaced: {
-        marginTop: 16,
-    },
-
-    tab: {
-        flex: 1,
-        height: 36,
-        borderRadius: 9,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-
-    tabActive: {
-        backgroundColor: LV_CARD,
-        boxShadow: '0px 1px 3px rgba(60,40,90,0.12)',
-    },
-
-    tabText: {
-        color: LV_SECONDARY,
-        fontSize: 13,
-        fontWeight: '500',
-    },
-
-    tabTextActive: {
-        color: LV_TEXT,
-        fontWeight: '700',
-    },
+    resultCount: { marginVertical: 16, color: LV_TEXT, fontSize: 16, fontWeight: '700' },
 
     loading: {
         paddingVertical: 48,
