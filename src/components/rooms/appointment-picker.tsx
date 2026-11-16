@@ -7,14 +7,32 @@ import {
     View,
 } from 'react-native';
 import { Text } from '@/components/app-text';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import WebModalFrame from '@/components/web-modal-frame';
 
 const NAVY = '#25212D';
 const MINT = '#5C3F78';
-const SECONDARY = '#6b7488';
-const BORDER = '#e6e9ef';
+const SECONDARY = '#83808B';
+const BORDER = '#D9CCE4';
 const WHITE = '#ffffff';
 const ROW = 44;
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
+
+/** Display only; picker values and request payloads remain YYYY-MM-DD / HH:mm. */
+export function formatAppointmentDateLabel(value: string): string {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+    const [year, month, day] = value.split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return value;
+    return `${month}월 ${day}일 (${WEEKDAYS[date.getDay()]})`;
+}
+
+export function formatAppointmentTimeLabel(value: string): string {
+    if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) return value;
+    const [hour, minute] = value.split(':');
+    const hours = Number(hour);
+    return `${hours < 12 ? '오전' : '오후'} ${hours % 12 || 12}:${minute}`;
+}
 
 function fromLocalDate(date: Date): string {
     const y = date.getFullYear();
@@ -44,7 +62,9 @@ type DatePickerProps = {
     onConfirm: (date: string) => void;
 };
 
-export function CalendarModal({ visible, value, title = '약속 날짜 선택', minDate = fromLocalDate(new Date()), maxDate, onClose, onConfirm }: DatePickerProps) {
+export function CalendarModal({ visible, value, title = '약속 날짜', minDate = fromLocalDate(new Date()), maxDate, onClose, onConfirm }: DatePickerProps) {
+    const insets = useSafeAreaInsets();
+    const today = fromLocalDate(new Date());
     const [selected, setSelected] = useState(() => fromLocalDate(parseLocalDate(value)));
     const [month, setMonth] = useState(() => {
         const current = parseLocalDate(value);
@@ -73,67 +93,72 @@ export function CalendarModal({ visible, value, title = '약속 날짜 선택', 
 
     return (
         <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
-            <View style={styles.overlay}>
-                <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-                <View style={styles.dialog}>
-                    <Text style={styles.modalTitle}>{title}</Text>
-                    <View style={styles.monthBar}>
-                        <Pressable style={styles.monthButton} onPress={() => changeMonth(-1)}>
-                            <Text style={styles.monthArrow}>‹</Text>
-                        </Pressable>
-                        <Text style={styles.monthTitle}>
-                            {month.getFullYear()}년 {month.getMonth() + 1}월
-                        </Text>
-                        <Pressable style={styles.monthButton} onPress={() => changeMonth(1)}>
-                            <Text style={styles.monthArrow}>›</Text>
-                        </Pressable>
-                    </View>
-                    <View style={styles.calendarGrid}>
-                        {WEEKDAYS.map((day, i) => (
-                            <View key={day} style={styles.dayCell}>
-                                <Text style={[styles.weekday, i === 0 && styles.sunday]}>{day}</Text>
+            <WebModalFrame>
+                <View style={styles.overlay}>
+                    <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+                    <View style={[styles.dialog, { paddingBottom: insets.bottom + 20 }]}>
+                        <View style={styles.grabber} />
+                        <ScrollView style={styles.dialogScroll} showsVerticalScrollIndicator={false}>
+                            <Text style={styles.modalTitle}>{title}</Text>
+                            <View style={styles.monthBar}>
+                                <Pressable style={styles.monthButton} onPress={() => changeMonth(-1)}>
+                                    <Text style={styles.monthArrow}>‹</Text>
+                                </Pressable>
+                                <Text style={styles.monthTitle}>
+                                    {month.getFullYear()}년 {month.getMonth() + 1}월
+                                </Text>
+                                <Pressable style={styles.monthButton} onPress={() => changeMonth(1)}>
+                                    <Text style={styles.monthArrow}>›</Text>
+                                </Pressable>
                             </View>
-                        ))}
-                        {cells.map((day, index) => {
-                            if (day === null) return <View style={styles.dayCell} key={`blank-${index}`} />;
-                            const date = fromLocalDate(new Date(month.getFullYear(), month.getMonth(), day));
-                            const disabled = (!!minDate && date < minDate) || (!!maxDate && date > maxDate);
-                            const active = date === selected;
-                            return (
-                                <View style={styles.dayCell} key={date}>
-                                    <Pressable
-                                        disabled={disabled}
-                                        style={[styles.dayButton, active && styles.selectedDay]}
-                                        onPress={() => setSelected(date)}
-                                    >
-                                        <Text style={[
-                                            styles.dayText,
-                                            disabled && styles.disabledDay,
-                                            active && styles.selectedDayText,
-                                        ]}>
-                                            {day}
-                                        </Text>
-                                    </Pressable>
-                                </View>
-                            );
-                        })}
-                    </View>
-                    <View style={styles.modalActions}>
-                        <Pressable style={styles.cancelButton} onPress={onClose}>
-                            <Text style={styles.cancelText}>취소</Text>
-                        </Pressable>
-                        <Pressable
-                            style={styles.confirmButton}
-                            onPress={() => {
-                                onConfirm(selected < minDate ? minDate : maxDate && selected > maxDate ? maxDate : selected);
-                                onClose();
-                            }}
-                        >
-                            <Text style={styles.confirmText}>날짜 선택</Text>
-                        </Pressable>
+                            <View style={styles.calendarGrid}>
+                                {WEEKDAYS.map((day, i) => (
+                                    <View key={day} style={styles.dayCell}>
+                                        <Text style={[styles.weekday, i === 0 && styles.sunday]}>{day}</Text>
+                                    </View>
+                                ))}
+                                {cells.map((day, index) => {
+                                    if (day === null) return <View style={styles.dayCell} key={`blank-${index}`} />;
+                                    const date = fromLocalDate(new Date(month.getFullYear(), month.getMonth(), day));
+                                    const disabled = (!!minDate && date < minDate) || (!!maxDate && date > maxDate);
+                                    const active = date === selected;
+                                    return (
+                                        <View style={styles.dayCell} key={date}>
+                                            <Pressable
+                                                disabled={disabled}
+                                                style={[styles.dayButton, date === today && styles.todayDay, active && styles.selectedDay]}
+                                                onPress={() => setSelected(date)}
+                                            >
+                                                <Text style={[
+                                                    styles.dayText,
+                                                    disabled && styles.disabledDay,
+                                                    active && styles.selectedDayText,
+                                                ]}>
+                                                    {day}
+                                                </Text>
+                                            </Pressable>
+                                        </View>
+                                    );
+                                })}
+                            </View>
+                            <View style={styles.modalActions}>
+                                <Pressable style={styles.cancelButton} onPress={onClose}>
+                                    <Text style={styles.cancelText}>취소</Text>
+                                </Pressable>
+                                <Pressable
+                                    style={styles.confirmButton}
+                                    onPress={() => {
+                                        onConfirm(selected < minDate ? minDate : maxDate && selected > maxDate ? maxDate : selected);
+                                        onClose();
+                                    }}
+                                >
+                                    <Text style={styles.confirmText}>날짜 선택</Text>
+                                </Pressable>
+                            </View>
+                        </ScrollView>
                     </View>
                 </View>
-            </View>
+            </WebModalFrame>
         </Modal>
     );
 }
@@ -208,7 +233,8 @@ function Wheel({
     );
 }
 
-export function TimeWheelModal({ visible, value = '19:00', title = '약속 시간 선택', onClose, onConfirm }: TimePickerProps) {
+export function TimeWheelModal({ visible, value = '19:00', title = '약속 시간', onClose, onConfirm }: TimePickerProps) {
+    const insets = useSafeAreaInsets();
     const [hour, setHour] = useState(19);
     const [minute, setMinute] = useState(0);
 
@@ -222,37 +248,40 @@ export function TimeWheelModal({ visible, value = '19:00', title = '약속 시�
 
     return (
         <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
-            <View style={styles.overlay}>
-                <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-                <View style={styles.dialog}>
-                    <Text style={styles.modalTitle}>{title}</Text>
-                    <Text style={styles.modalHint}>위아래로 스크롤해 시·분을 선택하세요.</Text>
-                    {visible && (
-                        <View style={styles.wheels}>
-                            <Wheel key={`hour-${value}`} label="시" count={24} value={hour} onChange={setHour} />
-                            <Text style={styles.colon}>:</Text>
-                            <Wheel key={`minute-${value}`} label="분" count={60} value={minute} onChange={setMinute} />
+            <WebModalFrame>
+                <View style={styles.overlay}>
+                    <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+                    <View style={[styles.dialog, { paddingBottom: insets.bottom + 20 }]}>
+                        <View style={styles.grabber} />
+                        <Text style={styles.modalTitle}>{title}</Text>
+                        <Text style={styles.modalHint}>위아래로 스크롤해 시·분을 선택하세요.</Text>
+                        {visible && (
+                            <View style={styles.wheels}>
+                                <Wheel key={`hour-${value}`} label="시" count={24} value={hour} onChange={setHour} />
+                                <Text style={styles.colon}>:</Text>
+                                <Wheel key={`minute-${value}`} label="분" count={60} value={minute} onChange={setMinute} />
+                            </View>
+                        )}
+                        <Text style={styles.timePreview}>
+                            선택: {formatAppointmentTimeLabel(`${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`)}
+                        </Text>
+                        <View style={styles.modalActions}>
+                            <Pressable style={styles.cancelButton} onPress={onClose}>
+                                <Text style={styles.cancelText}>취소</Text>
+                            </Pressable>
+                            <Pressable
+                                style={styles.confirmButton}
+                                onPress={() => {
+                                    onConfirm(`${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`);
+                                    onClose();
+                                }}
+                            >
+                                <Text style={styles.confirmText}>시간 선택</Text>
+                            </Pressable>
                         </View>
-                    )}
-                    <Text style={styles.timePreview}>
-                        선택: {String(hour).padStart(2, '0')}:{String(minute).padStart(2, '0')}
-                    </Text>
-                    <View style={styles.modalActions}>
-                        <Pressable style={styles.cancelButton} onPress={onClose}>
-                            <Text style={styles.cancelText}>취소</Text>
-                        </Pressable>
-                        <Pressable
-                            style={styles.confirmButton}
-                            onPress={() => {
-                                onConfirm(`${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`);
-                                onClose();
-                            }}
-                        >
-                            <Text style={styles.confirmText}>시간 선택</Text>
-                        </Pressable>
                     </View>
                 </View>
-            </View>
+            </WebModalFrame>
         </Modal>
     );
 }
@@ -260,19 +289,21 @@ export function TimeWheelModal({ visible, value = '19:00', title = '약속 시�
 const styles = StyleSheet.create({
     overlay: {
         flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: 'rgba(15,28,63,0.50)',
-        padding: 20,
+        justifyContent: 'flex-end',
+        backgroundColor: 'rgba(37,33,45,0.42)',
     },
     dialog: {
         width: '100%',
-        maxWidth: 370,
+        maxHeight: '94%',
         backgroundColor: WHITE,
-        borderRadius: 22,
-        padding: 20,
+        borderTopLeftRadius: 28,
+        borderTopRightRadius: 28,
+        paddingTop: 12,
+        paddingHorizontal: 22,
     },
-    modalTitle: { fontSize: 19, fontWeight: '800', color: NAVY, marginBottom: 14 },
+    grabber: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#DCD7E3', alignSelf: 'center', marginBottom: 14 },
+    dialogScroll: { flexShrink: 1, minHeight: 0 },
+    modalTitle: { fontSize: 18, fontWeight: '800', color: NAVY, marginBottom: 14 },
     modalHint: { fontSize: 13, color: SECONDARY, marginBottom: 8 },
     monthBar: {
         flexDirection: 'row',
@@ -281,21 +312,22 @@ const styles = StyleSheet.create({
         marginBottom: 17,
     },
     monthButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-    monthArrow: { color: NAVY, fontSize: 30, fontWeight: '400' },
+    monthArrow: { color: MINT, fontSize: 30, fontWeight: '400' },
     monthTitle: { color: NAVY, fontSize: 16, fontWeight: '700' },
     calendarGrid: { flexDirection: 'row', flexWrap: 'wrap' },
-    dayCell: { width: '14.285714%', height: 39, alignItems: 'center', justifyContent: 'center' },
+    dayCell: { width: '14.285714%', height: 42, alignItems: 'center', justifyContent: 'center' },
     weekday: { fontSize: 12, fontWeight: '700', color: SECONDARY },
-    sunday: { color: '#e46b6b' },
-    dayButton: { width: 35, height: 35, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-    selectedDay: { backgroundColor: MINT },
+    sunday: { color: SECONDARY },
+    dayButton: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+    todayDay: { borderWidth: 1.5, borderColor: BORDER },
+    selectedDay: { backgroundColor: MINT, borderColor: MINT },
     dayText: { color: NAVY, fontSize: 14, fontWeight: '600' },
-    disabledDay: { color: '#c4c9d3' },
+    disabledDay: { color: '#C9C4D1' },
     selectedDayText: { color: WHITE, fontWeight: '800' },
     modalActions: { flexDirection: 'row', gap: 10, marginTop: 19 },
-    cancelButton: { flex: 1, paddingVertical: 15, alignItems: 'center', borderRadius: 25, backgroundColor: '#EDE8F3' },
+    cancelButton: { flex: 1, height: 52, justifyContent: 'center', alignItems: 'center', borderRadius: 26, backgroundColor: '#EDE8F3' },
     cancelText: { color: MINT, fontWeight: '700' },
-    confirmButton: { flex: 1, paddingVertical: 15, alignItems: 'center', borderRadius: 25, backgroundColor: MINT },
+    confirmButton: { flex: 1, height: 52, justifyContent: 'center', alignItems: 'center', borderRadius: 26, backgroundColor: MINT },
     confirmText: { color: WHITE, fontWeight: '700' },
     wheels: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 10 },
     wheelColumn: { width: 100, alignItems: 'center' },
