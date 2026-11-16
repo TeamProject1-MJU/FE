@@ -557,6 +557,12 @@ export default function RoomDetailScreen() {
                             </>
                         )}
                     </View>
+                    <SelectedStationControls
+                        detail={detail}
+                        controller={stationManager}
+                        bottomInset={insets.bottom}
+                        embedded
+                    />
                 </View>
                 {/* 출발역을 설정하면 안내는 저절로 사라져요. */}
                 {!!station && !!routeHint && !detail.members.find(item => item.userId === myUserId)?.departureStation && (
@@ -565,11 +571,6 @@ export default function RoomDetailScreen() {
                         <Text style={styles.routeHintText}>{routeHint}</Text>
                     </View>
                 )}
-                <SelectedStationControls
-                    detail={detail}
-                    controller={stationManager}
-                    bottomInset={insets.bottom}
-                />
 
                 {/* 멤버 · 출발역 (그림 28 ❼) */}
                 <View style={styles.panel}>
