@@ -80,6 +80,24 @@ export function formatRouteDateTime(iso: string) {
     return parts ? `${parts.date.replace(/-/g, '.')} ${parts.time}` : '';
 }
 
+/** Display a route instant relative to the current Korean calendar date. */
+export function formatRouteRelativeDateTime(iso: string, now = Date.now()) {
+    const parts = seoulDateTime(iso);
+    const today = seoulDateTime(now);
+    const tomorrow = seoulDateTime(now + DAY_MS);
+    if (!parts || !today || !tomorrow) return '';
+    const inputDate = /^\d{4}-\d{2}-\d{2}/.exec(iso)?.[0];
+    if (inputDate && new Date(`${inputDate}T00:00:00Z`).toISOString().slice(0, 10) !== inputDate) return '';
+    const [year, month, day] = parts.date.split('-');
+    const [hour, minute] = parts.time.split(':');
+    const hours = Number(hour);
+    const time = `${hours < 12 ? '오전' : '오후'} ${hours % 12 || 12}:${minute}`;
+    const prefix = parts.date === today.date ? ''
+        : parts.date === tomorrow.date ? '내일 '
+            : `${year === today.date.slice(0, 4) ? '' : `${year}.`}${Number(month)}.${Number(day)} `;
+    return `${prefix}${time}`;
+}
+
 export function formatRouteTimeSelection(selection: RouteTimeSelection) {
     return selection.mode === 'now' ? '지금 출발'
         : `${formatRouteDateTime(selection.at)}${selection.mode === 'departure' ? ' 출발' : '까지 도착'}`;

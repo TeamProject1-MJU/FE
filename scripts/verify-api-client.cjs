@@ -7,6 +7,26 @@ const vm = require('node:vm');
 const { test } = require('node:test');
 const ts = require('typescript');
 
+test('213 한국 날짜 기준 상대 시각: 오늘·내일·이후·다른 해·자정 경계', () => {
+    const { formatRouteRelativeDateTime: format } = createRuntime().load('src/utils/route-time.ts');
+    const now = Date.parse('2026-11-16T10:00:00+09:00');
+    for (const [iso, expected] of [
+        ['2026-11-16T11:51:00+09:00', '오전 11:51'],
+        ['2026-11-16T12:00:00+09:00', '오후 12:00'],
+        ['2026-11-16T00:00:00+09:00', '오전 12:00'],
+        ['2026-11-16T23:05:00+09:00', '오후 11:05'],
+        ['2026-11-17T11:51:00+09:00', '내일 오전 11:51'],
+        ['2026-11-18T11:51:00+09:00', '11.18 오전 11:51'],
+        ['2027-01-03T11:51:00+09:00', '2027.1.3 오전 11:51'],
+        ['2026-11-16T15:00:00Z', '내일 오전 12:00'],
+        ['', ''], ['invalid', ''], ['2026-02-30T11:51:00+09:00', ''],
+    ]) assert.equal(format(iso, now), expected, iso);
+    assert.equal(format('2026-11-17T00:00:00+09:00', Date.parse('2026-11-16T23:59:59+09:00')), '내일 오전 12:00');
+    assert.equal(format('2026-11-17T00:00:00+09:00', Date.parse('2026-11-17T00:00:00+09:00')), '오전 12:00');
+    assert.equal(format('2027-01-01T00:00:00+09:00', Date.parse('2026-12-31T23:59:59+09:00')), '내일 오전 12:00');
+    assert.equal(format('2026-11-16T11:51:00+09:00', NaN), '');
+});
+
 const root = path.resolve(__dirname, '..');
 
 function createRuntime(env = {}, react = require('react')) {
@@ -7136,8 +7156,8 @@ function shallow129(node) {
     return { t: typeof node.type === 'function' ? node.type.name : String(node.type), k: node.key, p: props, c: shallow129(children) };
 }
 /** #129 이전(dev e970115) route-guide.tsx 의 mock 모드 트리 sha256 이에요. #187 fontWeight 900→800 반영, #196 경로 안내 시안 반영 */
-// #196: 요약 시각 배치, 지도 접기 및 안내 스타일 변경으로 화면 트리 해시 갱신.
-const MOCK_GUIDE_SHA129 = '4cea05a2d08a2db165a5da42341e9389a95b35baf53766a2fc88e2bda488d0f3';
+// #213: 상대 시각·요약 3칸·혼잡도 행 재배치에 맞춰 화면 트리 해시 갱신.
+const MOCK_GUIDE_SHA129 = '9bd597db6a617859630319df55ad59c3ba1b0bf46d2fe960c053ab1e4349e2e8';
 test('129 mock 모드 경로 화면 트리는 #129 이전과 같아요', () => {
     const r = guide129({ mock: true });
     const sha = require('node:crypto').createHash('sha256').update(JSON.stringify(shallow129(r.render()))).digest('hex');
@@ -7435,13 +7455,13 @@ test('146 도보 1분 + 대기 10분 환승: 어디에도 "도보 11분" 없이 
     const route = route146();
     const detail = timeline146(route); const expanded = card146(route, true); const collapsed = card146(route, false);
     for (const texts of [detail, expanded, collapsed]) assert.ok(!texts.some(text => /도보 11분|환승 도보/.test(text)), texts.join(' / '));
-    assert.ok(detail.some(text => text.startsWith('교대에서 3호선으로 갈아타요 · 걸어서 11분')));
+    assert.ok(detail.some((text, index) => text === '3호선으로 갈아타요' && detail[index + 1].startsWith('환승 소요 11분')));
     assert.ok(expanded.some(text => text.trim() === '환승 소요 11분'));
     assert.ok(expanded.some(text => text.includes('환승 2회, 도보 1분')));
     // 경로 안내 화면 요약도 서버 값 그대로예요.
     const r = guide129({ route }); const view = r.render();
-    assert.ok(findText(view, '환승 2회'));
-    assert.ok(findText(view, '도보 1분'));
+    assert.ok(findText(view, '환승')); assert.ok(findText(view, '2회'));
+    assert.ok(findText(view, '도보')); assert.ok(findText(view, '1분'));
     assert.ok(!textOf(view).includes('도보 11분'));
     assert.ok(findElement(view, element => element.type === r.Timeline && element.props.route === route));
 });
@@ -7451,10 +7471,10 @@ test('146 환승 여러 번: 펼친 카드와 경로 상세가 환승마다 같�
         const route = route146({ walkingMinutes });
         const format = createRuntime().load('src/components/route/format.ts');
         const detail = timeline146(route); const expanded = card146(route, true);
-        // 경로 상세는 환승역 줄과 안내 상자에 같은 분이 한 번씩 나와요(#196). 환승마다 나오는 분이 모두 같아야 해요.
+        // #213: 환승 시간은 두 줄 안내 상자의 아랫줄에 한 번 표시해요.
         const detailMinutes = detail.map(text => /(?:환승 (?:소요|도보)|걸어서) (\d+)분/.exec(text)).filter(Boolean).map(match => match[1]);
         const detailTransfers = detailMinutes.filter((minutes, index) => index === 0 || minutes !== detailMinutes[index - 1]);
-        assert.equal(detailMinutes.length, detailTransfers.length * 2, detailMinutes.join(' / '));
+        assert.equal(detailMinutes.length, detailTransfers.length, detailMinutes.join(' / '));
         const cardTransfers = expanded.filter(text => text.includes('환승 소요')).map(text => /환승 소요 (\d+)분/.exec(text)[1]);
         assert.deepEqual(detailTransfers, ['11', '1']); assert.deepEqual(cardTransfers, detailTransfers);
         assert.deepEqual(cardTransfers, route.steps.filter((_, index) => format.isTransferStep(route.steps, index)).map(step => String(format.stepMinutes(step.durationSec))));
@@ -7481,7 +7501,7 @@ test('146 카카오(KAKAO)·시각표(INTERNAL) 경로는 같은 문구, 30초 �
         assert.equal(r.load('src/stores/route-store.ts').getSelectedRoute().routeSource, routeSource);
         const timeline = findElement(view, element => element.type === r.Timeline);
         results.push(JSON.stringify([timeline146(timeline.props.route), card146(route, true)]));
-        assert.ok(timeline146(route).some(text => text.startsWith('고속터미널에서 7호선으로 갈아타요 · 걸어서 1분')));
+        assert.ok(timeline146(route).some((text, index, texts) => text === '7호선으로 갈아타요' && texts[index + 1].startsWith('환승 소요 1분')));
         assert.ok(!timeline146(route).some(text => /환승 소요 0분|도보 0분/.test(text)));
     }
     assert.equal(results[0], results[1]);
@@ -7515,7 +7535,7 @@ test('146 보완: mock 건대입구 → 사당은 "환승 도보 3분"과 "환�
     const expanded = card146(route, true); const detail = timeline146(route);
     assert.ok(expanded.some(text => text.trim() === '환승 도보 3분'), expanded.join(' / '));
     assert.ok(expanded.some(text => text === '환승 대기 약 2분'));
-    assert.ok(detail.some(text => text.startsWith('이수에서 4호선으로 갈아타요 · 걸어서 3분')), detail.join(' / '));
+    assert.ok(detail.some((text, index) => text === '4호선으로 갈아타요' && detail[index + 1].startsWith('환승 도보 3분')), detail.join(' / '));
     assert.ok(detail.some(text => text === '환승 대기 약 2분'));
     for (const texts of [expanded, detail]) assert.ok(!texts.some(text => text.includes('환승 소요')));
 });
@@ -7528,15 +7548,15 @@ test('146 보완: 대기가 따로 오지 않는 660초 환승은 "환승 소요
     const expanded = card146(mixed, true); const detail = timeline146(mixed);
     assert.ok(expanded.some(text => text.trim() === '환승 소요 11분')); assert.ok(expanded.some(text => text.trim() === '환승 도보 1분'));
     assert.ok(expanded.some(text => text === '환승 대기 약 2분')); assert.ok(expanded.some(text => text === '승차 대기 약 3분'));
-    assert.ok(detail.some(text => text.startsWith('교대에서 3호선으로 갈아타요 · 걸어서 11분')));
-    assert.ok(detail.some(text => text.startsWith('고속터미널에서 7호선으로 갈아타요 · 걸어서 1분')));
+    assert.ok(detail.some((text, index) => text === '3호선으로 갈아타요' && detail[index + 1].startsWith('환승 소요 11분')));
+    assert.ok(detail.some((text, index) => text === '7호선으로 갈아타요' && detail[index + 1].startsWith('환승 도보 1분')));
     assert.ok(expanded.some(text => text.trim() === '도보 2분')); // 첫 열차 전 걷기는 그대로 "도보"
     for (const texts of [expanded, detail, card146(mixed, false)]) assert.ok(!texts.some(text => text.includes('도보 11분')), texts.join(' / '));
     assert.ok(expanded.some(text => text.includes('환승 2회, 도보 1분')));
     // 펼친 카드와 경로 상세의 숫자가 환승마다 같아요.
     const numbers = texts => texts.map(text => /환승 (?:소요|도보) (\d+)분|걸어서 (\d+)분/.exec(text)).filter(Boolean).map(match => match[1] ?? match[2]);
     assert.deepEqual(numbers(expanded.filter(text => /^\s*환승 (소요|도보)/.test(text))), ['11', '1']);
-    assert.deepEqual(numbers(detail.filter(text => /^(교대에서|고속터미널에서)/.test(text))), ['11', '1']);
+    assert.deepEqual(numbers(detail.filter(text => /^환승 (소요|도보)/.test(text))), ['11', '1']);
 });
 
 test('146 보완: waitSec 이 0·null 이거나 waitKind 가 없거나 NONE 이면 따로 표시되지 않는 경우(환승 소요)', () => {
@@ -7547,7 +7567,7 @@ test('146 보완: waitSec 이 0·null 이거나 waitKind 가 없거나 NONE 이�
         assert.deepEqual([2, 4].map(index => format.hasSeparateTransferWait(route.steps, index)), [false, false], `${wait} ${kind}`);
         const expanded = card146(route, true); const detail = timeline146(route);
         assert.ok(expanded.some(text => text.trim() === '환승 소요 11분')); assert.ok(!expanded.some(text => text.includes('환승 대기')));
-        assert.ok(detail.some(text => text.startsWith('고속터미널에서 7호선으로 갈아타요 · 걸어서 1분')));
+        assert.ok(detail.some((text, index) => text === '7호선으로 갈아타요' && detail[index + 1].startsWith('환승 소요 1분')));
     }
     // 대기 줄과 환승 문구 판단은 같은 함수를 써서 어긋나지 않아요.
     const shown = route146Waits([undefined, 60, 60], 'REALTIME');
@@ -8999,12 +9019,13 @@ test('152 결과·안내는 검색한 조건과 자정 다음 날의 서버 날�
     const notice = findElement(r.render(), element => element.type === r.load('src/components/route/RouteTimeNotice.tsx').default);
     assert.ok(findText(notice.type(notice.props), '검색 조건 · 2026.11.15 00:08까지 도착'));
     card.props.onStart(); const selected = r.load('src/stores/route-store.ts').getSelectedRoute(); const guide = route147Guide(selected);
-    const guideView = guide.render(); assert.ok(findTextIncluding(guideView, '2026.11.14 23:35 → 2026.11.15 00:05'));
+    const relative = guide.load('src/utils/route-time.ts').formatRouteRelativeDateTime;
+    const guideView = guide.render(); assert.ok(findTextIncluding(guideView, `${relative(selected.route.summary.departureAt)} → ${relative(selected.route.summary.arrivalAt)} 도착`));
     const guideNotice = findElement(guideView, element => element.type === guide.load('src/components/route/RouteTimeNotice.tsx').default);
     assert.equal(guideNotice.props.selection.at, ARRIVE152);
-    const timeline = findElement(guideView, element => element.type === guide.Timeline); assert.equal(timeline.props.showDates, true);
+    const timeline = findElement(guideView, element => element.type === guide.Timeline); assert.equal(Object.hasOwn(timeline.props, 'showDates'), false);
     assert.equal(timeline.props.nextTrains, false, '시각 지정 경로에 현재의 실시간 도착정보를 섞지 않아요');
-    assert.ok(findText(guide.renderComponent(timeline), '2026.11.15 00:05 도착 예정'));
+    assert.ok(findText(guide.renderComponent(timeline), `${relative(selected.route.summary.arrivalAt)} 도착 예정`));
     assert.equal(r.load('src/utils/route-time.ts').formatArrivalSlack(0), '지정한 도착 시각에 도착해요.'); r.unmount(); guide.unmount();
 });
 
@@ -9758,8 +9779,13 @@ test('151 여러 승차·환승 구간은 각각의 역·호선·방향으로 �
     const first = step151('UP', 1); const second = step151('OUTER', 2); second.stops[0] = { id: 88002, name: '환승역', order: 0 };
     const walking = { ...first, type: 'WALKING', line: null, directionCode: null, stops: [] };
     const r = guide151([first, walking, second]); const timeline = r.timeline151(); const view = r.renderComponent(timeline);
-    const buttons = findAll125(view, element => element.type === 'Pressable' && textOf(element) === '표지판으로 방향 확인'); assert.equal(buttons.length, 2);
-    buttons.forEach(button => button.props.onPress());
+    const buttons = findAll125(view, element => element.type === 'Pressable' && textOf(element) === '표지판으로 방향 확인'); assert.equal(buttons.length, 1);
+    for (const [station, line] of [['승차역', '1호선'], ['환승역', '2호선']]) {
+        buttons[0].props.onPress();
+        const sheet = r.renderComponent(timeline);
+        const choice = findElement(sheet, element => element.type === 'Pressable' && !!findText(element, `${station}에서 ${line}`));
+        assert.ok(choice); choice.props.onPress();
+    }
     assert.deepEqual(r.pushes151.map(href => [href.params.stationId, href.params.lineId, href.params.direction]), [['88001', '1', 'UP'], ['88002', '2', 'OUTER']]); r.unmount();
 });
 
