@@ -9788,13 +9788,8 @@ test('151 여러 승차·환승 구간은 각각의 역·호선·방향으로 �
     const first = step151('UP', 1); const second = step151('OUTER', 2); second.stops[0] = { id: 88002, name: '환승역', order: 0 };
     const walking = { ...first, type: 'WALKING', line: null, directionCode: null, stops: [] };
     const r = guide151([first, walking, second]); const timeline = r.timeline151(); const view = r.renderComponent(timeline);
-    const buttons = findAll125(view, element => element.type === 'Pressable' && textOf(element) === '표지판으로 방향 확인'); assert.equal(buttons.length, 1);
-    for (const [station, line] of [['승차역', '1호선'], ['환승역', '2호선']]) {
-        buttons[0].props.onPress();
-        const sheet = r.renderComponent(timeline);
-        const choice = findElement(sheet, element => element.type === 'Pressable' && !!findText(element, `${station}에서 ${line}`));
-        assert.ok(choice); choice.props.onPress();
-    }
+    const buttons = findAll125(view, element => element.type === 'Pressable' && textOf(element) === '표지판으로 방향 확인'); assert.equal(buttons.length, 2);
+    for (const button of buttons) button.props.onPress();
     assert.deepEqual(r.pushes151.map(href => [href.params.stationId, href.params.lineId, href.params.direction]), [['88001', '1', 'UP'], ['88002', '2', 'OUTER']]); r.unmount();
 });
 
