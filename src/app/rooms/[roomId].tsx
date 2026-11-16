@@ -352,6 +352,15 @@ export default function RoomDetailScreen() {
 
     const chat = useRoomChat(roomId, params.mock);
     const roomScroll = useRef<ScrollView>(null);
+    const [scrollHeight, setScrollHeight] = useState(0);
+    const [tabsHeight, setTabsHeight] = useState(0);
+    const [noticeHeight, setNoticeHeight] = useState(0);
+    const scrollBottomPadding = insets.bottom + (tab === 'chat' ? 12 : 32);
+    // Keep the existing gap above the tabs and between the tabs and panel.
+    const chatPanelHeight = scrollHeight > 0 && tabsHeight > 0
+        ? Math.max(360, scrollHeight - tabsHeight - styles.content.gap * 2 - scrollBottomPadding
+            - (notice ? noticeHeight + styles.content.gap : 0))
+        : undefined;
 
     /** 추천받기·내 출발역 설정: 출발역·조건 입력 화면 (그림 30) */
     const openRecommendations = () => {
@@ -490,11 +499,12 @@ export default function RoomDetailScreen() {
 
             <ScrollView
                 ref={roomScroll}
+                onLayout={({ nativeEvent }) => setScrollHeight(nativeEvent.layout.height)}
                 keyboardShouldPersistTaps="handled"
                 keyboardDismissMode="interactive"
                 contentContainerStyle={[
                     styles.content,
-                    { paddingBottom: insets.bottom + 32 },
+                    { paddingBottom: scrollBottomPadding },
                 ]}
             >
                 <View style={styles.titleBlock}>
@@ -633,7 +643,7 @@ export default function RoomDetailScreen() {
                 </View>
 
                 {/* 채팅 · 후보/투표 */}
-                <View style={styles.tabs}>
+                <View style={styles.tabs} onLayout={({ nativeEvent }) => setTabsHeight(nativeEvent.layout.height)}>
                     {([
                         ['chat', '채팅', 'chatbubble-ellipses-outline'],
                         ['vote', proposals.status === 'ready' ? `약속역 후보 ${proposalItems.length}` : '약속역 후보', 'checkbox-outline'],
@@ -652,6 +662,7 @@ export default function RoomDetailScreen() {
                         myUserId={myUserId}
                         members={detail.members}
                         ownerId={detail.ownerId}
+                        panelHeight={chatPanelHeight}
                         onInputFocus={() => {
                             roomScroll.current?.scrollToEnd({
                                 animated: true,
@@ -684,7 +695,7 @@ export default function RoomDetailScreen() {
                 )}
 
                 {!!notice && (
-                    <View style={styles.notice}>
+                    <View style={styles.notice} onLayout={({ nativeEvent }) => setNoticeHeight(nativeEvent.layout.height)}>
                         <Ionicons name="information-circle-outline" size={18} color={NAVY} />
                         <Text style={styles.noticeText}>{notice}</Text>
                     </View>

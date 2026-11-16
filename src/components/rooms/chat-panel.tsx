@@ -58,16 +58,19 @@ export default function RoomChatPanel({
                                           myUserId,
                                           members,
                                           ownerId,
+                                          panelHeight,
                                           onInputFocus,
                                       }: {
     controller: ReturnType<typeof useRoomChat>;
     myUserId: string;
     members: RoomMember[];
     ownerId?: string;
+    panelHeight?: number;
     onInputFocus?: () => void;
 }) {
     const { height: windowHeight } = useWindowDimensions();
     const listHeight = Math.max(360, windowHeight - 260);
+    const fittedPanelHeight = panelHeight == null ? undefined : Math.max(360, panelHeight);
     const list = useRef<ScrollView>(null);
     const input = useRef<TextInput>(null);
     const nearBottom = useRef(true);
@@ -169,7 +172,7 @@ export default function RoomChatPanel({
 
     if (controller.status !== 'ready') {
         return (
-            <View style={styles.panel}>
+            <View style={[styles.panel, fittedPanelHeight != null && { height: fittedPanelHeight, flexShrink: 0 }]}>
                 <View
                     style={styles.empty}
                     accessibilityLiveRegion="polite"
@@ -208,7 +211,7 @@ export default function RoomChatPanel({
     const messageSenders = new Map(controller.messages.map(message => [message.id, message.senderId]));
 
     return (
-        <View style={styles.panel}>
+        <View style={[styles.panel, fittedPanelHeight != null && { height: fittedPanelHeight, flexShrink: 0 }]}>
             {controller.error && (
                 <View
                     style={styles.errorBox}
@@ -229,7 +232,7 @@ export default function RoomChatPanel({
 
             <ScrollView
                 ref={list}
-                style={[styles.list, { height: listHeight }]}
+                style={[styles.list, fittedPanelHeight != null ? styles.fillList : { height: listHeight }]}
                 contentContainerStyle={styles.listContent}
                 nestedScrollEnabled
                 keyboardShouldPersistTaps="handled"
@@ -600,6 +603,11 @@ const styles = StyleSheet.create({
     list: {
         flexShrink: 0,
     },
+    fillList: {
+        flex: 1,
+        flexShrink: 1,
+        minHeight: 0,
+    },
     listContent: {
         flexGrow: 1,
         gap: 12,
@@ -730,6 +738,7 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     composer: {
+        flexShrink: 0,
         borderTopWidth: 1,
         borderTopColor: '#EEEAF2',
         paddingTop: 12,
