@@ -1,3 +1,4 @@
+import WebModalFrame from '@/components/web-modal-frame';
 import { formatStationName } from '@/utils/station-name';
 import { useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, StyleSheet, View } from 'react-native';
@@ -19,7 +20,6 @@ const BG = '#F7F5FA';
 const SECONDARY = '#83808B';
 const BORDER = '#EEEAF2';
 const RED = '#d6455d';
-const ORANGE = '#c77a00';
 
 export type ProposalState =
     | { status: 'loading' }
@@ -258,55 +258,73 @@ export default function ProposalPanel({
                                     </View>
                                 </Pressable>
 
-                                <Text style={styles.meta} numberOfLines={1}>
-                                    {item.proposedBy.userId === myUserId
-                                        ? '내가 제안'
-                                        : item.proposedBy.nickname === UNKNOWN_PROPOSER_NAME ? `${UNKNOWN_PROPOSER_NAME} 제안` : `${item.proposedBy.nickname}님 제안`}
-                                    {item.resultId ? ' · 추천 결과에서' : ''}
-                                </Text>
-                                {(canDelete || (isOwner && !item.isSelected)) && (
-                                    <View style={styles.actions}>
-                                        {canDelete && (
-                                            <Pressable
-                                                style={styles.deleteButton}
-                                                onPress={() => setDialog({ kind: 'delete', proposal: item })}
-                                                disabled={working}
-                                                accessibilityRole="button"
-                                                accessibilityLabel={`${formatStationName(item.station.name)} 후보 삭제`}
-                                            >
-                                                <Text style={styles.deleteText}>후보 삭제</Text>
-                                            </Pressable>
-                                        )}
-                                        {isOwner && !item.isSelected && (
-                                            <Pressable
-                                                style={[styles.confirmButton, confirmBusy && styles.disabled]}
-                                                onPress={() => onConfirm(item.station)}
-                                                disabled={confirmBusy}
-                                                accessibilityRole="button"
-                                            >
-                                                <Text style={styles.confirmText}>약속역으로 확정</Text>
-                                            </Pressable>
-                                        )}
-                                    </View>
-                                )}
+                                <View style={styles.itemFooter}>
+                                    <Text style={styles.meta} numberOfLines={1}>
+                                        {item.proposedBy.userId === myUserId
+                                            ? '내가 제안'
+                                            : item.proposedBy.nickname === UNKNOWN_PROPOSER_NAME ? `${UNKNOWN_PROPOSER_NAME} 제안` : `${item.proposedBy.nickname}님 제안`}
+                                        {item.resultId ? ' · 추천 결과에서' : ''}
+                                    </Text>
+                                    {(canDelete || (isOwner && !item.isSelected)) && (
+                                        <View style={styles.actions}>
+                                            {canDelete && (
+                                                <Pressable
+                                                    style={styles.deleteButton}
+                                                    onPress={() => setDialog({ kind: 'delete', proposal: item })}
+                                                    disabled={working}
+                                                    accessibilityRole="button"
+                                                    accessibilityLabel={`${formatStationName(item.station.name)} 후보 삭제`}
+                                                >
+                                                    <Text style={styles.deleteText}>삭제</Text>
+                                                </Pressable>
+                                            )}
+                                            {isOwner && !item.isSelected && (
+                                                <Pressable
+                                                    style={[styles.confirmButton, confirmBusy && styles.disabled]}
+                                                    onPress={() => onConfirm(item.station)}
+                                                    disabled={confirmBusy}
+                                                    accessibilityRole="button"
+                                                >
+                                                    <Text style={styles.confirmText}>약속역으로 확정</Text>
+                                                </Pressable>
+                                            )}
+                                        </View>
+                                    )}
+                                </View>
                             </View>
                         );
                     })}
 
-                    <Text style={styles.voteHint}>
-                        {myVote
-                            ? '투표를 마쳤어요. 변경·취소할 수 없고 결과는 참고용이에요'
-                            : '후보를 눌러 투표해요. 1인 1표이고 투표 후에는 바꾸거나 취소할 수 없어요'}
-                    </Text>
                 </View>
             )}
+            <View style={styles.guidance}>
+                <Ionicons name="information-circle-outline" size={16} color={MINT_DEEP} />
+                <View style={styles.guidanceBody}>
+                    {items.length > 0 && (
+                        <Text style={styles.voteHint}>
+                            {myVote
+                                ? '투표를 마쳤어요. 변경·취소할 수 없고 결과는 참고용이에요'
+                                : '후보를 눌러 투표해요. 1인 1표이고 투표 후에는 바꾸거나 취소할 수 없어요'}
+                        </Text>
+                    )}
+                    <Text style={styles.roleHint}>
+                        {isOwner
+                            ? '투표는 참고용이에요. 가장 많이 받은 후보도 자동으로 확정되지 않으니, 방장이 직접 확정해 주세요.'
+                            : '방장이 최종 확정할 수 있어요. 내가 제안한 후보만 삭제할 수 있어요.'}
+                    </Text>
+                </View>
+            </View>
 
-            {/* 그림 39 ❹ / 그림 38 ❹ 권한 안내 */}
-            <Text style={styles.roleHint}>
-                {isOwner
-                    ? '투표는 참고용이에요. 가장 많이 받은 후보도 자동으로 확정되지 않으니, 방장이 직접 확정해 주세요.'
-                    : '방장이 최종 확정할 수 있어요. 내가 제안한 후보만 삭제할 수 있어요.'}
-            </Text>
+            {notice && (
+                <View style={[styles.notice, notice.tone === 'error' && styles.noticeError]}>
+                    <Ionicons
+                        name={notice.tone === 'error' ? 'warning-outline' : 'information-circle-outline'}
+                        size={16}
+                        color={notice.tone === 'error' ? RED : MINT_DEEP}
+                    />
+                    <Text style={[styles.noticeText, notice.tone === 'error' && styles.noticeTextError]}>{notice.text}</Text>
+                </View>
+            )}
 
             {/* 후보 제안 */}
             <View style={styles.proposeRow}>
@@ -327,54 +345,45 @@ export default function ProposalPanel({
             </View>
             {full && (
                 <View style={styles.warnBox}>
-                    <Ionicons name="alert-circle-outline" size={16} color={ORANGE} />
+                    <Ionicons name="information-circle-outline" size={16} color={MINT_DEEP} />
                     <Text style={styles.warnText}>후보는 방당 {max}개까지예요. 후보를 지운 뒤 새로 제안할 수 있어요.</Text>
-                </View>
-            )}
-
-            {notice && (
-                <View style={[styles.notice, notice.tone === 'error' && styles.noticeError]}>
-                    <Ionicons
-                        name={notice.tone === 'error' ? 'warning-outline' : 'checkmark-circle-outline'}
-                        size={17}
-                        color={notice.tone === 'error' ? RED : MINT_DEEP}
-                    />
-                    <Text style={[styles.noticeText, notice.tone === 'error' && styles.noticeTextError]}>{notice.text}</Text>
                 </View>
             )}
 
             {/* 투표 · 삭제 확인 시트 */}
             <Modal transparent animationType="fade" visible={!!dialog} onRequestClose={() => !working && setDialog(null)}>
-                <View style={styles.backdrop}>
-                    <Pressable style={StyleSheet.absoluteFill} onPress={() => !working && setDialog(null)} accessibilityLabel="닫기" />
-                    {dialog && (
-                        <View style={styles.sheet}>
-                            <View style={styles.grabber} />
-                            <View style={[styles.sheetIcon, dialog.kind === 'delete' && styles.sheetIconDanger]}>
-                                <Ionicons name={dialog.kind === 'vote' ? 'checkbox-outline' : 'trash-outline'} size={22} color={dialog.kind === 'vote' ? MINT_DEEP : RED} />
+                <WebModalFrame>
+                    <View style={styles.backdrop}>
+                        <Pressable style={StyleSheet.absoluteFill} onPress={() => !working && setDialog(null)} accessibilityLabel="닫기" />
+                        {dialog && (
+                            <View style={styles.sheet}>
+                                <View style={styles.grabber} />
+                                <View style={[styles.sheetIcon, dialog.kind === 'delete' && styles.sheetIconDanger]}>
+                                    <Ionicons name={dialog.kind === 'vote' ? 'checkbox-outline' : 'trash-outline'} size={22} color={dialog.kind === 'vote' ? MINT_DEEP : RED} />
+                                </View>
+                                <Text style={styles.sheetTitle}>
+                                    {dialog.kind === 'vote' ? `${formatStationName(dialog.proposal.station.name)}에 투표할까요?` : `${formatStationName(dialog.proposal.station.name)} 후보를 삭제할까요?`}
+                                </Text>
+                                <Text style={styles.sheetBody}>{dialogBody(dialog)}</Text>
+                                <View style={styles.sheetActions}>
+                                    <Pressable style={styles.sheetCancel} onPress={() => setDialog(null)} disabled={working} accessibilityRole="button">
+                                        <Text style={styles.sheetCancelText}>취소</Text>
+                                    </Pressable>
+                                    <Pressable
+                                        style={[styles.sheetPrimary, dialog.kind === 'delete' && styles.sheetDanger]}
+                                        onPress={runDialog}
+                                        disabled={working}
+                                        accessibilityRole="button"
+                                    >
+                                        {working ? <ActivityIndicator color={WHITE} /> : (
+                                            <Text style={styles.sheetPrimaryText}>{dialog.kind === 'vote' ? '투표하기' : '삭제'}</Text>
+                                        )}
+                                    </Pressable>
+                                </View>
                             </View>
-                            <Text style={styles.sheetTitle}>
-                                {dialog.kind === 'vote' ? `${formatStationName(dialog.proposal.station.name)}에 투표할까요?` : `${formatStationName(dialog.proposal.station.name)} 후보를 삭제할까요?`}
-                            </Text>
-                            <Text style={styles.sheetBody}>{dialogBody(dialog)}</Text>
-                            <View style={styles.sheetActions}>
-                                <Pressable style={styles.sheetCancel} onPress={() => setDialog(null)} disabled={working} accessibilityRole="button">
-                                    <Text style={styles.sheetCancelText}>취소</Text>
-                                </Pressable>
-                                <Pressable
-                                    style={[styles.sheetPrimary, dialog.kind === 'delete' && styles.sheetDanger]}
-                                    onPress={runDialog}
-                                    disabled={working}
-                                    accessibilityRole="button"
-                                >
-                                    {working ? <ActivityIndicator color={WHITE} /> : (
-                                        <Text style={styles.sheetPrimaryText}>{dialog.kind === 'vote' ? '투표하기' : '삭제'}</Text>
-                                    )}
-                                </Pressable>
-                            </View>
-                        </View>
-                    )}
-                </View>
+                        )}
+                    </View>
+                </WebModalFrame>
             </Modal>
         </View>
     );
@@ -434,23 +443,26 @@ const styles = StyleSheet.create({
     barFill: { height: 8, borderRadius: 4, backgroundColor: MINT_DEEP },
     barLead: { backgroundColor: MINT_DEEP },
     votes: { width: 34, textAlign: 'right', fontSize: 14, fontWeight: '800', color: NAVY },
-    meta: { marginLeft: 34, fontSize: 12, fontWeight: '600', color: SECONDARY },
-    actions: { marginLeft: 34, flexDirection: 'row', justifyContent: 'flex-end', gap: 6 },
-    deleteButton: { height: 30, paddingHorizontal: 10, borderRadius: 15, borderWidth: 1, borderColor: '#D9CCE4', backgroundColor: WHITE, justifyContent: 'center' },
-    deleteText: { fontSize: 12, fontWeight: '700', color: MINT_DEEP },
-    confirmButton: { height: 30, paddingHorizontal: 10, borderRadius: 15, backgroundColor: MINT_DEEP, justifyContent: 'center' },
+    itemFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+    meta: { flex: 1, minWidth: 0, fontSize: 12, fontWeight: '600', color: SECONDARY },
+    actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 14 },
+    deleteButton: { minHeight: 32, justifyContent: 'center' },
+    deleteText: { fontSize: 12, fontWeight: '600', color: '#A8A3B0' },
+    confirmButton: { height: 32, paddingHorizontal: 14, borderRadius: 16, backgroundColor: MINT_DEEP, justifyContent: 'center' },
     confirmText: { fontSize: 12, fontWeight: '800', color: WHITE },
-    voteHint: { fontSize: 12, lineHeight: 17, fontWeight: '600', color: SECONDARY },
-    roleHint: { fontSize: 12.5, lineHeight: 18, fontWeight: '600', color: SECONDARY },
+    guidance: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, padding: 11, borderRadius: 12, backgroundColor: '#F4F1F7' },
+    guidanceBody: { flex: 1, gap: 4 },
+    voteHint: { fontSize: 12.5, lineHeight: 18, fontWeight: '600', color: '#6F6B78' },
+    roleHint: { fontSize: 12.5, lineHeight: 18, fontWeight: '600', color: '#6F6B78' },
 
     proposeRow: { flexDirection: 'row', gap: 8 },
     proposeButton: { flex: 1, height: 46, borderRadius: 23, borderWidth: 1.5, borderColor: '#D9CCE4', backgroundColor: WHITE, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
     proposeText: { fontSize: 14, fontWeight: '800', color: MINT_DEEP },
     recommendButton: { flex: 1, height: 46, borderRadius: 23, backgroundColor: MINT_DEEP, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
     recommendText: { fontSize: 14, fontWeight: '800', color: WHITE },
-    warnBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, padding: 11, borderRadius: 12, backgroundColor: '#fff4e0' },
-    warnText: { flex: 1, fontSize: 12.5, lineHeight: 18, fontWeight: '600', color: SECONDARY },
-    notice: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, padding: 11, borderRadius: 12, backgroundColor: MINT_SOFT },
+    warnBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#F4F1F7' },
+    warnText: { flex: 1, fontSize: 12, lineHeight: 18, fontWeight: '600', color: '#6F6B78' },
+    notice: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, padding: 11, borderRadius: 12, backgroundColor: '#F4F1F7' },
     noticeError: { backgroundColor: '#fdecef' },
     noticeText: { flex: 1, fontSize: 12.5, lineHeight: 18, fontWeight: '600', color: MINT_DEEP },
     noticeTextError: { color: RED },
@@ -463,9 +475,9 @@ const styles = StyleSheet.create({
     sheetTitle: { fontSize: 18, fontWeight: '800', color: NAVY, letterSpacing: -0.3 },
     sheetBody: { fontSize: 13.5, lineHeight: 20, fontWeight: '500', color: SECONDARY },
     sheetActions: { flexDirection: 'row', gap: 10, marginTop: 6 },
-    sheetCancel: { flex: 1, height: 52, borderRadius: 16, borderWidth: 1, borderColor: BORDER, alignItems: 'center', justifyContent: 'center' },
-    sheetCancelText: { fontSize: 15, fontWeight: '700', color: NAVY },
-    sheetPrimary: { flex: 1.4, height: 52, borderRadius: 16, backgroundColor: MINT_DEEP, alignItems: 'center', justifyContent: 'center' },
+    sheetCancel: { flex: 1, height: 52, borderRadius: 26, backgroundColor: MINT_SOFT, alignItems: 'center', justifyContent: 'center' },
+    sheetCancelText: { fontSize: 15, fontWeight: '700', color: MINT_DEEP },
+    sheetPrimary: { flex: 1.4, height: 52, borderRadius: 26, backgroundColor: MINT_DEEP, alignItems: 'center', justifyContent: 'center' },
     sheetDanger: { backgroundColor: RED },
     sheetPrimaryText: { fontSize: 15, fontWeight: '800', color: WHITE },
 });
