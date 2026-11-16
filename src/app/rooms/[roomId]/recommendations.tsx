@@ -68,8 +68,8 @@ const LV_CARD_BORDER = '#EEEAF2';
 const LV_DIVIDER = '#F3F0F6';
 const LV_FIELD_BORDER = '#E8E4ED';
 const LV_TAG_BG = '#F1EEF4';
-const LV_DISABLED = '#CFC8D8';
-const LV_WARN = '#C0612F';
+const LV_DISABLED = '#CFC6DA';
+const LV_WARN = '#6F6B78';
 const LV_ERROR = '#C2415B';
 const LV_ERROR_SOFT = '#FBECEF';
 const LV_PLACEHOLDER = '#B3AFBA';
@@ -80,8 +80,8 @@ const LV_BAR_TRACK = '#F4F1F7';
 const LV_CHIP_BORDER = '#D9CCE4';
 const LV_ROW_BORDER = '#EFEBF3';
 const LV_CHEVRON = '#B4AFBC';
-const LV_STALE_SOFT = '#FBF1E8';
-const LV_STALE_TEXT = '#9A5022';
+const LV_STALE_SOFT = '#F4F1F7';
+const LV_STALE_TEXT = '#6F6B78';
 /** 나는 'me', 다른 참여자는 이 순서로 돌려 써요 (캐릭터 줄과 참여자 목록이 같은 색) */
 const OTHER_TONES: PassengerTone[] = ['other', 'pink', 'sky', 'mint'];
 
