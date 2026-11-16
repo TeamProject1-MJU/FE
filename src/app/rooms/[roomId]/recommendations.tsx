@@ -54,6 +54,7 @@ import { RoomError, type RoomDetail, type RoomMember, type StationProposalList }
 import { roomEventsScope, useRoomEvents } from '@/hooks/use-room-events';
 import { mergeRoomUpdated, parseSelectedStationEvent, recommendationEventAction } from '@/services/room-events';
 import { getRoomCacheScope, removeCachedRoom } from '@/services/room-cache';
+import { ROOM_CARD_PADDING } from '@/constants/layout';
 
 const WHITE = '#ffffff';
 
@@ -606,7 +607,7 @@ export default function RoomRecommendationsScreen() {
                         </View>
 
                         {/* ❺ 추천 기준 (시안에 없지만 유지) */}
-                        <Text style={[lv.sectionTitle, lv.sectionGap]}>추천 기준</Text>
+                        <Text style={[lv.sectionTitle, lv.sectionGap, lv.textInset]}>추천 기준</Text>
                         <Text style={lv.sectionSub}>세 기준 모두 계산되고, 선택한 기준을 먼저 보여드려요</Text>
                         <View style={lv.segment}>
                             {CRITERIA.map(item => {
@@ -1072,14 +1073,15 @@ const styles = StyleSheet.create({
     headerTitle: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: LV_TEXT, letterSpacing: -0.3 },
     content: { paddingTop: 4, paddingHorizontal: 20 },
 
-    sectionTitle: { fontSize: 15, fontWeight: '700', color: LV_TEXT, marginTop: 22, marginBottom: 10 },
-    subSectionTitle: { fontSize: 14, fontWeight: '700', color: LV_TEXT, marginTop: 20 },
-    sectionSub: { fontSize: 12, color: LV_GRAY, marginTop: 2, marginBottom: 8 },
+    // #224 글자 줄 맞춤: 카드 밖 글자 줄은 카드 안쪽 여백만큼 들여요.
+    sectionTitle: { fontSize: 15, fontWeight: '700', color: LV_TEXT, marginTop: 22, marginBottom: 10, paddingHorizontal: ROOM_CARD_PADDING },
+    subSectionTitle: { fontSize: 14, fontWeight: '700', color: LV_TEXT, marginTop: 20, paddingHorizontal: ROOM_CARD_PADDING },
+    sectionSub: { fontSize: 12, color: LV_GRAY, marginTop: 2, marginBottom: 8, paddingHorizontal: ROOM_CARD_PADDING },
 
     lineDot: { paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
     lineDotText: { color: WHITE, fontWeight: '700' },
 
-    summary: { fontSize: 12.5, color: LV_GRAY, marginTop: 6 },
+    summary: { fontSize: 12.5, color: LV_GRAY, marginTop: 6, paddingHorizontal: ROOM_CARD_PADDING },
     newBox: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10, paddingVertical: 10, paddingLeft: 14, paddingRight: 10, borderRadius: 12, backgroundColor: LV_SOFT },
     newTitle: { flex: 1, fontSize: 13, fontWeight: '600', color: LV_PURPLE },
     prevBox: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, paddingVertical: 11, paddingHorizontal: 14, borderRadius: 12, backgroundColor: LV_SOFT },
@@ -1091,7 +1093,7 @@ const styles = StyleSheet.create({
     smallButton: { height: 34, paddingHorizontal: 12, borderRadius: 10, backgroundColor: LV_PURPLE, alignItems: 'center', justifyContent: 'center' },
     smallButtonOff: { backgroundColor: LV_DISABLED },
     smallButtonText: { fontSize: 12.5, fontWeight: '600', color: WHITE },
-    freshRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8 },
+    freshRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8, paddingHorizontal: ROOM_CARD_PADDING },
     freshText: { flexShrink: 1, fontSize: 12, color: LV_GRAY },
 
     understoodBox: { marginTop: 12, padding: 14, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, gap: 8 },
@@ -1128,7 +1130,7 @@ const styles = StyleSheet.create({
     metricLabel: { fontSize: 11.5, color: LV_GRAY },
     metricValue: { fontSize: 18, fontWeight: '700', color: LV_TEXT, marginTop: 3 },
     metricAccent: { color: LV_PURPLE },
-    estimateNote: { fontSize: 11.5, lineHeight: 16, color: LV_GRAY, marginTop: 6 },
+    estimateNote: { fontSize: 11.5, lineHeight: 16, color: LV_GRAY, marginTop: 6, paddingHorizontal: ROOM_CARD_PADDING },
 
     participants: { backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, borderRadius: 18, paddingTop: 12, paddingHorizontal: 14, paddingBottom: 6 },
     participant: { paddingVertical: 8 },
@@ -1171,7 +1173,7 @@ const styles = StyleSheet.create({
     nearbyTag: { fontSize: 11, color: LV_PURPLE, marginLeft: 22 },
 
     otherTitle: { marginBottom: 4 },
-    otherRow: { flexDirection: 'row', alignItems: 'center', gap: 10, height: 48, borderBottomWidth: 1, borderBottomColor: LV_ROW_BORDER },
+    otherRow: { flexDirection: 'row', alignItems: 'center', gap: 10, height: 48, paddingHorizontal: ROOM_CARD_PADDING, borderBottomWidth: 1, borderBottomColor: LV_ROW_BORDER },
     otherLabel: { width: 64, fontSize: 12.5, color: LV_GRAY },
     otherStation: { flex: 1, fontSize: 15, fontWeight: '600', color: LV_TEXT },
     otherMax: { fontSize: 13, color: LV_SUBTEXT },
@@ -1198,14 +1200,16 @@ const lv = StyleSheet.create({
     headerRoom: { flex: 1, fontSize: 15, color: LV_GRAY, marginRight: 12 },
     content: { paddingTop: 6, paddingHorizontal: 20 },
 
-    title: { fontSize: 24, fontWeight: '800', letterSpacing: -0.5, color: LV_TEXT },
-    desc: { fontSize: 13.5, color: LV_GRAY, marginTop: 6 },
+    // #224 글자 줄 맞춤: 카드 밖 제목·섹션 제목·안내 문구는 카드 안쪽 여백만큼 들여요.
+    textInset: { paddingHorizontal: ROOM_CARD_PADDING },
+    title: { fontSize: 24, fontWeight: '800', letterSpacing: -0.5, color: LV_TEXT, paddingHorizontal: ROOM_CARD_PADDING },
+    desc: { fontSize: 13.5, color: LV_GRAY, marginTop: 6, paddingHorizontal: ROOM_CARD_PADDING },
     crowd: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'center', gap: 2, height: 84, marginTop: 18, marginBottom: 4, paddingBottom: 10, borderRadius: 18, backgroundColor: LV_SOFT, overflow: 'hidden' },
 
-    sectionHead: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginTop: 20, marginBottom: 6 },
+    sectionHead: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginTop: 20, marginBottom: 6, paddingHorizontal: ROOM_CARD_PADDING },
     sectionGap: { marginTop: 22 },
     sectionTitle: { fontSize: 15, fontWeight: '700', color: LV_TEXT },
-    sectionSub: { fontSize: 12.5, color: LV_GRAY, marginTop: 2, marginBottom: 8 },
+    sectionSub: { fontSize: 12.5, color: LV_GRAY, marginTop: 2, marginBottom: 8, paddingHorizontal: ROOM_CARD_PADDING },
     optional: { fontSize: 13, fontWeight: '400', color: LV_GRAY },
     counter: { fontSize: 13, fontWeight: '600', color: LV_WARN },
     counterDone: { color: LV_PURPLE },
@@ -1238,7 +1242,7 @@ const lv = StyleSheet.create({
     quickChipOn: { backgroundColor: LV_PURPLE, borderColor: LV_PURPLE },
     quickText: { fontSize: 13, fontWeight: '600', color: LV_PURPLE },
     quickTextOn: { color: WHITE },
-    hint: { fontSize: 12, lineHeight: 18, color: LV_GRAY, marginTop: 6 },
+    hint: { fontSize: 12, lineHeight: 18, color: LV_GRAY, marginTop: 6, paddingHorizontal: ROOM_CARD_PADDING },
 
     warnBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 14, backgroundColor: LV_WARN_SOFT, marginTop: 14 },
     warnText: { flex: 1, fontSize: 12.5, lineHeight: 19, fontWeight: '600', color: LV_WARN },

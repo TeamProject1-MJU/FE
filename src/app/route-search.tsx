@@ -36,6 +36,7 @@ import {
     type RouteTimeSelection,
     type StationSummary,
 } from '@/types/route';
+import { CARD_PADDING } from '@/constants/layout';
 
 // 라벤더 시안(#184) — 상단 제목·출발/도착 입력·빈 상태·결과 영역에 써요.
 const LV_BACKGROUND = '#F7F5FA';
@@ -727,6 +728,8 @@ const styles = StyleSheet.create({
     // 시안(#184)의 아래 안내 문구 자리 — 글자만 있어요.
     supportNote: {
         marginTop: 22,
+        // #224 글자 줄 맞춤: 카드 안 글자 시작선에 맞춰요.
+        paddingHorizontal: CARD_PADDING,
         color: LV_SECONDARY,
         fontSize: 12,
         lineHeight: 19.2,
