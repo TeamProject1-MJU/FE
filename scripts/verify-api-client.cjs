@@ -6440,6 +6440,68 @@ test('125 경로 정보가 없으면 안내와 경로 검색 버튼, 있으면 �
     assert.equal(chipText(partial.render()), '사당 방면'); partial.unmount();
 });
 
+/* ---------- #250 표지판 확인 사진 카드와 전체 스캔 ---------- */
+
+const photoChange250 = view => findElement(view, e => e.props?.accessibilityLabel === '사진 바꾸기');
+const corner250 = view => findElement(view, e => e.type?.name === 'Corner');
+/** 사진 고르기 화면(카메라·갤러리)을 연 횟수를 세요. */
+function countPicker250(r) {
+    const picker = r.external['expo-image-picker']; const opened = { camera: 0, gallery: 0 };
+    const camera = picker.launchCameraAsync; const gallery = picker.launchImageLibraryAsync;
+    picker.launchCameraAsync = (...args) => { opened.camera++; return camera(...args); };
+    picker.launchImageLibraryAsync = (...args) => { opened.gallery++; return gallery(...args); };
+    return opened;
+}
+
+test('250 사진이 없으면 사진 카드 없이 촬영 프레임을, 사진이 있으면 선택한 사진 카드와 바꾸기를 보여줘요', async () => {
+    const r = await directionScreen125(); let view = r.render();
+    assert.equal(texts125(view).includes('선택한 사진'), false); assert.equal(photoChange250(view), null);
+    assert.equal(photoUri125(view), null); assert.ok(corner250(view), '사진이 없으면 촬영 프레임 그대로');
+    view = await r.press('표지판 촬영');
+    assert.equal(photoUri125(view), OUTPUT125);
+    const photo = findElement(view, e => e.type === 'Image' && e.props.accessibilityLabel === '선택한 표지판 사진');
+    assert.equal(photo.props.resizeMode, 'contain', '사진은 자르지 않아요');
+    assert.ok(texts125(view).includes('선택한 사진')); assert.ok(texts125(view).includes('바꾸기'));
+    const change = photoChange250(view);
+    assert.equal(change.props.accessibilityRole, 'button'); assert.equal(change.props.disabled, false);
+    assert.equal(corner250(view), null, '사진 카드에는 모서리 표시가 없어요');
+    assert.equal(texts125(view).includes('선택한 사진이에요'), false, '사진 카드에는 안내 칩이 없어요');
+    // 결과가 나오면 사진을 정리하므로 카드도 사라져요.
+    r.respond(async () => jsonResponse({ success: true, data: directionData114() })); view = await r.press('AI로 확인하기');
+    assert.ok(texts125(view).includes('맞는 방향이에요'));
+    assert.equal(photoChange250(view), null); assert.equal(texts125(view).includes('선택한 사진'), false); assert.ok(corner250(view));
+    r.unmount();
+});
+
+test('250 바꾸기는 마지막으로 고른 방법(촬영이면 카메라, 갤러리면 갤러리)을 다시 열어요', async () => {
+    for (const [first, expected] of [['표지판 촬영', 'camera'], ['갤러리 선택', 'gallery']]) {
+        const r = await directionScreen125(); const opened = countPicker250(r);
+        await r.press(first); assert.deepEqual({ ...opened }, { camera: expected === 'camera' ? 1 : 0, gallery: expected === 'gallery' ? 1 : 0 });
+        photoChange250(r.render()).props.onPress(); const view = await r.pump();
+        assert.deepEqual({ ...opened }, { camera: expected === 'camera' ? 2 : 0, gallery: expected === 'gallery' ? 2 : 0 }, `${first} 뒤 바꾸기`);
+        assert.equal(photoUri125(view), OUTPUT125); assert.ok(photoChange250(view)); r.unmount();
+    }
+    // 촬영한 뒤 갤러리로 바꾸면, 그다음 바꾸기는 갤러리를 열어요.
+    const r = await directionScreen125(); const opened = countPicker250(r);
+    await r.press('표지판 촬영'); await r.press('갤러리 선택');
+    photoChange250(r.render()).props.onPress(); await r.pump();
+    assert.deepEqual({ ...opened }, { camera: 1, gallery: 2 }); r.unmount();
+});
+
+test('250 분석 중에는 바꾸기가 잠기고 사진 상자 높이를 받은 스캔선을 보여주며, 재시도 오류 뒤에도 사진 카드가 남아요', async () => {
+    const r = await directionScreen125(); await r.press('표지판 촬영'); const opened = countPicker250(r);
+    const finish = r.hold(); r.button('AI로 확인하기').props.onPress(); await settle();
+    let view = r.render();
+    const change = photoChange250(view); assert.equal(change.props.disabled, true); assert.deepEqual(plain(change.props.accessibilityState), { disabled: true });
+    change.props.onPress(); await r.pump(); assert.deepEqual({ ...opened }, { camera: 0, gallery: 0 }, '분석 중에는 사진을 다시 고르지 않아요');
+    const scan = findElement(view, e => e.type?.name === 'ScanLine');
+    assert.ok(scan); assert.equal(typeof scan.props.height, 'number', '사진 상자 높이를 넘겨요');
+    finish(await failure125('AI_UNAVAILABLE')()); view = await r.pump();
+    assert.equal(alertText125(view), SERVER_ERROR_TEXT125.AI_UNAVAILABLE); assert.equal(photoUri125(view), OUTPUT125);
+    assert.equal(findElement(view, e => e.type?.name === 'ScanLine'), null);
+    assert.equal(photoChange250(view).props.disabled, false); assert.ok(texts125(view).includes('선택한 사진')); r.unmount();
+});
+
 /*
  * 이 검사는 #125 에서 서버 모드 화면을 고치는 동안 mock 화면(트리·실제 적용 스타일·동작)이 바뀌지 않았음을
  * 확인하려고 넣었어요. mock 화면이나 공통 부품(ActionButton·StatusTitle·Cell·styles 등)을 일부러 바꿀 때는

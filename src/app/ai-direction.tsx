@@ -1,7 +1,7 @@
 import { formatStationName } from '@/utils/station-name';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { ActivityIndicator, Alert, Animated, Easing, Image, Linking, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Alert, Animated, Easing, Image, Linking, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/app-text';
 import * as ImagePicker from 'expo-image-picker';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
@@ -38,6 +38,10 @@ const WHITE = '#ffffff';
 const SECONDARY = '#83808B';
 const BORDER = '#EEEAF2';
 const BACKGROUND = '#F7F5FA';
+const PHOTO_BG = '#EDE8F3';
+/** 스캔선 굵기(styles.scanLine 의 height)와 선을 따라 움직이는 옅은 띠 높이 */
+const SCAN_LINE_HEIGHT = 3;
+const SCAN_BAND_HEIGHT = 56;
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -140,6 +144,24 @@ function ServerDirectionScreen() {
     const temporary = useRef(new Set<string>());
     /** 사진을 고른 계정 세대. 계정이 바뀌면 유지하던 사진으로 다시 보내지 않아요. */
     const photoGeneration = useRef(-1);
+    /** 마지막으로 사진을 고른 방법(true 면 촬영). 사진 카드의 '바꾸기'가 같은 방법을 다시 열어요. */
+    const lastPickCamera = useRef(true);
+    /** 사진 카드: 사진 가로세로 비율(구하기 전이나 실패하면 4:3)과 사진 상자 크기 */
+    const [photoRatio, setPhotoRatio] = useState<{ uri: string; ratio: number } | null>(null);
+    const [photoBox, setPhotoBox] = useState({ width: 0, height: 0 });
+    const photoUri = photo?.uri ?? null;
+    useEffect(() => {
+        if (!photoUri) return;
+        let alive = true;
+        try {
+            Image.getSize(photoUri, (width, height) => {
+                if (alive && width > 0 && height > 0) setPhotoRatio({ uri: photoUri, ratio: width / height });
+            }, () => { /* 비율을 못 구하면 4:3 으로 보여줘요. */ });
+        } catch { /* 비율을 못 구하면 4:3 으로 보여줘요. */ }
+        return () => { alive = false; };
+    }, [photoUri]);
+    const ratio = photoRatio && photoRatio.uri === photoUri ? photoRatio.ratio : 4 / 3;
+    const photoBoxHeight = photoBox.width > 0 ? Math.min(400, Math.max(180, photoBox.width / ratio)) : 260;
     const clean = useCallback(() => {
         for (const uri of temporary.current) {
             try { const file = new File(uri); if (file.exists) file.delete(); temporary.current.delete(uri); } catch { /* Retry cleanup at the next lifecycle boundary. */ }
@@ -158,6 +180,7 @@ function ServerDirectionScreen() {
     };
     const pick = async (camera: boolean) => {
         if (inFlight.current || !validRoute) return;
+        lastPickCamera.current = camera;
         // 새 사진을 고르면 유지하던 사진과 임시 파일을 먼저 정리해요.
         inFlight.current = true; setBusy('pick'); setError(null); setData(null); setPhoto(null); clean();
         const id = ++requestId.current;
@@ -281,12 +304,40 @@ function ServerDirectionScreen() {
                     </View>
                 )}
 
-                {/* 사진 영역 */}
+                {/* 사진 영역: 사진이 있으면 흰 카드에 사진 전체를 보여주고, 없으면 촬영 프레임을 보여줘요. */}
+                {photo ? (
+                    <View style={styles.photoCard}>
+                        <View
+                            style={[styles.photoBox, { height: photoBoxHeight }]}
+                            onLayout={event => {
+                                const { width, height } = event.nativeEvent.layout;
+                                setPhotoBox(previous => (previous.width === width && previous.height === height ? previous : { width, height }));
+                            }}
+                        >
+                            <Image source={{ uri: photo.uri }} style={styles.serverPhoto} resizeMode="contain" accessibilityLabel="선택한 표지판 사진" />
+                            {stage === 'analyzing' && <ScanLine height={photoBox.height} />}
+                        </View>
+                        <View style={styles.photoMeta}>
+                            <View style={styles.photoMetaIcon}>
+                                <Ionicons name="image-outline" size={16} color={PURPLE} />
+                            </View>
+                            <Text style={styles.photoMetaText}>선택한 사진</Text>
+                            <Pressable
+                                style={({ pressed }) => [styles.photoChange, pressed && styles.pressed, locked && styles.disabled]}
+                                onPress={() => { void pick(lastPickCamera.current); }}
+                                disabled={locked}
+                                accessibilityRole="button"
+                                accessibilityLabel="사진 바꾸기"
+                                accessibilityState={locked ? { disabled: true } : undefined}
+                            >
+                                <Text style={styles.photoChangeText}>바꾸기</Text>
+                            </Pressable>
+                        </View>
+                    </View>
+                ) : (
                 <View style={styles.serverCamera}>
                     <View style={styles.frame}>
-                        {photo ? (
-                            <Image source={{ uri: photo.uri }} style={styles.serverPhoto} resizeMode="contain" accessibilityLabel="선택한 표지판 사진" />
-                        ) : stage === 'result' && data ? (
+                        {stage === 'result' && data ? (
                             <Ionicons name={RESULT_LOOK[data.result].icon} size={58} color={RESULT_LOOK[data.result].color} />
                         ) : (
                             <Ionicons name={stage === 'route' ? 'map-outline' : 'scan-outline'} size={54} color="rgba(92,63,120,0.3)" />
@@ -302,6 +353,7 @@ function ServerDirectionScreen() {
                         <Text style={[styles.guideText, styles.shrink]}>{guideText}</Text>
                     </View>
                 </View>
+                )}
 
                 {/* 아래 패널 */}
                 <View style={[styles.serverPanel, (stage === 'idle' || stage === 'picking' || stage === 'analyzing') && styles.capturePanel, { paddingBottom: insets.bottom + 24 }]}>
@@ -902,16 +954,44 @@ function Corner({ position }: { position: 'topLeft' | 'topRight' | 'bottomLeft' 
     return <View style={[styles.corner, styles[position]]} />;
 }
 
-function ScanLine() {
+/**
+ * 분석 중 스캔선. height 를 넘기면(서버 사진 카드) 사진 상자 맨 위에서 맨 아래까지 오르내리고,
+ * 넘기지 않으면(mock 화면) 가운데 ±70 을 위에서 아래로 반복해요. 동작 줄이기가 켜져 있으면 가운데에 멈춰요.
+ */
+function ScanLine({ height }: { height?: number }) {
     const progress = useRef(new Animated.Value(0)).current;
+    const [reduceMotion, setReduceMotion] = useState(false);
+    const sweep = height !== undefined;
 
     useEffect(() => {
-        const loop = Animated.loop(
-            Animated.timing(progress, { toValue: 1, duration: 1300, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        );
+        let alive = true;
+        AccessibilityInfo.isReduceMotionEnabled().then(value => { if (alive) setReduceMotion(value); }, () => {});
+        const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', value => setReduceMotion(value));
+        return () => { alive = false; subscription.remove(); };
+    }, []);
+
+    useEffect(() => {
+        if (reduceMotion) { progress.setValue(0.5); return; }
+        progress.setValue(0);
+        const move = (toValue: number, duration: number) =>
+            Animated.timing(progress, { toValue, duration, easing: Easing.inOut(Easing.ease), useNativeDriver: true });
+        const loop = Animated.loop(sweep ? Animated.sequence([move(1, 1400), move(0, 1400)]) : move(1, 1300));
         loop.start();
         return () => loop.stop();
-    }, [progress]);
+    }, [progress, reduceMotion, sweep]);
+
+    if (sweep) {
+        const travel = Math.max(0, height - SCAN_LINE_HEIGHT);
+        const lineY = progress.interpolate({ inputRange: [0, 1], outputRange: [0, travel] });
+        const bandY = progress.interpolate({ inputRange: [0, 1], outputRange: [(SCAN_LINE_HEIGHT - SCAN_BAND_HEIGHT) / 2, travel + (SCAN_LINE_HEIGHT - SCAN_BAND_HEIGHT) / 2] });
+        return (
+            <View style={styles.scanLayer} pointerEvents="none">
+                <View style={styles.scanVeil} />
+                <Animated.View style={[styles.scanBand, { transform: [{ translateY: bandY }] }]} />
+                <Animated.View style={[styles.scanLine, styles.scanLineFull, { transform: [{ translateY: lineY }] }]} />
+            </View>
+        );
+    }
 
     return (
         <Animated.View
@@ -1485,6 +1565,90 @@ const styles = StyleSheet.create({
         right: 0,
         bottom: 0,
         left: 0,
+    },
+
+    /* 사진 카드 (#250): 사진이 있을 때 촬영 프레임 대신 보여줘요. */
+    photoCard: {
+        marginHorizontal: 20,
+        marginTop: 20,
+        marginBottom: 24,
+        padding: 8,
+        borderRadius: 24,
+        borderWidth: 1,
+        borderColor: BORDER,
+        backgroundColor: WHITE,
+        boxShadow: '0px 6px 18px rgba(92,63,120,0.08)',
+    },
+
+    photoBox: {
+        width: '100%',
+        borderRadius: 18,
+        overflow: 'hidden',
+        backgroundColor: PHOTO_BG,
+    },
+
+    photoMeta: {
+        marginTop: 8,
+        minHeight: 48,
+        paddingHorizontal: 8,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+    },
+
+    photoMetaIcon: {
+        width: 32,
+        height: 32,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: PHOTO_BG,
+    },
+
+    photoMetaText: {
+        flex: 1,
+        color: INK,
+        fontSize: 14,
+        fontWeight: '600',
+    },
+
+    photoChange: {
+        height: 34,
+        paddingHorizontal: 14,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 12,
+        backgroundColor: '#F2EFF6',
+    },
+
+    photoChangeText: {
+        color: PURPLE,
+        fontSize: 13,
+        fontWeight: '700',
+    },
+
+    scanLayer: {
+        ...StyleSheet.absoluteFill,
+    },
+
+    scanVeil: {
+        ...StyleSheet.absoluteFill,
+        backgroundColor: 'rgba(92,63,120,0.06)',
+    },
+
+    scanBand: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: SCAN_BAND_HEIGHT,
+        backgroundColor: 'rgba(184,155,199,0.16)',
+    },
+
+    scanLineFull: {
+        top: 0,
+        left: 0,
+        right: 0,
     },
 
     serverGuide: {
