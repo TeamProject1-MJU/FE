@@ -8,8 +8,8 @@ import {
 } from 'react-native';
 import { Text } from '@/components/app-text';
 
-const NAVY = '#0f1c3f';
-const MINT = '#2bcf9a';
+const NAVY = '#25212D';
+const MINT = '#5C3F78';
 const SECONDARY = '#6b7488';
 const BORDER = '#e6e9ef';
 const WHITE = '#ffffff';
@@ -293,9 +293,9 @@ const styles = StyleSheet.create({
     disabledDay: { color: '#c4c9d3' },
     selectedDayText: { color: WHITE, fontWeight: '800' },
     modalActions: { flexDirection: 'row', gap: 10, marginTop: 19 },
-    cancelButton: { flex: 1, paddingVertical: 13, alignItems: 'center', borderRadius: 12, backgroundColor: '#f1f3f7' },
-    cancelText: { color: SECONDARY, fontWeight: '700' },
-    confirmButton: { flex: 1, paddingVertical: 13, alignItems: 'center', borderRadius: 12, backgroundColor: NAVY },
+    cancelButton: { flex: 1, paddingVertical: 15, alignItems: 'center', borderRadius: 25, backgroundColor: '#EDE8F3' },
+    cancelText: { color: MINT, fontWeight: '700' },
+    confirmButton: { flex: 1, paddingVertical: 15, alignItems: 'center', borderRadius: 25, backgroundColor: MINT },
     confirmText: { color: WHITE, fontWeight: '700' },
     wheels: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 10 },
     wheelColumn: { width: 100, alignItems: 'center' },
@@ -307,10 +307,8 @@ const styles = StyleSheet.create({
         left: 0,
         right: 0,
         height: ROW,
-        borderTopWidth: 1,
-        borderBottomWidth: 1,
-        borderColor: MINT,
-        backgroundColor: '#eafbf5',
+        borderRadius: 12,
+        backgroundColor: '#EDE8F3',
     },
     wheelScroll: { flex: 1 },
     wheelContent: { paddingVertical: ROW },

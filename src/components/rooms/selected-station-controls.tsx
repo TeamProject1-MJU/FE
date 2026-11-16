@@ -21,10 +21,12 @@ export default function SelectedStationControls({
                                                     detail,
                                                     controller,
                                                     bottomInset,
+                                                    embedded = false,
                                                 }: {
     detail: RoomDetail;
     controller: ReturnType<typeof useSelectedStation>;
     bottomInset: number;
+    embedded?: boolean;
 }) {
     const { busy, request, notice, pick, choose, submit, cancel } = controller;
     const owner = detail.myRole === 'OWNER';
@@ -52,9 +54,9 @@ export default function SelectedStationControls({
     );
 
     return (
-        <View style={styles.panel}>
+        <View style={embedded ? styles.embeddedPanel : styles.panel}>
             {detail.selectedStation && detail.confirmedAt && (
-                <Text style={styles.caption}>
+                <Text style={[styles.caption, embedded && styles.embeddedCaption]}>
                     확정 시각 ·{' '}
                     {new Intl.DateTimeFormat('ko-KR', {
                         timeZone: 'Asia/Seoul',
@@ -83,7 +85,7 @@ export default function SelectedStationControls({
                     )}
                 </View>
             ) : (
-                <Text style={styles.caption}>방장이 최종 확정할 수 있어요</Text>
+                <Text style={[styles.caption, embedded && styles.embeddedCaption]}>방장이 최종 확정할 수 있어요</Text>
             )}
 
             {!request && noticeView}
@@ -226,6 +228,18 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: '#EEEAF2',
         borderRadius: 22,
+    },
+    embeddedPanel: {
+        marginTop: 10,
+        paddingTop: 10,
+        borderTopWidth: 1,
+        borderTopColor: '#F1EEF4',
+        gap: 4,
+    },
+    embeddedCaption: {
+        color: '#6F6B78',
+        fontSize: 12.5,
+        lineHeight: 19,
     },
     row: {
         flexDirection: 'row',

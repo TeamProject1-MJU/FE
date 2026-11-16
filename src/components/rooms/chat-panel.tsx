@@ -359,8 +359,8 @@ export default function RoomChatPanel({
                                     <Text style={styles.systemText}>
                                         {message.content}
                                     </Text>
-                                    <Text style={styles.meta}>
-                                        {dateLabel(message.createdAt)}
+                                    <Text style={styles.systemText}>
+                                        {' · '}{dateLabel(message.createdAt)}
                                     </Text>
                                 </View>
                             ) : (
@@ -480,6 +480,7 @@ export default function RoomChatPanel({
                         ref={input}
                         style={styles.input}
                         multiline
+                        numberOfLines={1}
                         submitBehavior="newline"
                         placeholder="메시지를 입력해요"
                         placeholderTextColor={SECONDARY}
@@ -504,12 +505,19 @@ export default function RoomChatPanel({
                         }}
                         editable={!controller.blocked}
                     />
-                    <Action
-                        label="전송"
+                    <Pressable
                         onPress={controller.send}
                         disabled={!controller.canSend}
-                        primary
-                    />
+                        accessibilityRole="button"
+                        accessibilityState={{ disabled: !controller.canSend }}
+                        style={({ pressed }) => [
+                            styles.sendButton,
+                            !controller.canSend && styles.sendButtonDisabled,
+                            pressed && styles.pressed,
+                        ]}
+                    >
+                        <Text style={styles.sendButtonText}>전송</Text>
+                    </Pressable>
                 </View>
 
                 <Text
@@ -630,17 +638,19 @@ const styles = StyleSheet.create({
     },
     system: {
         alignSelf: 'center',
-        backgroundColor: '#F1EEF4',
-        borderRadius: 14,
-        alignItems: 'center',
+        backgroundColor: '#EFEBF3',
+        borderRadius: 12,
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        justifyContent: 'center',
         gap: 4,
-        paddingVertical: 6,
+        paddingVertical: 5,
         paddingHorizontal: 12,
     },
     systemText: {
-        color: SECONDARY,
-        fontSize: 12,
-        lineHeight: 20,
+        color: '#6F6B78',
+        fontSize: 12.5,
+        lineHeight: 18,
         textAlign: 'center',
     },
     message: {
@@ -721,9 +731,10 @@ const styles = StyleSheet.create({
         borderTopWidth: 1,
         borderTopColor: '#EEEAF2',
         paddingTop: 12,
-        gap: 8,
+        rowGap: 0,
     },
     inputRow: {
+        marginTop: 8,
         flexDirection: 'row',
         alignItems: 'flex-end',
         gap: 8,
@@ -732,21 +743,33 @@ const styles = StyleSheet.create({
         flex: 1,
         minHeight: 46,
         maxHeight: 120,
-        padding: 10,
+        paddingHorizontal: 14,
+        paddingVertical: 11,
         borderWidth: 1,
         borderColor: '#EEEAF2',
-        borderRadius: 12,
+        borderRadius: 14,
         backgroundColor: '#F4F1F7',
         color: NAVY,
-        fontSize: 16,
-        lineHeight: 23,
-        textAlignVertical: 'top',
+        fontSize: 15,
+        lineHeight: 22,
+        textAlignVertical: 'center',
     },
     counter: {
-        color: SECONDARY,
+        marginTop: 6,
+        color: '#A8A3B0',
         textAlign: 'right',
-        fontSize: 12,
+        fontSize: 11.5,
     },
+    sendButton: {
+        height: 46,
+        minWidth: 58,
+        borderRadius: 14,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: MINT,
+    },
+    sendButtonDisabled: { backgroundColor: '#CFC6DA' },
+    sendButtonText: { color: '#fff', fontSize: 14, fontWeight: '800' },
     button: {
         alignItems: 'center',
         justifyContent: 'center',
