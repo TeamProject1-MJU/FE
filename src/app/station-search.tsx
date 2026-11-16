@@ -416,33 +416,30 @@ export default function StationSearchScreen() {
     const data = showRecent ? roomSearch ? [] : recent : results;
 
 
-    // 시안 문구: 출발역·도착역은 "출발역 검색"/"도착역 검색", 그 밖의 용도는 지금 칩 문구를 써요(가운데 점은 공백으로).
-    const fieldLabel = purpose === 'origin'
-        ? '출발역'
-        : purpose === 'destination'
-            ? '도착역'
-            : copy.chip.replace(/\s*·\s*/g, ' ');
+    const headerTitle = purpose === 'origin' ? '출발역 검색' : purpose === 'destination' ? '도착역 검색' : copy.title;
     const placeholder = purpose === 'origin' ? '출발역' : purpose === 'destination' ? '도착역' : '역 이름을 입력하세요';
     // 출발 쪽은 채운 점, 도착(만날 역) 쪽은 테두리 점
     const filledPoint = purpose === 'origin' || purpose === 'departure';
-    // 경로 탭 검색은 기존 모양을 유지하고, 약속방 용도만 가운데 헤더를 써요.
+    // 헤더는 모든 용도가 같아요(#232). 약속방 용도만 알약 모양 검색창을 써요(#228).
     const showTitle = purpose !== 'origin' && purpose !== 'destination';
 
     return (
         <View style={styles.container}>
             <StatusBar style="dark" />
-            {showTitle && <>
-                <View style={[styles.pickerHeader, { paddingTop: insets.top + 8 }]}>
-                    <Pressable style={styles.pickerBack} onPress={goBack} accessibilityRole="button" accessibilityLabel="취소">
-                        <Ionicons name="chevron-back" size={24} color={LV_TEXT} />
+            <View style={{ paddingTop: insets.top }}>
+                <View style={styles.header}>
+                    <Pressable style={styles.backButton} onPress={goBack} accessibilityRole="button" accessibilityLabel="뒤로가기">
+                        <Ionicons name="chevron-back" size={24} color="#25212D" />
                     </Pressable>
-                    <Text style={styles.pickerHeaderText}>{copy.header}</Text>
-                    <View style={styles.pickerBack} />
+                    <Text style={styles.headerTitle} numberOfLines={1} accessibilityRole="header">{headerTitle.replace(/\n/g, ' ')}</Text>
+                    <Pressable style={styles.cancelButton} onPress={goBack} accessibilityRole="button" accessibilityLabel="취소">
+                        <Text style={styles.cancelText}>취소</Text>
+                    </Pressable>
                 </View>
-            </>}
+            </View>
 
-            {/* 입력 카드 (1단계 경로 검색 입력 카드와 같은 톤) */}
-            <View style={[styles.searchWrap, { paddingTop: showTitle ? 12 : insets.top + 8 }, showTitle && styles.pickerSearchWrap]}>
+            {/* 검색창은 헤더 다음 줄에 배치해요. 약속방 용도는 알약 모양 검색창이에요. */}
+            <View style={[styles.searchWrap, showTitle && styles.pickerSearchWrap]}>
                 <Pressable style={showTitle ? [styles.search, styles.pickerSearch, focused && styles.pickerSearchFocused] : styles.search} onPress={() => inputRef.current?.focus()}>
                     {showTitle ? <Ionicons name="search" size={19} color={LV_MAIN} style={styles.pickerSearchIcon} /> : <View style={[styles.point, filledPoint ? styles.pointFilled : styles.pointOutline]} />}
                     <TextInput
@@ -476,20 +473,6 @@ export default function StationSearchScreen() {
                 </Pressable>
             </View>
 
-            {/* 목록 위 줄: "출발역 검색" + 취소(기존 뒤로 가기와 같은 동작) */}
-            {!showTitle && <View style={styles.fieldRow}>
-                <Text style={styles.fieldLabel}>{fieldLabel} 검색</Text>
-                <Pressable
-                    style={styles.cancelButton}
-                    onPress={goBack}
-                    accessibilityRole="button"
-                    accessibilityLabel="취소"
-                    hitSlop={8}
-                >
-                    <Text style={styles.cancelText}>취소</Text>
-                </Pressable>
-            </View>}
-
             {/* 목록 (키보드 위까지만 차지) */}
             <KeyboardAvoidingView
                 style={styles.listArea}
@@ -521,7 +504,7 @@ export default function StationSearchScreen() {
                                     <View style={styles.passengers}><Passenger size={30} /><Passenger tone="other" size={30} /></View>
                                     <View style={styles.infoBody}>
                                         {!!contextLabel && <Text style={styles.infoContext}>{contextLabel}</Text>}
-                                        <Text style={styles.infoTitle} numberOfLines={1}>{copy.title.replace(/\n/g, ' ')}</Text>
+                                        <Text style={styles.infoTitle} numberOfLines={1}>{copy.header}</Text>
                                         {purpose === 'proposal' && <Text style={styles.infoDescription}>올린 역에 멤버들이 투표할 수 있어요</Text>}
                                     </View>
                                 </View>
@@ -831,11 +814,10 @@ const styles = StyleSheet.create({
         textAlign: 'center',
     },
 
-    pickerHeader: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12 },
-    pickerBack: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-    pickerHeaderText: { flex: 1, fontSize: 16, fontWeight: '700', textAlign: 'center', color: LV_TEXT },
-    pickerContext: { marginHorizontal: 20, color: LV_SECONDARY, fontSize: 12.5 },
-    pickerSearchWrap: { paddingBottom: 16 },
+    header: { height: 48, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center' },
+    backButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+    headerTitle: { flex: 1, minWidth: 0, paddingLeft: 8, fontSize: 20, fontWeight: '700', color: LV_TEXT },
+    pickerSearchWrap: { paddingTop: 12, paddingBottom: 16 },
     pickerSearch: { height: 54, borderRadius: 27, borderWidth: 1.5, borderColor: '#D9CCE4', paddingHorizontal: 16, paddingVertical: 0 },
     pickerSearchFocused: { borderColor: LV_MAIN },
     pickerSearchIcon: { marginRight: 10 },
@@ -843,6 +825,7 @@ const styles = StyleSheet.create({
 
     // 입력 카드
     searchWrap: {
+        paddingTop: 8,
         paddingHorizontal: 20,
     },
 
@@ -898,23 +881,10 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
 
-    // 목록 위 줄
-    fieldRow: {
-        height: 40,
-        marginTop: 8,
-        paddingHorizontal: 20,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-    },
-
-    fieldLabel: {
-        fontSize: 13,
-        color: LV_SECONDARY,
-    },
-
     cancelButton: {
-        height: 40,
+        minWidth: 44,
+        height: 44,
+        alignItems: 'center',
         justifyContent: 'center',
     },
 

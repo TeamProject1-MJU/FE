@@ -1,4 +1,6 @@
 import BottomTabBar, { useTabBarHeight } from '@/components/bottom-tab-bar';
+import HomeCongestionCard from '@/components/home-congestion-card';
+import { useHomeCongestion } from '@/hooks/use-home-congestion';
 import { formatStationName } from '@/utils/station-name';
 import { useCallback, useRef, useState } from 'react';
 import {
@@ -12,7 +14,7 @@ import {
     View,
 } from 'react-native';
 import { Text } from '@/components/app-text';
-import { router, useFocusEffect } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -39,8 +41,9 @@ const BACKGROUND = '#f3f5f8';
 const CARD = '#ffffff';
 const SECONDARY = '#6b7488';
 
-/** 작은 화면에서 지도가 가려지지 않도록 시트가 차지할 수 있는 최대 비율 */
+/** 남는 공간이 너무 작을 때 사용할 기존 시트 높이 하한 */
 const SHEET_MAX_RATIO = 0.55;
+const MAP_MIN_HEIGHT = 120;
 
 /**
  * 약속 카드 왼쪽 날짜 배지 문구 (#193). 기기 시간대가 아니라 서울 달력 날짜로 세요.
@@ -92,8 +95,14 @@ export default function HomeScreen() {
     useRedirectIfSignedOut();
     const { height: windowHeight } = useWindowDimensions();
     const [sheetHeight, setSheetHeight] = useState(0);
+    const [sheetContentHeight, setSheetContentHeight] = useState(0);
+    const [sheetViewportHeight, setSheetViewportHeight] = useState(0);
 
     const tabBarHeight = useTabBarHeight();
+    const sheetMaxHeight = Math.max(
+        windowHeight * SHEET_MAX_RATIO,
+        windowHeight - tabBarHeight - (insets.top + 10 + styles.topPanel.height + MAP_MIN_HEIGHT),
+    );
 
     /*
      * 다가오는 약속 (#102)
@@ -104,6 +113,8 @@ export default function HomeScreen() {
      */
     const serverMode = !isMockMode();
     const homeMap = useHomeMap(serverMode, currentAccount());
+    const { mock } = useLocalSearchParams<{ mock?: string | string[] }>();
+    const congestion = useHomeCongestion({ serverMode, account: currentAccount(), location: homeMap.myLocation, locationLoading: homeMap.locationLoading, stations: homeMap.stations, mock });
     const requestId = useRef(0);
     const [load, setLoad] = useState<MeetingLoad>({ kind: 'loading' });
 
@@ -229,16 +240,20 @@ export default function HomeScreen() {
                     styles.sheet,
                     {
                         bottom: tabBarHeight,
-                        maxHeight: windowHeight * SHEET_MAX_RATIO,
+                        maxHeight: sheetMaxHeight,
                     },
                 ]}
                 onLayout={handleSheetLayout}
             >
                 <ScrollView
                     contentContainerStyle={styles.sheetContent}
+                    onContentSizeChange={(_width, height) => setSheetContentHeight(height)}
+                    onLayout={event => setSheetViewportHeight(event.nativeEvent.layout.height)}
+                    scrollEnabled={sheetContentHeight > sheetViewportHeight}
                     showsVerticalScrollIndicator={false}
                     bounces={false}
                 >
+                    <HomeCongestionCard state={congestion} onLocate={() => serverMode ? homeMap.locate() : showPreparing('현재 위치')} />
                     <View style={styles.meetingHeader}>
                         <Text style={styles.sectionTitle}>내 약속</Text>
                         <Pressable
