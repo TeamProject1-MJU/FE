@@ -58,6 +58,26 @@ export function toChatDisplayContent(content: string) {
     return isMockMode() ? content.replace(/@linkro/gi, '@링크로') : content;
 }
 
+export type ChatTextPart = { text: string; emphasized: boolean };
+
+/** AI 표시용 **짝**만 해석해요. 짝 없는 표식과 나머지 글자는 그대로 남겨요. */
+export function parseChatEmphasis(content: string): ChatTextPart[] {
+    const parts: ChatTextPart[] = [];
+    let offset = 0;
+    while (offset < content.length) {
+        const start = content.indexOf('**', offset);
+        if (start < 0) { parts.push({ text: content.slice(offset), emphasized: false }); break; }
+        const end = content.indexOf('**', start + 2);
+        if (end < 0) { parts.push({ text: content.slice(offset), emphasized: false }); break; }
+        if (start > offset) parts.push({ text: content.slice(offset, start), emphasized: false });
+        parts.push(end === start + 2
+            ? { text: '****', emphasized: false }
+            : { text: content.slice(start + 2, end), emphasized: true });
+        offset = end + 2;
+    }
+    return parts;
+}
+
 /** 명세 10.1의 전송 내용 기준으로 글자 수를 계산해요. */
 export function chatContentLength(content: string) {
     return Array.from(isMockMode() ? toChatApiContent(content).trim() : content).length;

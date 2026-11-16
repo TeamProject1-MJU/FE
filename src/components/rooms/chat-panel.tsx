@@ -1,5 +1,5 @@
 import MemberAvatar, { memberTone } from '@/components/rooms/member-avatar';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { router } from 'expo-router';
 import {
     ActivityIndicator,
@@ -14,7 +14,7 @@ import {
 import { Text, TextInput } from '@/components/app-text';
 
 import type { useRoomChat } from '@/hooks/use-room-chat';
-import { toChatDisplayContent } from '@/services/chat';
+import { parseChatEmphasis, toChatDisplayContent } from '@/services/chat';
 import { useMock as isMockMode } from '@/services/api/config';
 import type { PendingChatMessage } from '@/types/chat';
 import type { RoomMember } from '@/types/room';
@@ -75,7 +75,12 @@ export default function RoomChatPanel({
     const input = useRef<TextInput>(null);
     const nearBottom = useRef(true);
     const lastContent = useRef('');
-    const lastPending = useRef('');
+    const lastPending = useRef(new Set<string>());
+    const initialized = useRef(false);
+    const followBottom = useRef(true);
+    const viewportHeight = useRef(0);
+    const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const sentDraft = useRef<string | null>(null);
     const contentHeight = useRef(0);
     const scrollOffset = useRef(0);
     const anchor = useRef<{
@@ -153,11 +158,66 @@ export default function RoomChatPanel({
         myUserId,
     ]);
 
+    // 새 메시지뿐 아니라 답변 상태·키보드로 목록 높이가 달라진 뒤에도 최종 배치를 따라가요.
+    const scheduleLatest = useCallback(() => {
+        if (scrollTimer.current) clearTimeout(scrollTimer.current);
+        scrollTimer.current = setTimeout(() => {
+            scrollTimer.current = null;
+            if (!anchor.current && followBottom.current) list.current?.scrollToEnd({ animated: false });
+        }, 16);
+    }, []);
+    useEffect(() => () => { if (scrollTimer.current) clearTimeout(scrollTimer.current); }, []);
+
+    useEffect(() => {
+        if (controller.status !== 'ready') return;
+        const latest = controller.messages.at(-1);
+        const pendingIds = new Set(controller.pending.map(message => message.clientId));
+        const newPending = [...pendingIds].some(id => !lastPending.current.has(id));
+        const changed = (latest?.id ?? '') !== lastContent.current;
+        const first = !initialized.current;
+        // 전송 확정(임시 메시지 → 서버 ID)은 새 전송이 아니므로, 그 사이 위로 읽기 시작했다면 위치를 지켜요.
+        const sentByMe = newPending;
+        initialized.current = true;
+        lastContent.current = latest?.id ?? '';
+        lastPending.current = pendingIds;
+        if (!first && !changed && !newPending) return;
+        if (!anchor.current && (first || followBottom.current || nearBottom.current || sentByMe)) {
+            followBottom.current = true;
+            nearBottom.current = true;
+            setNewMessages(false);
+            scheduleLatest();
+        } else if (changed && !first && !(latest?.senderType === 'USER' && latest.senderId === myUserId)) setNewMessages(true);
+    }, [controller.status, controller.messages, controller.pending, myUserId, scheduleLatest]);
+
+    useEffect(() => { if (controller.draft !== sentDraft.current) sentDraft.current = null; }, [controller.draft]);
+    const sendDraft = (submitted?: string) => {
+        if (!controller.canSend) return;
+        const text = submitted ?? controller.draft;
+        if (sentDraft.current === text) return;
+        sentDraft.current = text;
+        if (submitted !== undefined) controller.setDraft(submitted);
+        followBottom.current = true;
+        nearBottom.current = true;
+        setNewMessages(false);
+        controller.send();
+        scheduleLatest();
+    };
+    const mentioned = /@링크로|@linkro/i.test(controller.draft);
+    const addMention = () => {
+        if (!mentioned) controller.setDraft(`@링크로 ${controller.draft}`);
+        input.current?.focus();
+    };
     const jumpToLatest = () => {
+        followBottom.current = true;
         nearBottom.current = true;
         setNewMessages(false);
         list.current?.scrollToEnd({ animated: true });
+        scheduleLatest();
     };
+    const latestRow = rows.at(-1);
+    const latestPreview = latestRow?.kind === 'ai'
+        ? parseChatEmphasis(latestRow.content).map(part => part.text).join('')
+        : latestRow?.content ?? '';
 
     const loadOlder = () => {
         if (controller.historyLoading || !controller.hasMore) return;
@@ -230,9 +290,19 @@ export default function RoomChatPanel({
                 </View>
             )}
 
+            <View style={[styles.listFrame, fittedPanelHeight != null ? styles.fillList : { height: listHeight }]}>
             <ScrollView
                 ref={list}
-                style={[styles.list, fittedPanelHeight != null ? styles.fillList : { height: listHeight }]}
+                style={[styles.list, styles.fillList]}
+                onLayout={({ nativeEvent }) => {
+                    viewportHeight.current = nativeEvent.layout.height;
+                    if (followBottom.current && !anchor.current) scheduleLatest();
+                }}
+                onScrollBeginDrag={() => {
+                    // 손으로 위로 읽기 시작하면 예약된 이동보다 사용자 위치를 우선해요.
+                    followBottom.current = false;
+                    if (scrollTimer.current) clearTimeout(scrollTimer.current);
+                }}
                 contentContainerStyle={styles.listContent}
                 nestedScrollEnabled
                 keyboardShouldPersistTaps="handled"
@@ -243,17 +313,20 @@ export default function RoomChatPanel({
                 scrollEventThrottle={32}
                 onScroll={({ nativeEvent }) => {
                     if (!isMockMode() && !controller.historyError && nativeEvent.contentOffset.y <= 40) loadOlder();
-                    scrollOffset.current =
-                        nativeEvent.contentOffset.y;
-
-                    nearBottom.current =
-                        nativeEvent.contentSize.height -
-                        nativeEvent.layoutMeasurement.height -
-                        nativeEvent.contentOffset.y <
-                        60;
-
-                    if (nearBottom.current) {
+                    const { contentOffset, contentSize, layoutMeasurement } = nativeEvent;
+                    const wasOffset = scrollOffset.current;
+                    // 웹은 scrollHeight(정수)와 레이아웃 높이(소수)가 섞이므로 1px 이내는 같은 배치로 봐요.
+                    const resized = Math.abs(contentSize.height - contentHeight.current) > 1 || Math.abs(layoutMeasurement.height - viewportHeight.current) > 1;
+                    scrollOffset.current = contentOffset.y;
+                    const close = contentSize.height - layoutMeasurement.height - contentOffset.y <= 60;
+                    if (close) {
+                        nearBottom.current = true;
+                        followBottom.current = true;
                         setNewMessages(false);
+                    } else if (!followBottom.current || !resized && contentOffset.y < wasOffset - 1) {
+                        nearBottom.current = false;
+                        followBottom.current = false;
+                        if (scrollTimer.current) clearTimeout(scrollTimer.current);
                     }
                 }}
                 onContentSizeChange={(_, height) => {
@@ -276,31 +349,7 @@ export default function RoomChatPanel({
                         return;
                     }
 
-                    const latest =
-                        controller.messages.at(-1)?.id ?? '';
-                    const queued = controller.pending
-                        .map(message => `${message.clientId}:${message.status}`)
-                        .join('|');
-
-                    const changed =
-                        latest !== lastContent.current ||
-                        queued !== lastPending.current;
-                    const sentByMe =
-                        !!queued && queued !== lastPending.current;
-
-                    if (
-                        changed &&
-                        (nearBottom.current || sentByMe)
-                    ) {
-                        list.current?.scrollToEnd({
-                            animated: false,
-                        });
-                    } else if (changed) {
-                        setNewMessages(true);
-                    }
-
-                    lastContent.current = latest;
-                    lastPending.current = queued;
+                    if (followBottom.current) scheduleLatest();
                 }}
             >
                 <View style={styles.history}>
@@ -402,7 +451,11 @@ export default function RoomChatPanel({
                                                     styles.mineText,
                                                 ]}
                                             >
-                                                {message.content}
+                                                {message.kind === 'ai'
+                                                    ? parseChatEmphasis(message.content).map((part, index) => (
+                                                        <Text key={index} style={part.emphasized ? styles.emphasis : undefined}>{part.text}</Text>
+                                                    ))
+                                                    : message.content}
                                             </Text>
                                         </View>
 
@@ -436,9 +489,11 @@ export default function RoomChatPanel({
                                                             if (
                                                                 message.pending
                                                             ) {
-                                                                controller.retrySend(
-                                                                    message.pending,
-                                                                );
+                                                                followBottom.current = true;
+                                                                nearBottom.current = true;
+                                                                setNewMessages(false);
+                                                                controller.retrySend(message.pending);
+                                                                scheduleLatest();
                                                             }
                                                         }}
                                                     />
@@ -450,15 +505,6 @@ export default function RoomChatPanel({
                         </View>
                     );
                 })}
-            </ScrollView>
-
-            {newMessages && (
-                <Action
-                    label="새 메시지 · 아래로 이동"
-                    onPress={jumpToLatest}
-                />
-            )}
-
             {controller.aiPending > 0 && (
                 <View
                     style={styles.aiStatus}
@@ -473,6 +519,17 @@ export default function RoomChatPanel({
                     </Text>
                 </View>
             )}
+            </ScrollView>
+            {newMessages && (
+                <Pressable style={styles.newMessagePill} onPress={jumpToLatest} accessibilityRole="button"
+                    accessibilityLabel="새 메시지, 아래로 이동" accessibilityLiveRegion="polite">
+                    <View style={styles.aiAvatar}><Text style={styles.aiAvatarText}>LR</Text></View>
+                    <Text style={styles.newMessageTitle}>새 메시지</Text>
+                    <Text style={styles.newMessagePreview} numberOfLines={1}>{latestPreview}</Text>
+                    <View style={styles.newMessageArrow}><Text style={styles.newMessageArrowText}>↓</Text></View>
+                </Pressable>
+            )}
+            </View>
 
             <View style={styles.composer}>
                 <Text style={styles.body}>
@@ -480,12 +537,24 @@ export default function RoomChatPanel({
                 </Text>
 
                 <View style={styles.inputRow}>
+                    <Pressable onPress={addMention} disabled={controller.blocked} accessibilityRole="button"
+                        accessibilityLabel="링크로 부르기" accessibilityState={{ selected: mentioned, disabled: controller.blocked }}
+                        style={[styles.mentionButton, mentioned && styles.mentionButtonOn]}>
+                        <Text style={[styles.mentionText, mentioned && styles.mineText]}>@</Text>
+                    </Pressable>
                     <TextInput
                         ref={input}
-                        style={[styles.input, inputFocused && styles.inputFocused]}
+                        style={[styles.input, inputFocused && styles.inputFocused, mentioned && styles.mentionInput]}
                         multiline
                         numberOfLines={1}
-                        submitBehavior="newline"
+                        submitBehavior={Platform.OS === 'web' ? 'newline' : 'submit'}
+                        onSubmitEditing={event => {
+                            if (Platform.OS === 'web') return;
+                            const native = event.nativeEvent as { text?: string; isComposing?: boolean; keyCode?: number };
+                            if (native.isComposing || native.keyCode === 229) return;
+                            // 최종 조합 글자는 submit 이벤트의 원문을 draftRef에 반영한 뒤 보내요.
+                            if (controller.canSend) sendDraft(native.text);
+                        }}
                         placeholder="메시지를 입력해요"
                         placeholderTextColor={SECONDARY}
                         accessibilityLabel="채팅 메시지"
@@ -495,7 +564,7 @@ export default function RoomChatPanel({
                         onBlur={() => setInputFocused(false)}
                         onKeyPress={event => {
                             // 웹: Enter 전송, Shift+Enter 줄바꿈 (한글 조합 중 Enter는 전송하지 않음)
-                            // 모바일은 키보드 Enter가 줄바꿈이고 [전송] 버튼으로 보내요.
+                            // 모바일 Enter는 onSubmitEditing에서만 처리해 중복 전송을 막아요.
                             if (Platform.OS !== 'web') return;
                             const key = event as unknown as {
                                 key?: string;
@@ -506,12 +575,12 @@ export default function RoomChatPanel({
                             if (key.key !== 'Enter' || key.shiftKey) return;
                             if (key.nativeEvent.isComposing || key.nativeEvent.keyCode === 229) return;
                             key.preventDefault?.();
-                            if (controller.canSend) controller.send();
+                            if (controller.canSend) sendDraft();
                         }}
                         editable={!controller.blocked}
                     />
                     <Pressable
-                        onPress={controller.send}
+                        onPress={() => sendDraft()}
                         disabled={!controller.canSend}
                         accessibilityRole="button"
                         accessibilityState={{ disabled: !controller.canSend }}
@@ -587,6 +656,17 @@ function Action({
 }
 
 const styles = StyleSheet.create({
+    emphasis: { color: '#5C3F78', fontWeight: '700', textDecorationLine: 'underline', textDecorationColor: '#B79FD0' },
+    listFrame: { position: 'relative', minHeight: 140 },
+    newMessagePill: { position: 'absolute', left: 4, right: 4, bottom: 8, minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 6, padding: 7, borderRadius: 24, borderWidth: 1, borderColor: '#D9CCE4', backgroundColor: '#FFFFFF', boxShadow: '0 3px 8px rgba(92,63,120,0.14)' },
+    newMessageTitle: { color: MINT, fontSize: 12, fontWeight: '700' },
+    newMessagePreview: { flex: 1, minWidth: 0, color: SECONDARY, fontSize: 12 },
+    newMessageArrow: { width: 30, height: 30, borderRadius: 15, backgroundColor: MINT, alignItems: 'center', justifyContent: 'center' },
+    newMessageArrowText: { color: '#FFFFFF', fontSize: 20, lineHeight: 24, fontWeight: '700' },
+    mentionButton: { width: 50, height: 50, borderRadius: 16, backgroundColor: '#EDE8F3', alignItems: 'center', justifyContent: 'center' },
+    mentionButtonOn: { backgroundColor: MINT },
+    mentionText: { color: MINT, fontSize: 23, fontWeight: '700' },
+    mentionInput: { color: MINT },
     messageBody: { flexShrink: 1, minWidth: 0, alignItems: 'flex-start', gap: 5 },
     mineBody: { alignItems: 'flex-end' },
     aiAvatar: { width: 26, height: 26, borderRadius: 8, backgroundColor: MINT, alignItems: 'center', justifyContent: 'center' },
@@ -753,13 +833,13 @@ const styles = StyleSheet.create({
     input: {
         ...Platform.select({ web: { outlineStyle: 'none' } as object }),
         flex: 1,
-        minHeight: 46,
+        minHeight: 50,
         maxHeight: 120,
         paddingHorizontal: 14,
         paddingVertical: 11,
         borderWidth: 1,
         borderColor: '#EEEAF2',
-        borderRadius: 14,
+        borderRadius: 16,
         backgroundColor: '#F4F1F7',
         color: NAVY,
         fontSize: 15,
@@ -774,9 +854,9 @@ const styles = StyleSheet.create({
         fontSize: 11.5,
     },
     sendButton: {
-        height: 46,
+        height: 50,
         minWidth: 58,
-        borderRadius: 14,
+        borderRadius: 16,
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: MINT,

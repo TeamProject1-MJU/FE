@@ -396,25 +396,29 @@ export default function StationSearchScreen() {
     const data = showRecent ? recent : results;
 
 
-    // 시안 문구: 출발역·도착역은 "출발역 검색"/"도착역 검색", 그 밖의 용도는 지금 칩 문구를 써요(가운데 점은 공백으로).
-    const fieldLabel = purpose === 'origin'
-        ? '출발역'
-        : purpose === 'destination'
-            ? '도착역'
-            : copy.chip.replace(/\s*·\s*/g, ' ');
+    const headerTitle = purpose === 'origin' ? '출발역 검색' : purpose === 'destination' ? '도착역 검색' : copy.title;
     const placeholder = purpose === 'origin' ? '출발역' : purpose === 'destination' ? '도착역' : '역 이름을 입력하세요';
     // 출발 쪽은 채운 점, 도착(만날 역) 쪽은 테두리 점
     const filledPoint = purpose === 'origin' || purpose === 'departure';
-    // 약속방 용도는 시안에 없는 방 이름 맥락이 있어서 기존 제목을 남겨요.
-    const showTitle = purpose !== 'origin' && purpose !== 'destination';
 
     return (
         <View style={styles.container}>
             <StatusBar style="dark" />
 
-            {/* 입력 카드 (1단계 경로 검색 입력 카드와 같은 톤) */}
-            <View style={[styles.searchWrap, { paddingTop: insets.top + 8 }]}>
-                {showTitle && <Text style={styles.title}>{copy.title}</Text>}
+            <View style={{ paddingTop: insets.top }}>
+                <View style={styles.header}>
+                    <Pressable style={styles.backButton} onPress={goBack} accessibilityRole="button" accessibilityLabel="뒤로가기">
+                        <Ionicons name="chevron-back" size={24} color="#25212D" />
+                    </Pressable>
+                    <Text style={styles.headerTitle} numberOfLines={1} accessibilityRole="header">{headerTitle.replace(/\n/g, ' ')}</Text>
+                    <Pressable style={styles.cancelButton} onPress={goBack} accessibilityRole="button" accessibilityLabel="취소">
+                        <Text style={styles.cancelText}>취소</Text>
+                    </Pressable>
+                </View>
+            </View>
+
+            {/* 검색창은 헤더 다음 줄에 배치해요. */}
+            <View style={styles.searchWrap}>
                 <Pressable style={styles.search} onPress={() => inputRef.current?.focus()}>
                     <View style={[styles.point, filledPoint ? styles.pointFilled : styles.pointOutline]} />
                     <TextInput
@@ -445,20 +449,6 @@ export default function StationSearchScreen() {
                             <Ionicons name="close" size={13} color={LV_CARD} />
                         </Pressable>
                     )}
-                </Pressable>
-            </View>
-
-            {/* 목록 위 줄: "출발역 검색" + 취소(기존 뒤로 가기와 같은 동작) */}
-            <View style={styles.fieldRow}>
-                <Text style={styles.fieldLabel}>{fieldLabel} 검색</Text>
-                <Pressable
-                    style={styles.cancelButton}
-                    onPress={goBack}
-                    accessibilityRole="button"
-                    accessibilityLabel="취소"
-                    hitSlop={8}
-                >
-                    <Text style={styles.cancelText}>취소</Text>
                 </Pressable>
             </View>
 
@@ -753,17 +743,13 @@ const styles = StyleSheet.create({
         textAlign: 'center',
     },
 
-    // 약속방 용도에서만 보이는 제목
-    title: {
-        marginBottom: 14,
-        fontSize: 20,
-        lineHeight: 27,
-        fontWeight: '700',
-        color: LV_TEXT,
-    },
+    header: { height: 48, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center' },
+    backButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+    headerTitle: { flex: 1, minWidth: 0, paddingLeft: 8, fontSize: 20, fontWeight: '700', color: LV_TEXT },
 
     // 입력 카드
     searchWrap: {
+        paddingTop: 8,
         paddingHorizontal: 20,
     },
 
@@ -819,23 +805,10 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
 
-    // 목록 위 줄
-    fieldRow: {
-        height: 40,
-        marginTop: 8,
-        paddingHorizontal: 20,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-    },
-
-    fieldLabel: {
-        fontSize: 13,
-        color: LV_SECONDARY,
-    },
-
     cancelButton: {
-        height: 40,
+        minWidth: 44,
+        height: 44,
+        alignItems: 'center',
         justifyContent: 'center',
     },
 
