@@ -3,7 +3,7 @@ import TrainBlock from '@/components/train-block';
 import { formatRouteRelativeDateTime } from '@/utils/route-time';
 import { formatDirection, formatWait, formatWalkBeforeRide, formatWalkingStep, isTransferStep } from '@/components/route/format';
 import { type ReactNode, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/app-text';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
@@ -21,7 +21,6 @@ const LV_MAIN = '#5C3F78';
 const LV_RIDE_BG = '#EDE8F3';
 const LV_BOX_BG = '#F4F1F7';
 const LV_CARD_BORDER = '#EEEAF2';
-const LV_SIGN_BORDER = '#D9CCE4';
 const LV_KIND_BORDER = '#DCD7E3';
 const LV_WHITE = '#FFFFFF';
 const LV_DIVIDER = '#F1EEF4';
@@ -139,14 +138,11 @@ type Props = {
  */
 export default function RouteTimeline({ route, onSignCheck, nextTrains, getSignCheckIssue }: Props) {
     const [openSteps, setOpenSteps] = useState<Record<number, boolean>>({});
-    const [signSheetOpen, setSignSheetOpen] = useState(false);
 
     const steps = route.steps;
     const lastSubwayIndex = steps.reduce((last, step, index) => (step.type === 'SUBWAY' ? index : last), -1);
     const firstSubwayIndex = steps.findIndex(item => item.type === 'SUBWAY');
     const arrival = formatRouteRelativeDateTime(route.summary.arrivalAt);
-    const signSections = steps.filter(step => step.type === 'SUBWAY').map(step => ({ step, issue: getSignCheckIssue?.(step) }));
-    const signCandidates = signSections.filter(section => !section.issue);
     const previousSubway = (index: number) => steps.slice(0, index).reverse().find(step => step.type === 'SUBWAY');
     const nextSubway = (index: number) => steps.slice(index + 1).find(step => step.type === 'SUBWAY');
     /** 환승 단계에서 내린 역과 다음 열차 승차역이 같으면 한 줄(환승역)로 합쳐요. */
@@ -222,6 +218,7 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, getSignC
                 // 바로 앞이 합쳐진 환승역이면 승차역 줄은 그 환승역 줄이 대신해요(대기도 거기서 보여요).
                 const showBoard = !(index > 0 && mergedTransfer(index - 1));
                 const nextIsTransfer = isTransferStep(steps, index + 1);
+                const signIssue = getSignCheckIssue?.(step);
 
                 return (
                     <View key={`ride-${index}`}>
@@ -259,19 +256,36 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, getSignC
 
                                 <View style={styles.rideCongestion}>{congestionMark(stepCongestion(step), { compact: true, slot: step.stations?.[0], size: 13 })}</View>
 
-                                {middle.length > 0 && (
-                                    <Pressable
-                                        style={({ pressed }) => [styles.toggle, pressed && styles.pressed]}
-                                        onPress={() => toggle(index)}
-                                        accessibilityRole="button"
-                                        accessibilityState={{ expanded: open }}
-                                    >
-                                        <Text style={styles.toggleText}>
-                                            {open ? '중간역 접기' : `중간역 ${middle.length}개 보기`}
-                                        </Text>
-                                        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={13} color={LV_SUB} />
-                                    </Pressable>
-                                )}
+                                <View style={styles.actionRow}>
+                                    {middle.length > 0 && (
+                                        <Pressable
+                                            style={({ pressed }) => [styles.toggle, pressed && styles.pressed]}
+                                            onPress={() => toggle(index)}
+                                            accessibilityRole="button"
+                                            accessibilityState={{ expanded: open }}
+                                        >
+                                            <Text style={styles.toggleText}>
+                                                {open ? '중간역 접기' : `중간역 ${middle.length}개 보기`}
+                                            </Text>
+                                            <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={13} color={LV_SUB} />
+                                        </Pressable>
+                                    )}
+                                    {signIssue ? (
+                                        <Text style={[styles.issueText, styles.actionIssue]}>{signIssue}</Text>
+                                    ) : (
+                                        <Pressable
+                                            style={({ pressed }) => [styles.signButton, pressed && styles.pressed]}
+                                            onPress={() => onSignCheck(step)}
+                                            hitSlop={8}
+                                            accessibilityRole="button"
+                                            accessibilityLabel={`${first?.name ?? ''} ${step.line?.name ?? ''} 표지판으로 방향 확인`}
+                                            accessibilityHint="승차 구간의 표지판 사진으로 방향이 맞는지 확인해요"
+                                        >
+                                            <Ionicons name="scan-outline" size={13} color={LV_MAIN} />
+                                            <Text style={styles.signText}>표지판으로 방향 확인</Text>
+                                        </Pressable>
+                                    )}
+                                </View>
 
                                 {open &&
                                     middle.map((stop, stopIndex) => (
@@ -313,45 +327,6 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, getSignC
                     </View>
                 );
             })}
-            <View style={styles.signArea}>
-                {signCandidates.length > 0 ? <>
-                    <Pressable
-                        style={({ pressed }) => [styles.signButton, pressed && styles.pressed]}
-                        onPress={() => signCandidates.length === 1 ? onSignCheck(signCandidates[0].step) : setSignSheetOpen(true)}
-                        accessibilityRole="button"
-                    >
-                        <Text style={styles.signText}>표지판으로 방향 확인</Text>
-                    </Pressable>
-                    <Text style={styles.signHint}>승차 구간의 표지판 사진으로 방향이 맞는지 확인해요</Text>
-                    {signSections.filter(section => section.issue).map(({ issue }, index) => <Text key={index} style={[styles.issueText, styles.centeredIssue]}>{issue}</Text>)}
-                </> : <>{signSections.map(({ issue }, index) => <Text key={index} style={[styles.issueText, styles.centeredIssue]}>{issue}</Text>)}</>}
-            </View>
-            {signSheetOpen && <Modal transparent animationType="slide" onRequestClose={() => setSignSheetOpen(false)}>
-                <View style={styles.sheetOverlay}>
-                    <Pressable style={styles.sheetBackdrop} onPress={() => setSignSheetOpen(false)} accessibilityRole="button" accessibilityLabel="닫기" />
-                    <View style={styles.sheet} accessibilityViewIsModal>
-                        <View style={styles.sheetHandle} />
-                        <Text style={styles.sheetTitle}>어느 구간의 표지판을 확인할까요?</Text>
-                        <ScrollView>
-                            {signSections.map(({ step, issue }, index) => <Pressable
-                                key={index}
-                                style={({ pressed }) => [styles.sheetRow, !!issue && styles.sheetRowDisabled, pressed && !issue && styles.pressed]}
-                                disabled={!!issue}
-                                accessibilityRole="button"
-                                accessibilityState={{ disabled: !!issue }}
-                                onPress={() => { setSignSheetOpen(false); onSignCheck(step); }}
-                            >
-                                {lineCircle(step.line)}
-                                <View style={styles.headingBody}>
-                                    <Text style={styles.sheetRowTitle}>{step.stops[0]?.name}에서 {step.line?.name}</Text>
-                                    <Text style={styles.note}>{issue || formatDirection(step)}</Text>
-                                </View>
-                            </Pressable>)}
-                        </ScrollView>
-                        <Pressable style={styles.sheetClose} onPress={() => setSignSheetOpen(false)} accessibilityRole="button"><Text style={styles.signText}>닫기</Text></Pressable>
-                    </View>
-                </View>
-            </Modal>}
         </View>
     );
 }
@@ -362,18 +337,6 @@ const styles = StyleSheet.create({
     walkIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: LV_WHITE, alignItems: 'center', justifyContent: 'center' },
     guideTitle: { fontSize: 13, fontWeight: '700', color: LV_TEXT },
     rideCongestion: { marginTop: 8, marginLeft: 41 },
-    signArea: { marginTop: 20, paddingTop: 18, marginHorizontal: 10, borderTopWidth: 1, borderTopColor: LV_DIVIDER },
-    signHint: { marginTop: 8, color: LV_SECONDARY, fontSize: 11.5, textAlign: 'center' },
-    centeredIssue: { marginLeft: 0, textAlign: 'center' },
-    sheetOverlay: { flex: 1, justifyContent: 'flex-end' },
-    sheetBackdrop: { position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, backgroundColor: LV_TEXT, opacity: 0.25 },
-    sheet: { maxHeight: '80%', backgroundColor: LV_WHITE, borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 20, paddingBottom: 28 },
-    sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: LV_KIND_BORDER, alignSelf: 'center', marginBottom: 18 },
-    sheetTitle: { fontSize: 18, fontWeight: '700', color: LV_TEXT, marginBottom: 12 },
-    sheetRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: LV_DIVIDER },
-    sheetRowTitle: { color: LV_TEXT, fontSize: 15, fontWeight: '700' },
-    sheetRowDisabled: { opacity: 0.5 },
-    sheetClose: { marginTop: 16, height: 46, borderRadius: 23, backgroundColor: LV_RIDE_BG, alignItems: 'center', justifyContent: 'center' },
     hereRow: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12 },
     headingBody: { flex: 1, minWidth: 0, gap: 4 },
     hereLabel: { fontSize: 11.5, color: LV_MAIN, fontWeight: '600' },
@@ -575,10 +538,22 @@ const styles = StyleSheet.create({
         fontWeight: '600',
     },
 
-    toggle: {
-        height: 34,
+    actionRow: {
         marginTop: 12,
         marginLeft: 41,
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+    },
+
+    actionIssue: {
+        marginTop: 0,
+        marginLeft: 0,
+        flexShrink: 1,
+    },
+
+    toggle: {
+        height: 34,
         paddingHorizontal: 10,
         alignSelf: 'flex-start',
         flexDirection: 'row',
@@ -616,21 +591,19 @@ const styles = StyleSheet.create({
     },
 
     signButton: {
-        height: 48,
-        paddingHorizontal: 12,
+        height: 34,
+        paddingHorizontal: 10,
+        alignSelf: 'flex-start',
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'center',
-        gap: 6,
-        borderWidth: 1.5,
-        borderColor: LV_SIGN_BORDER,
-        borderRadius: 24,
-        backgroundColor: '#FFFFFF',
+        gap: 4,
+        borderRadius: 10,
+        backgroundColor: LV_RIDE_BG,
     },
 
     signText: {
         color: LV_MAIN,
-        fontSize: 14.5,
+        fontSize: 12,
         fontWeight: '700',
     },
 
