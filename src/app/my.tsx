@@ -25,6 +25,7 @@ import { useAppPermissions } from '@/hooks/use-app-permissions';
 import { resetToLogin, useRedirectIfSignedOut } from '@/stores/auth-store';
 import { APP_PERMISSIONS, PERMISSION_DISPLAY, permissionAccessibilityLabel } from '@/utils/app-permission';
 import { NICKNAME_MAX, UserError, type UserProfile } from '@/types/user';
+import { CARD_PADDING } from '@/constants/layout';
 
 type IoniconName = ComponentProps<typeof Ionicons>['name'];
 type Sheet = 'nickname' | 'logout' | 'withdraw' | null;
@@ -561,6 +562,8 @@ const styles = StyleSheet.create({
         fontWeight: '800',
         letterSpacing: -0.6,
         paddingBottom: 14,
+        // #224 글자 줄 맞춤: 카드 안 글자 시작선에 맞춰요.
+        paddingHorizontal: CARD_PADDING,
     },
 
     content: {
@@ -674,7 +677,7 @@ const styles = StyleSheet.create({
 
     sectionTitle: {
         marginTop: 22,
-        marginHorizontal: 4,
+        marginHorizontal: CARD_PADDING,
         marginBottom: 8,
         color: UiColors.ink,
         fontSize: 15,

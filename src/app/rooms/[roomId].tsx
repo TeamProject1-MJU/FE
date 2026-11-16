@@ -45,6 +45,7 @@ import { ApiError, isAuthError } from '@/services/api/errors';
 import { useRoomEvents, roomEventsScope } from '@/hooks/use-room-events';
 import { mergeRoomUpdated, parseSelectedStationEvent } from '@/services/room-events';
 import { cacheRoomDetail, clearCachedRoomCode, getRoomCacheScope, removeCachedRoom } from '@/services/room-cache';
+import { ROOM_CARD_PADDING } from '@/constants/layout';
 
 const NAVY = '#25212D';
 const MINT = '#5C3F78';
@@ -496,7 +497,7 @@ export default function RoomDetailScreen() {
                     { paddingBottom: insets.bottom + 32 },
                 ]}
             >
-                <View>
+                <View style={styles.titleBlock}>
                     <View style={styles.rowBetween}>
                         <Text style={styles.roomName}>{detail.name}</Text>
                         {isOwner && (
@@ -814,6 +815,8 @@ const styles = StyleSheet.create({
     linkButton: { padding: 10 },
     linkText: { color: SECONDARY, fontSize: 13, fontWeight: '700' },
 
+    // #224 글자 줄 맞춤: 카드 밖 제목·날짜 줄을 카드 안 글자 시작선에 맞춰요.
+    titleBlock: { paddingHorizontal: ROOM_CARD_PADDING },
     roomCard: { padding: 14, backgroundColor: WHITE, borderRadius: 24, borderWidth: 1, borderColor: BORDER },
     rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
     chips: { flexDirection: 'row', gap: 6, flexShrink: 1, flexWrap: 'wrap' },
@@ -840,7 +843,7 @@ const styles = StyleSheet.create({
     stripPrimary: { backgroundColor: MINT, borderColor: MINT },
     stripPrimaryText: { color: WHITE },
 
-    panel: { paddingHorizontal: 2, paddingVertical: 4 },
+    panel: { paddingHorizontal: ROOM_CARD_PADDING, paddingVertical: 4 },
     cardTitle: { color: NAVY, fontSize: 14, fontWeight: '800', marginBottom: 2 },
     counter: { color: SECONDARY, fontSize: 12, fontWeight: '700' },
     memberRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#ECE8F0' },
