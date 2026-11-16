@@ -1,5 +1,6 @@
+import ArrivalFlag from '@/components/arrival-flag';
 import RouteNotices from '@/components/route/RouteNotices';
-import { formatArrivalSlack, formatRouteDateTime } from '@/utils/route-time';
+import { formatArrivalSlack, formatRouteDateTime, formatRouteRelativeDateTime } from '@/utils/route-time';
 import { formatClock, formatDirection, formatTotalTime, formatWait, formatWalkBeforeRide, stepMinutes } from '@/components/route/format';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/app-text';
@@ -24,7 +25,7 @@ const LINE_FALLBACK = '#a1a8b8';
 const LV_LEVEL_COLORS = ['#E3E0E7', '#A3D8C2', '#BCD88E', '#EBCF7E', '#EFB07A', '#E68D95'];
 
 const LEVEL_ORDER = ['COMFORTABLE', 'RELAXED', 'NORMAL', 'CROWDED', 'VERY_CROWDED'] as const;
-const toMinutes = (sec: number) => Math.round(sec / 60);
+const toMinutes = (sec: number) => Math.max(1, Math.floor(sec / 60));
 
 export function formatFare(route: Route) {
     return `${route.summary.fare.toLocaleString('ko-KR')}원`;
@@ -170,185 +171,109 @@ type Props = {
     route: Route;
     expanded: boolean;
     showDates?: boolean;
-    /** 카드 왼쪽 위 태그 (현재 탭 이름). 탭 기준 1등 경로에만 넘깁니다. */
-    badgeLabel?: string;
+    badgeLabels?: string[];
     onPress: () => void;
     onStart: () => void;
 };
 
-export default function RouteCard({ route, expanded, badgeLabel, onPress, onStart, showDates = false }: Props) {
+export default function RouteCard({ route, expanded, badgeLabels = [], onPress, onStart, showDates = false }: Props) {
     const { summary } = route;
-    const estimated = summary.fareSource === 'ESTIMATED';
     const subwaySteps = route.steps.filter(step => step.type === 'SUBWAY');
     const firstSlot = subwaySteps[0]?.stations?.[0];
-    const arrival = formatRouteTime(summary.arrivalAt, showDates);
-    const departure = formatRouteTime(summary.departureAt, showDates);
-    const tag = route.routeType !== null && !!badgeLabel;
-
-    const tags = (tag || !!firstSlot?.firstTrain) && (
-        <View style={styles.tags}>
-            {tag && (
-                <View style={[styles.tag, styles.tagMain]}>
-                    <Text style={[styles.tagText, styles.tagMainText]}>{badgeLabel}</Text>
-                </View>
-            )}
-            {!!firstSlot?.firstTrain && (
-                <View style={styles.tag}>
-                    <Text style={styles.tagText}>첫차 {formatSlot(firstSlot)} 기준</Text>
-                </View>
-            )}
-        </View>
-    );
-
-    if (!expanded) {
-        return (
-            <Pressable
-                style={({ pressed }) => [styles.card, pressed && styles.pressed]}
-                onPress={onPress}
-                accessibilityRole="button"
-                accessibilityLabel={`${formatTotalTime(summary)} 경로 펼치기`}
-            >
-                {tags}
-                <View style={[styles.headline, !!tags && styles.headlineGap]}>
-                    {totalTime(summary)}
-                    {!!arrival && <Text style={styles.arrival}>{arrival} 도착</Text>}
-                    <View style={styles.flex} />
-                    <Ionicons name="chevron-down" size={17} color={LV_SECONDARY} />
-                </View>
-                <View style={styles.metaRow}>
-                    <Text style={styles.meta} numberOfLines={1}>
-                        {estimated ? '예상 ' : ''}
-                        {formatFare(route)}, 환승 {summary.transferCount}회
-                    </Text>
-                    <CongestionMark congestion={summary.congestion} compact />
-                </View>
-                <RouteNotices summary={summary} />
-            </Pressable>
-        );
-    }
-
+    const arrival = formatRouteRelativeDateTime(summary.arrivalAt);
+    const departure = summary.departureAt ? formatRouteRelativeDateTime(summary.departureAt) : '';
     const totalSec = route.steps.reduce((sum, step) => sum + Math.max(step.durationSec, 0), 0);
-    const firstLine = subwaySteps[0]?.line ?? null;
-    const lastLine = subwaySteps.length > 1 ? subwaySteps[subwaySteps.length - 1].line : null;
-    const lastStop = subwaySteps[subwaySteps.length - 1]?.stops.at(-1)?.name ?? '';
+    const lastStop = subwaySteps.at(-1)?.stops.at(-1)?.name ?? '';
 
     return (
         <View style={styles.card}>
-            {/* 태그 + 경로 전체 혼잡도 */}
             <View style={styles.topRow}>
-                <View style={styles.flex}>{tags}</View>
+                <View style={[styles.tags, styles.flex]}>
+                    {badgeLabels.map(label => <View key={label} style={[styles.tag, styles.tagMain]}><Text style={[styles.tagText, styles.tagMainText]}>{label}</Text></View>)}
+                </View>
                 <CongestionMark congestion={summary.congestion} />
             </View>
-
-            {/* 소요 시간 + 출발·도착 */}
+            {!!firstSlot?.firstTrain && <View style={styles.tags}><View style={styles.tag}><Text style={styles.tagText}>첫차 {formatSlot(firstSlot)} 기준</Text></View></View>}
             <View style={[styles.headline, styles.headlineGap]}>
-                {totalTime(summary)}
-                {!!departure && <Text style={styles.arrival}>{departure} 출발</Text>}
+                <Text style={styles.time}>{Math.floor((summary.totalWithWaitSec ?? summary.totalTimeSec) / 60)}분</Text>
                 {!!arrival && <Text style={styles.arrival}>{arrival} 도착</Text>}
             </View>
-
-            {/* 예상 요금, 환승, 도보 */}
             <Text style={styles.meta}>
-                {estimated && <Text>예상</Text>}
-                {estimated ? ' ' : ''}
-                {formatFare(route)}, 환승 {summary.transferCount}회
-                {summary.walkingMinutes > 0 ? `, 도보 ${summary.walkingMinutes}분` : ''}
+                {summary.fareSource === 'ESTIMATED' && <Text>예상</Text>}{summary.fareSource === 'ESTIMATED' ? ' ' : ''}{formatFare(route)} · 환승 {summary.transferCount}회
+                {summary.walkingMinutes > 0 ? ` · 도보 ${summary.walkingMinutes}분` : ''}
             </Text>
             {showDates && summary.slackSeconds != null && <Text style={styles.slack}>{formatArrivalSlack(summary.slackSeconds)}</Text>}
-
             <RouteNotices summary={summary} />
-
-            {/* 구간 막대: 노선색(도보는 연한 보라) 칸에 분 */}
-            <View style={styles.segments}>
-                {route.steps.map((step, index) => (
-                    <View
-                        key={`${route.routeId}-bar-${index}`}
-                        style={[
-                            styles.segment,
-                            {
-                                flex: Math.max(step.durationSec, totalSec * 0.08, 1),
-                                backgroundColor: step.type === 'WALKING' ? LV_WALK_BAR : step.line?.color ?? LINE_FALLBACK,
-                            },
-                        ]}
-                    >
-                        <Text style={styles.segmentText} numberOfLines={1}>
-                            {step.type === 'WALKING' ? stepMinutes(step.durationSec) : toMinutes(step.durationSec)}분
-                        </Text>
-                    </View>
-                ))}
-            </View>
-
-            {/* 노선 흐름 + 정차역별 혼잡도 막대 (명세 6.2) */}
             <View style={styles.lineFlow}>
-                {lineMark(firstLine)}
-                {lastLine && (
-                    <>
-                        <Ionicons name="arrow-forward" size={14} color={LV_SECONDARY} />
-                        {lineMark(lastLine)}
-                    </>
-                )}
+                {subwaySteps.map((step, index) => <View key={index} style={styles.lineMark}>
+                    {index > 0 && <Ionicons name="arrow-forward" size={14} color={LV_SECONDARY} />}
+                    {lineMark(step.line)}
+                </View>)}
+            </View>
+            <View style={styles.segments}>
+                {route.steps.map((step, index) => <View key={index} style={[styles.segment, {
+                    flex: Math.max(step.durationSec, totalSec * 0.08, 1),
+                    backgroundColor: step.type === 'WALKING' ? LV_WALK_BAR : step.line?.color ?? LINE_FALLBACK,
+                }]}>
+                    <Text style={[styles.segmentText, step.type === 'WALKING' && styles.walkSegmentText]} numberOfLines={1}>{step.type === 'WALKING' ? stepMinutes(step.durationSec) : toMinutes(step.durationSec)}분</Text>
+                </View>)}
             </View>
             {congestionStrip(route)}
-
-            {/* 단계 목록 */}
-            <View style={styles.steps}>
+            {expanded && <View style={styles.steps}>
+                {!!departure && <Text style={styles.arrival}>{departure} 출발</Text>}
                 {route.steps.map((step, index) => {
                     if (step.type !== 'SUBWAY') return null;
+                    const transfer = subwaySteps.indexOf(step) > 0;
                     const previous = route.steps[index - 1];
-                    // 바로 앞 WALKING: 환승 도보 / 환승 소요 / 도보 (#146, format.ts formatWalkBeforeRide)
                     const walkLabel = index > 0 && previous?.type === 'WALKING' ? formatWalkBeforeRide(route.steps, index - 1) : null;
-                    const wait = formatWait(step, subwaySteps.indexOf(step) > 0);
+                    const wait = formatWait(step, transfer);
                     const direction = formatDirection(step);
-                    const stopCount = Math.max(step.stops.length - 1, 0);
-
-                    return (
-                        <View key={`${route.routeId}-step-${index}`} style={styles.stepGroup}>
-                            {walkLabel != null && (
-                                <View style={styles.walkRow}>
-                                    <Passenger tone="me" size={18} shadow={false} />
-                                    <Text style={styles.walkText}>{walkLabel}</Text>
-                                </View>
-                            )}
-                            {!!wait && <Text style={styles.waitText}>{wait}</Text>}
-
-                            <View style={styles.rideRow}>
-                                <View style={[styles.lineCircle, { backgroundColor: step.line?.color ?? LINE_FALLBACK }]}>
-                                    <Text style={styles.lineNumber}>{step.line?.id != null ? String(step.line.id) : '?'}</Text>
-                                </View>
-                                <Text style={styles.rideText}>
-                                    {step.stops[0]?.name} 승차{' '}
-                                    <Text style={styles.rideSub}>
-                                        {stopCount}개역 {toMinutes(step.durationSec)}분{direction ? `, ${direction}` : ''}
-                                    </Text>
-                                </Text>
-                                <CongestionMark congestion={stepCongestion(step)} compact />
+                    const color = step.line?.color ?? LINE_FALLBACK;
+                    return <View key={index} style={styles.timelineGroup}>
+                        <View style={[styles.timelineLine, { backgroundColor: color }]} />
+                        <View style={[styles.timelineDot, { borderColor: color }]} />
+                        <View style={styles.timelineContent}>
+                            <Text style={styles.stationTitle}>{step.stops[0]?.name} {transfer ? '환승' : '승차'}</Text>
+                            {walkLabel != null && <View style={styles.walkRow}><Passenger tone="me" size={18} shadow={false} /><Text style={styles.walkText}>{walkLabel}</Text></View>}
+                            {!!wait && <Text style={styles.timelineHint}>{wait}</Text>}
+                            <View style={styles.timelineRide}>
+                                {lineMark(step.line)}
+                                <Text style={styles.rideSub}>{Math.max(step.stops.length - 1, 0)}개역 · {toMinutes(step.durationSec)}분{direction ? ` · ${direction}` : ''}</Text>
                             </View>
+                            <CongestionMark congestion={stepCongestion(step)} compact />
                         </View>
-                    );
+                    </View>;
                 })}
-
-                {/* 마지막 도착 */}
                 <View style={styles.rideRow}>
-                    <View style={[styles.endDot, { borderColor: subwaySteps.at(-1)?.line?.color ?? LV_MAIN }]} />
-                    <Text style={styles.rideText}>
-                        {lastStop} 도착
-                        {!!arrival && <Text style={styles.rideSub}> {arrival} 도착 예정</Text>}
-                    </Text>
+                    <ArrivalFlag size={22} />
+                    <View style={styles.flex}><Text style={styles.stationTitle}>{lastStop} 도착</Text>{!!arrival && <Text style={styles.timelineHint}>{arrival} 도착 예정</Text>}</View>
                 </View>
+            </View>}
+            <View style={styles.buttons}>
+                <Pressable style={({ pressed }) => [styles.detailButton, pressed && styles.pressed]} onPress={onPress} accessibilityRole="button" accessibilityState={{ expanded }}>
+                    <Text style={styles.detailText}>{expanded ? '접기' : '상세 보기'}</Text>
+                    <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={LV_MAIN} />
+                </Pressable>
+                <Pressable style={({ pressed }) => [styles.startButton, pressed && styles.pressed]} onPress={onStart} accessibilityRole="button">
+                    <Text style={styles.startText}>이 경로로 안내 시작</Text>
+                </Pressable>
             </View>
-
-            <Pressable
-                style={({ pressed }) => [styles.startButton, pressed && styles.pressed]}
-                onPress={onStart}
-                accessibilityRole="button"
-            >
-                <Text style={styles.startText}>이 경로로 안내 시작</Text>
-            </Pressable>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
+    buttons: { flexDirection: 'row', gap: 8, marginTop: 14 },
+    detailButton: { flex: 1, height: 46, borderRadius: 23, backgroundColor: '#F4F1F7', flexDirection: 'row', gap: 4, alignItems: 'center', justifyContent: 'center' },
+    detailText: { color: LV_MAIN, fontSize: 13, fontWeight: '700' },
+    walkSegmentText: { color: LV_SECONDARY },
+    timelineGroup: { paddingLeft: 26, paddingBottom: 20, position: 'relative' },
+    timelineLine: { position: 'absolute', left: 7, top: 10, bottom: -10, width: 3 },
+    timelineDot: { position: 'absolute', left: 2, top: 4, width: 13, height: 13, borderRadius: 7, borderWidth: 3, backgroundColor: '#FFFFFF' },
+    timelineContent: { gap: 7 },
+    stationTitle: { color: LV_TEXT, fontSize: 15, fontWeight: '700' },
+    timelineHint: { color: LV_SECONDARY, fontSize: 12, marginTop: 2 },
+    timelineRide: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 7 },
     flex: {
         flex: 1,
     },
@@ -392,7 +317,7 @@ const styles = StyleSheet.create({
     tag: {
         paddingHorizontal: 8,
         paddingVertical: 3,
-        borderRadius: 6,
+        borderRadius: 12,
         backgroundColor: LV_SOFT,
     },
 
@@ -432,7 +357,7 @@ const styles = StyleSheet.create({
 
     time: {
         color: LV_TEXT,
-        fontSize: 22,
+        fontSize: 32,
         fontWeight: '800',
     },
 
@@ -469,8 +394,8 @@ const styles = StyleSheet.create({
     },
 
     segments: {
-        height: 22,
-        marginTop: 12,
+        height: 24,
+        marginTop: 10,
         flexDirection: 'row',
         gap: 2,
         borderRadius: 11,
@@ -489,8 +414,10 @@ const styles = StyleSheet.create({
     },
 
     steps: {
-        marginTop: 12,
-        gap: 8,
+        marginTop: 16,
+        paddingTop: 16,
+        borderTopWidth: 1,
+        borderTopColor: LV_CARD_BORDER,
     },
 
     stepGroup: {
@@ -624,8 +551,8 @@ const styles = StyleSheet.create({
 
     startButton: {
         height: 46,
-        marginTop: 14,
-        borderRadius: 13,
+        flex: 1.35,
+        borderRadius: 23,
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: LV_MAIN,
@@ -633,7 +560,7 @@ const styles = StyleSheet.create({
 
     startText: {
         color: '#FFFFFF',
-        fontSize: 14.5,
+        fontSize: 13,
         fontWeight: '600',
     },
 

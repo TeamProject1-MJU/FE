@@ -2524,6 +2524,13 @@ test('mock 경로의 기존 대기·도착 시각·오류 동작 유지, 서버 
 
 function routeScreenRuntime(params, mock = false) {
     const r = createScreenRuntime(mock ? {} : serverEnv, 'src/app/route-search.tsx');
+    r.external.react.useMemo = (callback, dependencies) => {
+        const ref = r.external.react.useRef(null);
+        if (!ref.current || dependencies.some((value, index) => value !== ref.current.dependencies[index])) {
+            ref.current = { value: callback(), dependencies };
+        }
+        return ref.current.value;
+    };
     r.external['expo-router'].useLocalSearchParams = () => params;
     // 경로 화면의 검색 effect가 실제 React처럼 안정적인 콜백을 보도록 해요.
     r.external.react.useCallback = (callback, dependencies) => {
@@ -2621,7 +2628,7 @@ test('경로 표시: 미제공 회색·예상 요금·대기 필드 없는 시�
     const card = r.load('src/components/route/RouteCard.tsx').default;
     assert.ok(findElement(card({ route, expanded: true }), element => element.props?.children === '예상'));
     const collapsed = card({ route, expanded: false });
-    assert.ok(findElement(collapsed, element => Array.isArray(element.props?.children) && element.props.children.includes('예상 ')));
+    assert.ok(findElement(collapsed, element => element.type === 'Text' && textOf(element).includes('예상 ')));
 });
 
 test('mock 경로 화면 초기값은 기존 mock 역을 그대로 사용해요', async () => {
@@ -7440,10 +7447,10 @@ test('146 환승 판별과 분 계산: 두 SUBWAY 사이 WALKING 만 환승, 최
     const steps = route146().steps;
     assert.deepEqual(steps.map((_, index) => format.isTransferStep(steps, index)), [false, false, true, false, true, false, false]);
     assert.equal(format.isTransferStep(steps, 99), false);
-    for (const [sec, minutes] of [[660, 11], [20, 1], [29, 1], [0, 1], [89, 1], [90, 2], [NaN, 1]]) assert.equal(format.stepMinutes(sec), minutes, String(sec));
+    for (const [sec, minutes] of [[660, 11], [20, 1], [29, 1], [0, 1], [89, 1], [90, 1], [NaN, 1]]) assert.equal(format.stepMinutes(sec), minutes, String(sec));
     assert.equal(format.formatTransferDuration(steps[2]), '환승 소요 11분');
     assert.deepEqual(steps.map((step, index) => step.type === 'WALKING' ? format.formatWalkingStep(steps, index) : null).filter(Boolean), [
-        '출발역까지 걷기 · 도보 2분', '서버 환승 안내 · 환승 소요 11분', '고속터미널역 7호선 승강장으로 이동 · 환승 소요 1분', '도착지까지 걷기 · 도보 3분']);
+        '출발역까지 걷기 · 도보 1분', '서버 환승 안내 · 환승 소요 11분', '고속터미널역 7호선 승강장으로 이동 · 환승 소요 1분', '도착지까지 걷기 · 도보 3분']);
     // 안내 중간의 "환승"과 단독 "환승"
     const only = [...steps]; only[2] = { ...steps[2], guidance: '환승' };
     assert.equal(format.formatWalkingStep(only, 2), '이동 · 환승 소요 11분');
@@ -7460,7 +7467,7 @@ test('146 도보 1분 + 대기 10분 환승: 어디에도 "도보 11분" 없이 
     for (const texts of [detail, expanded, collapsed]) assert.ok(!texts.some(text => /도보 11분|환승 도보/.test(text)), texts.join(' / '));
     assert.ok(detail.some((text, index) => text === '3호선으로 갈아타요' && detail[index + 1].startsWith('환승 소요 11분')));
     assert.ok(expanded.some(text => text.trim() === '환승 소요 11분'));
-    assert.ok(expanded.some(text => text.includes('환승 2회, 도보 1분')));
+    assert.ok(expanded.some(text => text.includes('환승 2회 · 도보 1분')));
     // 경로 안내 화면 요약도 서버 값 그대로예요.
     const r = guide129({ route }); const view = r.render();
     assert.ok(findText(view, '환승')); assert.ok(findText(view, '2회'));
@@ -7482,15 +7489,15 @@ test('146 환승 여러 번: 펼친 카드와 경로 상세가 환승마다 같�
         assert.deepEqual(detailTransfers, ['11', '1']); assert.deepEqual(cardTransfers, detailTransfers);
         assert.deepEqual(cardTransfers, route.steps.filter((_, index) => format.isTransferStep(route.steps, index)).map(step => String(format.stepMinutes(step.durationSec))));
         // 첫 지하철 전 도보는 "도보"(이전에는 펼친 카드가 "환승 도보"로 잘못 표시했어요), 마지막 도보도 "도보"
-        assert.ok(expanded.some(text => text.trim() === '도보 2분'));
-        assert.ok(detail.some(text => text.startsWith('출발역까지 걷기, 도보 2분'))); assert.ok(detail.some(text => text.startsWith('도착지까지 걷기, 도보 3분')));
+        assert.ok(expanded.some(text => text.trim() === '도보 1분'));
+        assert.ok(detail.some(text => text.startsWith('출발역까지 걷기, 도보 1분'))); assert.ok(detail.some(text => text.startsWith('도착지까지 걷기, 도보 3분')));
         // 요약 도보는 서버 값 그대로, 환승 횟수는 환승 단계 수와 같아요.
-        assert.ok(expanded.some(text => text.includes(`환승 2회, 도보 ${walkingMinutes}분`)));
+        assert.ok(expanded.some(text => text.includes(`환승 2회 · 도보 ${walkingMinutes}분`)));
         assert.equal(cardTransfers.length, route.summary.transferCount);
         assert.ok(!expanded.some(text => text.includes('환승 도보')) && !detail.some(text => text.includes('환승 도보')));
         // 접힌 카드는 단계 시간을 보여주지 않고 환승 횟수만 보여줘요.
         const collapsed = card146(route, false);
-        assert.ok(collapsed.some(text => text.includes('환승 2회'))); assert.ok(!collapsed.some(text => /환승 소요|도보 \d+분/.test(text)));
+        assert.ok(collapsed.some(text => text.includes('환승 2회'))); assert.ok(!collapsed.some(text => /환승 소요/.test(text)));
     }
 });
 
@@ -7553,9 +7560,9 @@ test('146 보완: 대기가 따로 오지 않는 660초 환승은 "환승 소요
     assert.ok(expanded.some(text => text === '환승 대기 약 2분')); assert.ok(expanded.some(text => text === '승차 대기 약 3분'));
     assert.ok(detail.some((text, index) => text === '3호선으로 갈아타요' && detail[index + 1].startsWith('환승 소요 11분')));
     assert.ok(detail.some((text, index) => text === '7호선으로 갈아타요' && detail[index + 1].startsWith('환승 도보 1분')));
-    assert.ok(expanded.some(text => text.trim() === '도보 2분')); // 첫 열차 전 걷기는 그대로 "도보"
+    assert.ok(expanded.some(text => text.trim() === '도보 1분')); // 첫 열차 전 걷기는 그대로 "도보"
     for (const texts of [expanded, detail, card146(mixed, false)]) assert.ok(!texts.some(text => text.includes('도보 11분')), texts.join(' / '));
-    assert.ok(expanded.some(text => text.includes('환승 2회, 도보 1분')));
+    assert.ok(expanded.some(text => text.includes('환승 2회 · 도보 1분')));
     // 펼친 카드와 경로 상세의 숫자가 환승마다 같아요.
     const numbers = texts => texts.map(text => /환승 (?:소요|도보) (\d+)분|걸어서 (\d+)분/.exec(text)).filter(Boolean).map(match => match[1] ?? match[2]);
     assert.deepEqual(numbers(expanded.filter(text => /^\s*환승 (소요|도보)/.test(text))), ['11', '1']);
@@ -8204,7 +8211,7 @@ test('161 TIMETABLE 경로의 펼침·접힘·안내 화면은 서버의 대기 
         assert.equal(format.formatTotalTime(summary), expected);
         assert.equal(format.formatTotalTime({ ...summary, transferWaitSec: 300 }), expected, '이미 포함된 대기를 다시 합산하지 않아요');
         const Card = search.load('src/components/route/RouteCard.tsx').default;
-        for (const expanded of [false, true]) assert.ok(findText(Card({ ...card.props, expanded }), expected));
+        for (const expanded of [false, true]) assert.ok(findText(Card({ ...card.props, expanded }), expected.replace('대기 포함 ', '')));
         card.props.onStart(); const selected = search.load('src/stores/route-store.ts').getSelectedRoute();
         assert.equal(selected.route.summary.waitKind, 'TIMETABLE');
         const guide = route147Guide(selected); const guideView = guide.render();
@@ -8602,10 +8609,10 @@ const reco153Estimate = (overrides = {}) => ({ departureAt: '2026-11-20T18:38:00
 const reco153Past = { departureAt: '2026-11-20T18:38:00+09:00', arriveAt: null, slackSeconds: null, source: null, boardingTrain: null, legs: [] };
 /** 내 참여자만 바꾼 실행 */
 const reco153Run = (mine, runOverrides = {}) => recoRun({ results: ['TIME', 'FARE', 'DISTANCE'].map((criterion, i) => {
-    const result = recoResult(criterion, 77001 + (i === 1 ? 1 : 0));
-    result.participantTimes[0] = { ...result.participantTimes[0], ...mine };
-    return result;
-}), ...runOverrides });
+        const result = recoResult(criterion, 77001 + (i === 1 ? 1 : 0));
+        result.participantTimes[0] = { ...result.participantTimes[0], ...mine };
+        return result;
+    }), ...runOverrides });
 async function reco153Screen(run) {
     const r = recoScreen(); r.recoRespond(() => ok(run));
     const view = await pumpScreen(r);
@@ -9016,12 +9023,12 @@ test('152 시각 변경 전의 늦은 성공·실패는 새 검색 조건과 결
 test('152 결과·안내는 검색한 조건과 자정 다음 날의 서버 날짜·여유 시간을 그대로 표시해요', async () => {
     const r = await screen152(); r.selector152().props.onChange({ mode: 'arrival', at: ARRIVE152 }); await pump152(r);
     const card = r.card152(); const view = card.type(card.props);
-    assert.ok(findText(view, '2026.11.14 23:35 출발')); assert.ok(findText(view, '2026.11.15 00:05 도착'));
+    const relative = r.load('src/utils/route-time.ts').formatRouteRelativeDateTime;
+    assert.ok(findText(card.type({ ...card.props, expanded: true }), `${relative(card.props.route.summary.departureAt)} 출발`)); assert.ok(findText(view, `${relative(card.props.route.summary.arrivalAt)} 도착`));
     assert.ok(findText(view, '지정한 도착 시각보다 3분 일찍 도착해요.'));
     const notice = findElement(r.render(), element => element.type === r.load('src/components/route/RouteTimeNotice.tsx').default);
-    assert.ok(findText(notice.type(notice.props), '검색 조건 · 2026.11.15 00:08까지 도착'));
-    card.props.onStart(); const selected = r.load('src/stores/route-store.ts').getSelectedRoute(); const guide = route147Guide(selected);
-    const relative = guide.load('src/utils/route-time.ts').formatRouteRelativeDateTime;
+    assert.ok(findText(notice.type(notice.props), '경로 1개 2026.11.15 00:08까지 도착 기준'));
+    card.props.onStart(); const selected = r.load('src/stores/route-store.ts').getSelectedRoute(); const guide = clock152(route147Guide(selected));
     const guideView = guide.render(); assert.ok(findTextIncluding(guideView, `${relative(selected.route.summary.departureAt)} → ${relative(selected.route.summary.arrivalAt)} 도착`));
     const guideNotice = findElement(guideView, element => element.type === guide.load('src/components/route/RouteTimeNotice.tsx').default);
     assert.equal(guideNotice.props.selection.at, ARRIVE152);
@@ -9037,7 +9044,7 @@ test('152 첫차 전·막차 후 응답의 출발 날짜·대기 포함 시간·
             noService: true, serviceNotice: '서버가 안내한 다음 운행일 첫차예요.', arrivesAfterAppointment: true, waitKind: 'TIMETABLE', waitSec: 17160, totalWithWaitSec: 18073, slackSeconds: null });
         const r = await screen152(() => jsonResponse({ success: true, data })); r.selector152().props.onChange({ mode: 'departure', at }); await pump152(r);
         const card = r.card152(); assert.deepEqual(plain(card.props.route.summary), plain(data.routes[0].summary));
-        const view = card.type(card.props); assert.ok(findText(view, '2026.11.15 05:36 출발')); assert.ok(findText(view, '대기 포함 301분'));
+        const view = card.type({ ...card.props, expanded: true }); assert.ok(findText(view, `${r.load('src/utils/route-time.ts').formatRouteRelativeDateTime(data.routes[0].summary.departureAt)} 출발`)); assert.ok(findText(view, '301분'));
         const notices = findElement(view, element => element.type === r.load('src/components/route/RouteNotices.tsx').default);
         const shown = notices.type(notices.props); assert.ok(findText(shown, '서버가 안내한 다음 운행일 첫차예요.')); assert.ok(findText(shown, '약속 시각보다 늦게 도착해요')); r.unmount();
     }
@@ -9976,7 +9983,7 @@ function panel232(mock = false, platform = 'ios') {
     r.scroll232().props.onLayout({ nativeEvent: { layout: { height: 400 } } });
     r.scroll232().props.onContentSizeChange(300, 1000);
     r.scrollEvent232 = (y, height = 1000, viewport = 400) => r.scroll232().props.onScroll({ nativeEvent: {
-        contentOffset: { y }, contentSize: { height }, layoutMeasurement: { height: viewport } } });
+            contentOffset: { y }, contentSize: { height }, layoutMeasurement: { height: viewport } } });
     r.scrollEvent232(600); r.advance(16); r.calls232.length = 0;
     r.button232 = label => findElement(r.view232(), e => e.type === 'Pressable' && e.props.accessibilityLabel === label);
     return r;
@@ -10166,3 +10173,71 @@ test('232 출발 날짜만 범위 안에 맞추고 기존 도착 선택 값은 �
     r.button152('확인').props.onPress(); assert.equal(r.changes152.length, 0);
     assert.ok(findText(r.pump152(), '도착 시각은 현재 이후로 선택해 주세요.')); r.unmount();
 });
+
+
+test('233 36분 40초는 총시간·대기·구간에서 36분이며 도보·구간 최소 1분과 대기 0초 생략을 유지해요', () => {
+    const r = createRuntime(); const f = r.load('src/components/route/format.ts');
+    const route = r.load('src/services/route.ts').__parseRouteSearch(routeData()).routes[0];
+    Object.assign(route.summary, { totalTimeSec: 2200, totalWithWaitSec: null });
+    assert.equal(f.formatTotalTime(route.summary), '36분');
+    Object.assign(route.summary, { totalTimeSec: 1000, totalWithWaitSec: 2200, waitKind: 'ESTIMATED' });
+    assert.equal(f.formatTotalTime(route.summary), '대기 포함 약 36분');
+    const ride = route.steps.find(step => step.type === 'SUBWAY');
+    Object.assign(ride, { durationSec: 2200, waitSec: 2200, waitKind: 'ESTIMATED' });
+    assert.equal(f.formatWait(ride, false), '승차 대기 약 36분');
+    assert.equal(f.formatWait({ ...ride, waitSec: 0 }, false), '');
+    assert.equal(f.stepMinutes(2200), 36);
+    for (const sec of [0, 1, 59, 60, 90]) assert.equal(f.stepMinutes(sec), 1);
+    const card = card146(route, true); assert.ok(card.some(text => text.includes('36분')));
+    assert.ok(timeline146(route).some(text => text.includes('36분')));
+});
+
+test('233 배지는 대기 포함 초·환승·요금을 독립 비교하고 동률·다중 배지·단일 경로를 처리해요', () => {
+    const r = createRuntime(); const { sortRoutes, routeBadges } = r.load('src/components/route/result.ts');
+    const make = (id, total, wait, transfers, fare) => ({ ...routeData().routes[0], routeId: id, routeType: null,
+        summary: { ...routeData().routes[0].summary, totalTimeSec: total, totalWithWaitSec: wait, transferCount: transfers, fare } });
+    const a = make('a', 1000, 2200, 1, 1500); const b = make('b', 2199, null, 2, 1400); const c = make('c', 2000, 2200, 0, 1400);
+    const routes = [a, c, b];
+    assert.deepEqual(plain(sortRoutes(routes).map(route => route.routeId)), ['b', 'c', 'a']);
+    assert.deepEqual(plain(routes.map(route => route.routeId)), ['a', 'c', 'b']);
+    assert.deepEqual(plain(routeBadges(b, routes)), ['최소시간', '최저요금']);
+    assert.deepEqual(plain(routeBadges(c, routes)), ['최소환승', '최저요금']);
+    assert.deepEqual(plain(routeBadges(a, routes)), []);
+    assert.deepEqual(plain(routeBadges(a, [a])), []);
+    assert.deepEqual(plain(routeBadges(a, [a, { ...a, routeId: 'tie' }])), ['최소시간', '최소환승', '최저요금']);
+});
+
+test('233 mock·서버 응답 경로 1개·복수 모두 표시하고 독립 토글·안내 시작으로 원본 경로를 전달해요', async () => {
+    for (const mock of [false, true]) for (const count of [1, 3]) {
+        const r = routeScreenRuntime({ departure: '건대입구', destination: '사당' }, mock);
+        const data = createRuntime().load('src/services/route.ts').__parseRouteSearch(routeData());
+        data.routes = Array.from({ length: count }, (_, index) => ({ ...data.routes[0], routeId: `233-${index}`, routeType: null,
+            summary: { ...data.routes[0].summary, totalWithWaitSec: null, totalTimeSec: 2200 + index * 100, transferCount: index, fare: 1500 } }));
+        // Mock normally returns one route; this in-memory fixture never changes mock data on disk.
+        if (mock) r.load('src/services/route.ts').searchRoute = async () => data;
+        else r.context.fetch = async url => jsonResponse({ success: true, data: url.endsWith('/routes/search') ? data
+                : stationSearchData([url.includes(encodeURIComponent('건대입구')) ? serverRouteStation(88001, '건대입구') : serverRouteStation(99002, '사당')]) });
+        for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+        const Card = r.load('src/components/route/RouteCard.tsx').default;
+        const cards = () => findElements(r.render(), node => node.type === Card);
+        assert.equal(cards().length, count); assert.ok(cards().every(card => !card.props.expanded));
+        assert.ok(cards().every(card => count > 1 || card.props.badgeLabels.length === 0));
+        cards()[0].props.onPress(); assert.equal(cards()[0].props.expanded, true);
+        if (count > 1) { cards()[1].props.onPress(); assert.equal(cards()[0].props.expanded, true); assert.equal(cards()[1].props.expanded, true); }
+        cards()[0].props.onPress(); assert.equal(cards()[0].props.expanded, false);
+        for (const card of cards()) {
+            const view = Card(card.props);
+            assert.ok(findText(view, '이 경로로 안내 시작')); assert.ok(findText(view, card.props.expanded ? '접기' : '상세 보기'));
+            card.props.onStart();
+            assert.equal(r.load('src/stores/route-store.ts').getSelectedRoute().route.routeId, card.props.route.routeId);
+        }
+        assert.equal(findElement(r.render(), node => node.props?.accessibilityRole === 'tab'), null);
+        r.unmount();
+    }
+});
+
+function findElements(node, predicate) {
+    if (node == null || typeof node !== 'object') return [];
+    if (Array.isArray(node)) return node.flatMap(item => findElements(item, predicate));
+    return [...(predicate(node) ? [node] : []), ...findElements(node.props?.children, predicate)];
+}

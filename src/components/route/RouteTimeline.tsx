@@ -28,7 +28,7 @@ const LV_DIVIDER = '#F1EEF4';
 const UNSUPPORTED = '#a1a8b8';
 const WALK_LINE = '#DCD7E3';
 
-const toMinutes = (sec: number) => Math.max(1, Math.round(sec / 60));
+const toMinutes = (sec: number) => Math.max(1, Math.floor(sec / 60));
 
 /** 구간 안 정차역 혼잡도 중 가장 높은 값 */
 function stepCongestion(step: RouteStep): CongestionData | null {
