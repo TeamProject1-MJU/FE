@@ -7013,7 +7013,7 @@ test('129 HTML 에 경로·역 데이터가 들어가지 않고 CSP·이동 차�
     const html = buildMapHtml('test');
     assert.equal(buildMapHtml.length, 1);
     for (const value of ['127.01', '37.51', '2호선', '#00a84d', '#00a5de', 'route-129']) assert.ok(!html.includes(value), value);
-    assert.ok(html.includes(`content="default-src 'none'; form-action 'none'; base-uri 'none'; script-src 'unsafe-inline' 'unsafe-eval' https://*.kakao.com https://*.daum.net https://*.daumcdn.net; style-src 'unsafe-inline'; img-src data: https://*.kakao.com https://*.daumcdn.net https://*.daum.net; connect-src https://*.kakao.com https://*.daum.net https://*.daumcdn.net"`));
+    assert.ok(html.includes(`content="default-src 'none'; form-action 'none'; base-uri 'none'; script-src 'unsafe-inline' 'unsafe-eval' https://*.kakao.com https://*.daum.net https://*.daumcdn.net https://*.kakaocdn.net; style-src 'unsafe-inline'; img-src data: https://*.kakao.com https://*.daumcdn.net https://*.kakaocdn.net https://*.daum.net; connect-src https://*.kakao.com https://*.daum.net https://*.daumcdn.net https://*.kakaocdn.net"`));
     for (const url of ['https://kakao.com.evil.test', 'http://dapi.kakao.com', 'https://localhost:9999']) assert.equal(isAllowedMapNavigation(url), false);
 });
 

@@ -10,7 +10,12 @@
 
     "ios": {
       "icon": "./assets/expo.icon",
-      "bundleIdentifier": "com.mju.linkro"
+      "bundleIdentifier": "com.mju.linkro",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
+      }
     },
 
     "android": {
