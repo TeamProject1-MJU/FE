@@ -8853,6 +8853,34 @@ test('142 방에서 개인 검색으로 바꾸면 이전 방 오류를 지우고
     }
 });
 
+/* ---------- 선택 시각의 한국 연도 표기 (#243) ---------- */
+test('243 선택 시각은 올해의 연도만 생략하고 다른 연도와 지금 출발은 유지해요', () => {
+    const time = createRuntime().load('src/utils/route-time.ts');
+    const now = Date.parse('2026-11-16T10:33:00+09:00');
+    for (const [mode, suffix] of [['departure', ' 출발'], ['arrival', '까지 도착']]) {
+        for (const [at, label] of [
+            ['2026-11-16T23:00:00+09:00', '11.16 23:00'],
+            ['2027-01-10T23:00:00+09:00', '2027.01.10 23:00'],
+            ['2025-12-31T23:00:00+09:00', '2025.12.31 23:00'],
+        ]) {
+            const selection = { mode, at };
+            assert.equal(time.formatRouteTimeSelection(selection, now), label + suffix);
+            assert.deepEqual(plain(time.routeTimeOptions(selection)), { [mode === 'departure' ? 'departAt' : 'arriveAt']: at });
+        }
+    }
+    assert.equal(time.formatRouteTimeSelection({ mode: 'now' }, now), '지금 출발');
+    assert.equal(time.formatRouteDateTime('2026-11-16T23:00:00+09:00'), '2026.11.16 23:00');
+});
+
+test('243 올해 판정과 선택 날짜는 기기 시간대 대신 서울의 연말·연초 경계를 따라요', () => {
+    const { formatRouteTimeSelection: format } = createRuntime().load('src/utils/route-time.ts');
+    const newYear = { mode: 'arrival', at: '2026-12-31T15:00:00Z' };
+    assert.equal(format(newYear, Date.parse('2026-12-31T14:59:59Z')), '2027.01.01 00:00까지 도착');
+    assert.equal(format(newYear, Date.parse('2026-12-31T15:00:00Z')), '01.01 00:00까지 도착');
+    const lastYear = { mode: 'departure', at: '2026-12-31T14:59:00Z' };
+    assert.equal(format(lastYear, Date.parse('2026-12-31T15:00:00Z')), '2026.12.31 23:59 출발');
+});
+
 /* ---------- 개인 경로 시각 선택·시각표 계약 (#152, BE #130) ---------- */
 const NOW152 = Date.parse('2026-11-14T12:34:56.900+09:00');
 const DEPART152 = '2026-11-14T23:50:00+09:00';
@@ -9027,7 +9055,7 @@ test('152 결과·안내는 검색한 조건과 자정 다음 날의 서버 날�
     assert.ok(findText(card.type({ ...card.props, expanded: true }), `${relative(card.props.route.summary.departureAt)} 출발`)); assert.ok(findText(view, `${relative(card.props.route.summary.arrivalAt)} 도착`));
     assert.ok(findText(view, '지정한 도착 시각보다 3분 일찍 도착해요.'));
     const notice = findElement(r.render(), element => element.type === r.load('src/components/route/RouteTimeNotice.tsx').default);
-    assert.ok(findText(notice.type(notice.props), '경로 1개 2026.11.15 00:08까지 도착 기준'));
+    assert.ok(findText(notice.type(notice.props), '경로 1개 11.15 00:08까지 도착 기준'));
     card.props.onStart(); const selected = r.load('src/stores/route-store.ts').getSelectedRoute(); const guide = clock152(route147Guide(selected));
     const guideView = guide.render(); assert.ok(findTextIncluding(guideView, `${relative(selected.route.summary.departureAt)} → ${relative(selected.route.summary.arrivalAt)} 도착`));
     const guideNotice = findElement(guideView, element => element.type === guide.load('src/components/route/RouteTimeNotice.tsx').default);

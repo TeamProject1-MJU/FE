@@ -107,9 +107,13 @@ export function formatRouteRelativeDateTime(iso: string, now = Date.now()) {
     return `${prefix}${time}`;
 }
 
-export function formatRouteTimeSelection(selection: RouteTimeSelection) {
-    return selection.mode === 'now' ? '지금 출발'
-        : `${formatRouteDateTime(selection.at)}${selection.mode === 'departure' ? ' 출발' : '까지 도착'}`;
+/** 선택 시각은 한국 날짜 기준 올해만 연도를 생략해요. 요청에 쓰는 원본 시각은 유지해요. */
+export function formatRouteTimeSelection(selection: RouteTimeSelection, now = Date.now()) {
+    if (selection.mode === 'now') return '지금 출발';
+    const formatted = formatRouteDateTime(selection.at);
+    const currentYear = seoulDateTime(now)?.date.slice(0, 4);
+    const dateTime = currentYear && formatted.startsWith(`${currentYear}.`) ? formatted.slice(5) : formatted;
+    return `${dateTime}${selection.mode === 'departure' ? ' 출발' : '까지 도착'}`;
 }
 
 export function formatArrivalSlack(seconds: number) {

@@ -739,7 +739,7 @@ const styles = StyleSheet.create({
         fontSize: 13,
     },
 
-    // 시안의 결과 없음 문구: 가운데 15 #83808B, 위아래 60
+    // 경로 검색의 결과 없음·오류 안내는 같은 대비와 굵기로 표시해요.
     message: {
         paddingVertical: 60,
         alignItems: 'center',
@@ -756,7 +756,8 @@ const styles = StyleSheet.create({
     messageTitle: {
         marginTop: 14,
         textAlign: 'center',
-        color: LV_SECONDARY,
+        color: LV_TEXT,
+        fontWeight: '600',
         fontSize: 15,
         lineHeight: 22,
     },
@@ -764,7 +765,7 @@ const styles = StyleSheet.create({
     messageText: {
         marginTop: 6,
         textAlign: 'center',
-        color: LV_SECONDARY,
+        color: '#62596C',
         fontSize: 13,
         lineHeight: 19,
     },
