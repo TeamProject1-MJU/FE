@@ -135,7 +135,7 @@ export default function ProposalPanel({
 
     const pickStation = () => {
         if (full || proposing) return;
-        openStationPicker({ purpose: 'proposal', contextLabel: roomName }, submitProposal);
+        openStationPicker({ purpose: 'proposal', contextLabel: roomName, roomId }, submitProposal);
     };
 
     /* ───────── 투표 · 삭제 (확인 시트) ───────── */
@@ -228,69 +228,57 @@ export default function ProposalPanel({
                         const votable = !myVote;
                         return (
                             <View key={item.id} style={[styles.item, item.votedByMe && styles.itemSelected]}>
-                                <Pressable
-                                    style={({ pressed }) => [styles.itemMain, pressed && votable && styles.pressed]}
-                                    onPress={() => votable && setDialog({ kind: 'vote', proposal: item })}
-                                    disabled={!votable || working}
-                                    accessibilityRole="button"
-                                    accessibilityState={{ disabled: !votable, selected: item.votedByMe }}
-                                    accessibilityLabel={`${formatStationName(item.station.name)} ${item.voteCount}표${item.votedByMe ? ', 내가 투표함' : votable ? ', 눌러서 투표' : ''}`}
-                                >
-                                    <View style={[styles.mark, item.votedByMe && styles.markOn, !votable && !item.votedByMe && styles.markOff]}>
-                                        {item.votedByMe && <Ionicons name="checkmark" size={14} color={WHITE} />}
-                                    </View>
-                                    <View style={styles.itemBody}>
-                                        <View style={styles.nameRow}>
-                                            <Text style={styles.name} numberOfLines={1}>{formatStationName(item.station.name)}</Text>
-                                            {item.station.lines?.map(line => (
-                                                <View key={line.lineId} style={[styles.lineDot, { backgroundColor: line.color }]}>
-                                                    <Text style={styles.lineDotText}>{line.lineName.replace('호선', '')}</Text>
-                                                </View>
-                                            ))}
-                                            {item.isSelected && <Text style={styles.selectedTag}>확정</Text>}
+                                <View style={styles.itemRow}>
+                                    <Pressable
+                                        style={({ pressed }) => [styles.itemMain, pressed && votable && styles.pressed]}
+                                        onPress={() => votable && setDialog({ kind: 'vote', proposal: item })}
+                                        disabled={!votable || working}
+                                        accessibilityRole="button"
+                                        accessibilityState={{ disabled: !votable, selected: item.votedByMe }}
+                                        accessibilityLabel={`${formatStationName(item.station.name)} ${item.voteCount}표${item.votedByMe ? ', 내가 투표함' : votable ? ', 눌러서 투표' : ''}`}
+                                    >
+                                        <View style={[styles.mark, item.votedByMe && styles.markOn, !votable && !item.votedByMe && styles.markOff]}>
+                                            {item.votedByMe && <Ionicons name="checkmark" size={14} color={WHITE} />}
                                         </View>
-                                        <View style={styles.barRow}>
-                                            <View style={styles.bar}>
-                                                <View style={[styles.barFill, lead && styles.barLead, { width: `${Math.round(ratio * 100)}%` }]} />
+                                        <View style={styles.itemBody}>
+                                            <View style={styles.nameRow}>
+                                                <Text style={styles.name} numberOfLines={1}>{formatStationName(item.station.name)}</Text>
+                                                {item.station.lines?.map(line => (
+                                                    <View key={line.lineId} style={[styles.lineDot, { backgroundColor: line.color }]}>
+                                                        <Text style={styles.lineDotText}>{line.lineName.replace('호선', '')}</Text>
+                                                    </View>
+                                                ))}
+                                                <Text style={styles.meta}>
+                                                    {item.resultId
+                                                        ? item.proposedBy.userId === myUserId ? '내가 추천받아 제안' : `${item.proposedBy.nickname}님이 추천받아 제안`
+                                                        : item.proposedBy.userId === myUserId ? '내가 제안'
+                                                            : item.proposedBy.nickname === UNKNOWN_PROPOSER_NAME ? `${UNKNOWN_PROPOSER_NAME} 제안` : `${item.proposedBy.nickname}님 제안`}
+                                                </Text>
+                                                {item.isSelected && <Text style={styles.selectedTag}>확정</Text>}
                                             </View>
-                                            <Text style={styles.votes}>{item.voteCount}표</Text>
+                                            <View style={styles.barRow}>
+                                                <View style={styles.bar}>
+                                                    <View style={[styles.barFill, lead && styles.barLead, { width: `${Math.round(ratio * 100)}%` }]} />
+                                                </View>
+                                            </View>
                                         </View>
-                                    </View>
-                                </Pressable>
-
-                                <View style={styles.itemFooter}>
-                                    <Text style={styles.meta} numberOfLines={1}>
-                                        {item.proposedBy.userId === myUserId
-                                            ? '내가 제안'
-                                            : item.proposedBy.nickname === UNKNOWN_PROPOSER_NAME ? `${UNKNOWN_PROPOSER_NAME} 제안` : `${item.proposedBy.nickname}님 제안`}
-                                        {item.resultId ? ' · 추천 결과에서' : ''}
-                                    </Text>
-                                    {(canDelete || (isOwner && !item.isSelected)) && (
-                                        <View style={styles.actions}>
-                                            {canDelete && (
-                                                <Pressable
-                                                    style={styles.deleteButton}
-                                                    onPress={() => setDialog({ kind: 'delete', proposal: item })}
-                                                    disabled={working}
-                                                    accessibilityRole="button"
-                                                    accessibilityLabel={`${formatStationName(item.station.name)} 후보 삭제`}
-                                                >
-                                                    <Text style={styles.deleteText}>삭제</Text>
-                                                </Pressable>
-                                            )}
-                                            {isOwner && !item.isSelected && (
-                                                <Pressable
-                                                    style={[styles.confirmButton, confirmBusy && styles.disabled]}
-                                                    onPress={() => onConfirm(item.station)}
-                                                    disabled={confirmBusy}
-                                                    accessibilityRole="button"
-                                                >
-                                                    <Text style={styles.confirmText}>약속역으로 확정</Text>
-                                                </Pressable>
-                                            )}
-                                        </View>
-                                    )}
+                                    </Pressable>
+                                    <Text style={styles.votes}>{item.voteCount}표</Text>
+                                    {canDelete && <Pressable style={styles.deleteButton} onPress={() => setDialog({ kind: 'delete', proposal: item })} disabled={working} accessibilityRole="button" accessibilityLabel={`${formatStationName(item.station.name)} 후보 삭제`}>
+                                        <Text style={styles.deleteText}>삭제</Text>
+                                    </Pressable>}
                                 </View>
+
+                                {isOwner && !item.isSelected && <View style={styles.itemFooter}>
+                                    <Pressable
+                                        style={[styles.confirmButton, confirmBusy && styles.disabled]}
+                                        onPress={() => onConfirm(item.station)}
+                                        disabled={confirmBusy}
+                                        accessibilityRole="button"
+                                    >
+                                        <Text style={styles.confirmText}>약속역으로 확정</Text>
+                                    </Pressable>
+                                </View>}
                             </View>
                         );
                     })}
@@ -423,37 +411,37 @@ const styles = StyleSheet.create({
     emptyBox: { alignItems: 'center', paddingVertical: 20, gap: 6, borderRadius: 16, backgroundColor: BG },
     emptyIcon: { width: 52, height: 52, borderRadius: 18, backgroundColor: WHITE, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
 
-    voteBox: { padding: 14, borderRadius: 18, borderWidth: 1, borderColor: '#EDE8F3', backgroundColor: '#F8F5FB', gap: 10 },
+    voteBox: { padding: 14, borderRadius: 18, borderWidth: 1, borderColor: '#EDE8F3', backgroundColor: '#F4F1F7', gap: 8 },
     voteTitle: { fontSize: 15, fontWeight: '800', color: NAVY },
     voteCount: { fontSize: 13, fontWeight: '800', color: MINT_DEEP },
-    item: { padding: 12, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1, borderColor: BORDER, gap: 8 },
+    item: { paddingVertical: 10, paddingHorizontal: 12, borderRadius: 14, backgroundColor: WHITE, borderWidth: 1, borderColor: BORDER, gap: 8 },
     itemSelected: { borderColor: MINT, borderWidth: 1.5 },
-    itemMain: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    mark: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#D9D3E0', backgroundColor: WHITE, alignItems: 'center', justifyContent: 'center' },
+    itemRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    itemMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10 },
+    mark: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#D9CCE4', backgroundColor: WHITE, alignItems: 'center', justifyContent: 'center' },
     markOn: { backgroundColor: MINT_DEEP, borderColor: MINT_DEEP },
-    markOff: { borderColor: '#D9D3E0', backgroundColor: WHITE },
+    markOff: { borderColor: '#D9CCE4', backgroundColor: WHITE },
     itemBody: { flex: 1, gap: 7 },
-    nameRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-    name: { fontSize: 15, fontWeight: '800', color: NAVY, flexShrink: 1 },
+    nameRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 5 },
+    name: { fontSize: 14.5, fontWeight: '800', color: NAVY, flexShrink: 1 },
     lineDot: { minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
     lineDotText: { fontSize: 10, fontWeight: '800', color: WHITE },
     selectedTag: { fontSize: 10.5, fontWeight: '800', color: MINT_DEEP, backgroundColor: MINT_SOFT, paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6, overflow: 'hidden' },
     barRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    bar: { flex: 1, height: 8, borderRadius: 4, backgroundColor: '#F1EEF4', overflow: 'hidden' },
-    barFill: { height: 8, borderRadius: 4, backgroundColor: MINT_DEEP },
+    bar: { flex: 1, height: 6, borderRadius: 3, backgroundColor: '#F1EEF4', overflow: 'hidden' },
+    barFill: { height: 6, borderRadius: 3, backgroundColor: MINT_DEEP },
     barLead: { backgroundColor: MINT_DEEP },
     votes: { width: 34, textAlign: 'right', fontSize: 14, fontWeight: '800', color: NAVY },
-    itemFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-    meta: { flex: 1, minWidth: 0, fontSize: 12, fontWeight: '600', color: SECONDARY },
-    actions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 14 },
-    deleteButton: { minHeight: 32, justifyContent: 'center' },
-    deleteText: { fontSize: 12, fontWeight: '600', color: '#A8A3B0' },
+    itemFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 8 },
+    meta: { flexShrink: 1, minWidth: 0, fontSize: 11.5, fontWeight: '600', color: SECONDARY },
+    deleteButton: { minWidth: 32, minHeight: 32, justifyContent: 'center' },
+    deleteText: { fontSize: 12, fontWeight: '700', color: '#83808B' },
     confirmButton: { height: 32, paddingHorizontal: 14, borderRadius: 16, backgroundColor: MINT_DEEP, justifyContent: 'center' },
     confirmText: { fontSize: 12, fontWeight: '800', color: WHITE },
     guidance: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, padding: 11, borderRadius: 12, backgroundColor: '#F4F1F7' },
-    guidanceBody: { flex: 1, gap: 4 },
-    voteHint: { fontSize: 12.5, lineHeight: 18, fontWeight: '600', color: '#6F6B78' },
-    roleHint: { fontSize: 12.5, lineHeight: 18, fontWeight: '600', color: '#6F6B78' },
+    guidanceBody: { flex: 1, gap: 2 },
+    voteHint: { fontSize: 12, lineHeight: 17, fontWeight: '600', color: '#6F6B78' },
+    roleHint: { fontSize: 12, lineHeight: 17, fontWeight: '600', color: '#6F6B78' },
 
     proposeRow: { flexDirection: 'row', gap: 8 },
     proposeButton: { flex: 1, height: 46, borderRadius: 23, borderWidth: 1.5, borderColor: '#D9CCE4', backgroundColor: WHITE, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },

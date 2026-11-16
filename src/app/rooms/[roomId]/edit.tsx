@@ -15,7 +15,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
-import { CalendarModal, TimeWheelModal } from '@/components/rooms/appointment-picker';
+import { CalendarModal, TimeWheelModal, formatAppointmentDateLabel, formatAppointmentTimeLabel } from '@/components/rooms/appointment-picker';
 import { formatTime } from '@/constants/home-mock';
 import {
     fetchRoomDetail,
@@ -353,7 +353,7 @@ export default function RoomEditScreen() {
                                 accessibilityLabel="약속 날짜 선택"
                             >
                                 <Ionicons name="calendar-outline" size={18} color={NAVY} />
-                                <Text style={[styles.pickText, !date && styles.placeholder]}>{date || '날짜'}</Text>
+                                <Text style={[styles.pickText, !date && styles.placeholder]}>{date ? formatAppointmentDateLabel(date) : '날짜'}</Text>
                             </Pressable>
                             <Pressable
                                 style={[styles.pickBox, !!fieldError.time && styles.inputError]}
@@ -363,7 +363,7 @@ export default function RoomEditScreen() {
                                 accessibilityLabel="약속 시간 선택"
                             >
                                 <Ionicons name="time-outline" size={18} color={NAVY} />
-                                <Text style={[styles.pickText, !time && styles.placeholder]}>{time || '시간'}</Text>
+                                <Text style={[styles.pickText, !time && styles.placeholder]}>{time ? formatAppointmentTimeLabel(time) : '시간'}</Text>
                             </Pressable>
                         </View>
                         {!!fieldError.time && <Text style={styles.fieldErrorText}>{fieldError.time}</Text>}

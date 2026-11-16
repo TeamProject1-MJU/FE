@@ -8,7 +8,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
-import { CalendarModal, TimeWheelModal } from '@/components/rooms/appointment-picker';
+import { CalendarModal, TimeWheelModal, formatAppointmentDateLabel, formatAppointmentTimeLabel } from '@/components/rooms/appointment-picker';
 import { formatAppointmentParam, formatMonthDay, formatTime } from '@/constants/home-mock';
 import { ApiError, isAuthError } from '@/services/api/errors';
 import { createRoom, isRoomCreateOutcomeUnknown, ROOM_CREATE_UNKNOWN_NOTICE, ROOM_NAME_MAX, roomNameLength, validateRoomName } from '@/services/room';
@@ -147,7 +147,7 @@ export default function NewRoomScreen() {
                     </Text>
                     <Pressable style={styles.selectBox} onPress={() => setCalendarOpen(true)}>
                         <Ionicons name="calendar-outline" size={21} color={MINT_DEEP} />
-                        <Text style={[styles.selectText, !date && styles.placeholder]}>{date || '달력에서 날짜 선택'}</Text>
+                        <Text style={[styles.selectText, !date && styles.placeholder]}>{date ? formatAppointmentDateLabel(date) : '달력에서 날짜 선택'}</Text>
                         <Ionicons name="chevron-down" size={17} color={SECONDARY} />
                     </Pressable>
                     <Text style={styles.label}>
@@ -155,7 +155,7 @@ export default function NewRoomScreen() {
                     </Text>
                     <Pressable style={styles.selectBox} onPress={() => setTimeOpen(true)}>
                         <Ionicons name="time-outline" size={21} color={MINT_DEEP} />
-                        <Text style={[styles.selectText, !time && styles.placeholder]}>{time || '스크롤하여 시간 선택'}</Text>
+                        <Text style={[styles.selectText, !time && styles.placeholder]}>{time ? formatAppointmentTimeLabel(time) : '스크롤하여 시간 선택'}</Text>
                         <Ionicons name="chevron-down" size={17} color={SECONDARY} />
                     </Pressable>
                     {date || time ? (
@@ -298,19 +298,20 @@ function CreatedView({
                 </Pressable>
                 <Text style={styles.codeHint}>초대 코드는 방장에게만 보여요. 최대 4명까지 들어올 수 있어요.</Text>
 
+            </View>
+            <View style={styles.doneActions}>
                 <Pressable style={({ pressed }) => [styles.shareButton, pressed && styles.pressed]} onPress={share}>
                     <Ionicons name="share-outline" size={18} color={MINT_DEEP} />
                     <Text style={styles.shareText}>친구에게 공유</Text>
                 </Pressable>
+                <Pressable
+                    style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+                    onPress={enter}
+                    accessibilityRole="button"
+                >
+                    <Text style={styles.primaryText}>약속방으로 들어가기</Text>
+                </Pressable>
             </View>
-
-            <Pressable
-                style={({ pressed }) => [styles.primaryButton, styles.enterButton, pressed && styles.pressed]}
-                onPress={enter}
-                accessibilityRole="button"
-            >
-                <Text style={styles.primaryText}>약속방으로 들어가기</Text>
-            </Pressable>
         </View>
     );
 }
@@ -332,9 +333,9 @@ const styles = StyleSheet.create({
     copyChip: { height: 34, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 16, marginTop: 12, borderRadius: 17, backgroundColor: MINT_SOFT },
     copyText: { color: MINT_DEEP, fontSize: 12.5, fontWeight: '700' },
     codeHint: { marginTop: 8, color: SECONDARY, fontSize: 12, textAlign: 'center' },
-    shareButton: { alignSelf: 'stretch', marginTop: 16, height: 50, borderRadius: 14, backgroundColor: MINT_SOFT, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+    shareButton: { alignSelf: 'stretch', height: 52, borderRadius: 14, borderWidth: 1.5, borderColor: '#D9CCE4', backgroundColor: WHITE, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
     shareText: { color: MINT_DEEP, fontSize: 14.5, fontWeight: '700' },
-    enterButton: { marginHorizontal: 20 },
+    doneActions: { marginHorizontal: 20, gap: 10 },
     root: { flex: 1, backgroundColor: BG },
     header: { backgroundColor: BG, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 15 },
     backButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },

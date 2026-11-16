@@ -8609,10 +8609,10 @@ const reco153Estimate = (overrides = {}) => ({ departureAt: '2026-11-20T18:38:00
 const reco153Past = { departureAt: '2026-11-20T18:38:00+09:00', arriveAt: null, slackSeconds: null, source: null, boardingTrain: null, legs: [] };
 /** 내 참여자만 바꾼 실행 */
 const reco153Run = (mine, runOverrides = {}) => recoRun({ results: ['TIME', 'FARE', 'DISTANCE'].map((criterion, i) => {
-    const result = recoResult(criterion, 77001 + (i === 1 ? 1 : 0));
-    result.participantTimes[0] = { ...result.participantTimes[0], ...mine };
-    return result;
-}), ...runOverrides });
+        const result = recoResult(criterion, 77001 + (i === 1 ? 1 : 0));
+        result.participantTimes[0] = { ...result.participantTimes[0], ...mine };
+        return result;
+    }), ...runOverrides });
 async function reco153Screen(run) {
     const r = recoScreen(); r.recoRespond(() => ok(run));
     const view = await pumpScreen(r);
@@ -8884,7 +8884,7 @@ async function screen152(response = () => jsonResponse({ success: true, data: da
 }
 
 test('152 지금 출발은 두 시각을 생략하고 출발·도착 지정은 선택한 필드 하나와 서버 역 ID를 그대로 보내요', async () => {
-    for (const options of [{}, { departAt: DEPART152 }, { arriveAt: ARRIVE152 }, { departAt: '2026-11-13T10:00:00+09:00' }, { roomId: 'room-152', arriveAt: ARRIVE152 }]) {
+    for (const options of [{}, { departAt: DEPART152 }, { arriveAt: ARRIVE152 }, { roomId: 'room-152', arriveAt: ARRIVE152 }]) {
         const r = clock152(createRuntime(serverEnv)); const calls = [];
         r.context.fetch = async (url, request) => { calls.push({ url, request }); return jsonResponse({ success: true, data: data152() }); };
         await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination, options);
@@ -8915,7 +8915,7 @@ test('152 서울 시간 변환은 자정·연말·윤일을 보정 없이 처리
     assert.equal(time.validateRouteTimeOptions({ arriveAt: '2026-11-14T12:34:56+09:00' }), null);
     assert.equal(time.validateRouteTimeOptions({ arriveAt: '2027-11-14T23:59:59+09:00' }), null);
     assert.ok(time.validateRouteTimeOptions({ arriveAt: '2027-11-15T00:00:00+09:00' }));
-    assert.equal(time.validateRouteTimeOptions({ departAt: '2020-01-01T00:00:00Z' }), null);
+    assert.equal(time.validateRouteTimeOptions({ departAt: '2020-01-01T00:00:00Z' }), '출발 시각은 현재 이후로 선택해 주세요.');
     assert.equal(time.arrivalLastDate(Date.parse('2026-11-13T23:30:00Z')), '2027-11-14');
 });
 
@@ -9039,7 +9039,7 @@ test('152 결과·안내는 검색한 조건과 자정 다음 날의 서버 날�
 });
 
 test('152 첫차 전·막차 후 응답의 출발 날짜·대기 포함 시간·첫차 및 지각 안내를 서버 값 그대로 유지해요', async () => {
-    for (const at of ['2026-11-14T03:00:00+09:00', '2026-11-15T00:50:00+09:00']) {
+    for (const at of ['2026-11-15T03:00:00+09:00', '2026-11-15T00:50:00+09:00']) {
         const data = data152(); Object.assign(data.routes[0].summary, { departureAt: '2026-11-15T05:36:00+09:00', arrivalAt: '2026-11-15T05:51:13+09:00',
             noService: true, serviceNotice: '서버가 안내한 다음 운행일 첫차예요.', arrivesAfterAppointment: true, waitKind: 'TIMETABLE', waitSec: 17160, totalWithWaitSec: 18073, slackSeconds: null });
         const r = await screen152(() => jsonResponse({ success: true, data })); r.selector152().props.onChange({ mode: 'departure', at }); await pump152(r);
@@ -9949,6 +9949,231 @@ test('198 서버 화면은 블록 승객과 실제 판정·재촬영·갤러리�
     assert.ok(r.button('AI로 확인하기')); r.unmount();
 });
 
+/* ---------- #232 채팅 표시·입력·스크롤, 역 검색 헤더, 출발 시각 제한 ---------- */
+test('232 AI 강조 파서: 여러 짝·줄바꿈·한글을 유지하고 짝 없는 별표는 그대로 남겨요', () => {
+    const parse = createRuntime().load('src/services/chat.ts').parseChatEmphasis;
+    for (const [input, expected] of [
+        ['', []], ['그냥 글자', [['그냥 글자', false]]],
+        ['창동에서 **4호선** 타고 **노원역**으로', [['창동에서 ', false], ['4호선', true], [' 타고 ', false], ['노원역', true], ['으로', false]]],
+        ['**첫 줄\n둘째 줄** 뒤 **미완성', [['첫 줄\n둘째 줄', true], [' 뒤 **미완성', false]]],
+        ['앞 **짝 없음', [['앞 **짝 없음', false]]], ['****', [['****', false]]],
+        ['**가****나**', [['가', true], ['나', true]]],
+    ]) assert.deepEqual(plain(parse(input)).map(part => [part.text, part.emphasized]), expected);
+});
+
+const message232 = (id, senderType = 'AI', content = '답변', senderId = null) => ({ id: String(id), senderType, content, senderId,
+    nickname: senderId ? '멤버' : null, createdAt: new Date(Date.UTC(2026, 10, 16, 10, 0, Number(id))).toISOString(), meta: null });
+function panel232(mock = false, platform = 'ios') {
+    const r = createScreenRuntime(mock ? {} : serverEnv, 'src/components/rooms/chat-panel.tsx', runtime => {
+        Object.assign(runtime.native, { ScrollView: 'ScrollView', Platform: { OS: platform, select: v => v[platform] },
+            Keyboard: { addListener: () => ({ remove() {} }) } });
+    });
+    r.calls232 = []; r.focused232 = 0;
+    const controller = { status: 'ready', messages: [message232(1)], pending: [], draft: '질문', canSend: true, length: 2,
+        blocked: false, aiPending: 0, hasMore: false, historyLoading: false,
+        setDraft(value) { controller.draft = value; controller.length = Array.from(value).length; controller.canSend = !!value.trim() && controller.length <= 1000; },
+        send() { r.calls232.push(['send', controller.draft]); controller.setDraft(''); },
+        loadOlder() { r.calls232.push(['older']); }, retrySend() {}, reload() {} };
+    r.controller232 = controller;
+    r.view232 = () => r.renderComponent({ type: r.screen.default, props: { controller, myUserId: 'me', members: [], panelHeight: 500 } });
+    r.scroll232 = () => findElement(r.view232(), e => e.type === 'ScrollView');
+    r.input232 = () => findElement(r.view232(), e => e.type === 'TextInput');
+    r.scroll232().props.ref.current = { scrollToEnd: args => r.calls232.push(['end', args]), scrollTo: args => r.calls232.push(['offset', args]) };
+    r.input232().props.ref.current = { focus: () => r.focused232++, isFocused: () => true };
+    r.scroll232().props.onLayout({ nativeEvent: { layout: { height: 400 } } });
+    r.scroll232().props.onContentSizeChange(300, 1000);
+    r.scrollEvent232 = (y, height = 1000, viewport = 400) => r.scroll232().props.onScroll({ nativeEvent: {
+            contentOffset: { y }, contentSize: { height }, layoutMeasurement: { height: viewport } } });
+    r.scrollEvent232(600); r.advance(16); r.calls232.length = 0;
+    r.button232 = label => findElement(r.view232(), e => e.type === 'Pressable' && e.props.accessibilityLabel === label);
+    return r;
+}
+
+test('232 강조는 AI에만 보라 굵게·밑줄로 적용하고 사용자·시스템 원문과 정보는 유지해요', () => {
+    for (const mock of [false, true]) {
+        const r = panel232(mock);
+        r.controller232.messages = [message232(1, 'AI', '오후 6:26 출발, **4호선** 32분 / 1,650원'),
+            message232(2, 'USER', '**사용자 원문**', 'me'), message232(3, 'SYSTEM', '**시스템 원문**')];
+        const view = r.view232(); const emphasized = findText(view, '4호선');
+        assert.equal(emphasized.props.style.color, '#5C3F78'); assert.equal(emphasized.props.style.fontWeight, '700');
+        assert.equal(emphasized.props.style.textDecorationLine, 'underline'); assert.equal(emphasized.props.style.textDecorationColor, '#B79FD0');
+        assert.equal(emphasized.props.style.backgroundColor, undefined);
+        assert.ok(findText(view, '**사용자 원문**')); assert.ok(findText(view, '**시스템 원문**'));
+        assert.ok(textOf(view).includes('오후 6:26 출발')); assert.ok(textOf(view).includes('1,650원')); r.unmount();
+    }
+});
+
+test('232 @ 버튼은 기존 입력을 보존해 앞에 한 번만 붙이고 포커스·활성 색·차단을 유지해요', () => {
+    for (const mock of [false, true]) {
+        const r = panel232(mock); r.button232('링크로 부르기').props.onPress(); r.view232();
+        assert.equal(r.controller232.draft, '@링크로 질문'); assert.equal(r.focused232, 1);
+        r.button232('링크로 부르기').props.onPress(); assert.equal(r.controller232.draft, '@링크로 질문');
+        assert.equal(r.button232('링크로 부르기').props.accessibilityState.selected, true);
+        assert.equal(r.input232().props.style.at(-1).color, '#5C3F78');
+        r.controller232.setDraft('질문 @링크로'); r.button232('링크로 부르기').props.onPress(); assert.equal(r.controller232.draft, '질문 @링크로');
+        r.controller232.setDraft('@linkro 질문'); r.button232('링크로 부르기').props.onPress(); assert.equal(r.controller232.draft, '@linkro 질문');
+        r.controller232.blocked = true; assert.equal(r.button232('링크로 부르기').props.disabled, true); r.unmount();
+    }
+});
+
+test('232 모바일 Enter는 최종 한글 원문으로 한 번 전송하고 조합 중·전송 불가 상태는 보내지 않아요', () => {
+    for (const platform of ['ios', 'android']) {
+        const r = panel232(false, platform); r.controller232.setDraft('가나');
+        let input = r.input232(); assert.equal(input.props.submitBehavior, 'submit');
+        input.props.onSubmitEditing({ nativeEvent: { text: '가나다', isComposing: true } });
+        input.props.onSubmitEditing({ nativeEvent: { text: '가나다', keyCode: 229 } }); assert.equal(r.calls232.length, 0);
+        input.props.onSubmitEditing({ nativeEvent: { text: '가나다' } });
+        input.props.onSubmitEditing({ nativeEvent: { text: '가나다' } });
+        assert.deepEqual(r.calls232.filter(c => c[0] === 'send'), [['send', '가나다']]);
+        r.controller232.canSend = false; r.input232().props.onSubmitEditing({ nativeEvent: { text: '보내면 안 됨' } });
+        assert.equal(r.calls232.filter(c => c[0] === 'send').length, 1); r.unmount();
+    }
+});
+
+test('232 웹은 Enter 전송·Shift+Enter 줄바꿈을 유지하고 조합·submit 중복 전송을 막아요', () => {
+    const r = panel232(false, 'web'); let prevented = 0; const input = r.input232();
+    assert.equal(input.props.submitBehavior, 'newline');
+    for (const extra of [{ shiftKey: true }, { nativeEvent: { isComposing: true } }, { nativeEvent: { keyCode: 229 } }]) {
+        input.props.onKeyPress({ key: 'Enter', nativeEvent: {}, preventDefault() { prevented++; }, ...extra });
+    }
+    input.props.onSubmitEditing({ nativeEvent: { text: '질문' } }); assert.equal(r.calls232.length, 0);
+    input.props.onKeyPress({ key: 'Enter', nativeEvent: {}, preventDefault() { prevented++; } });
+    assert.deepEqual(r.calls232.filter(c => c[0] === 'send'), [['send', '질문']]); assert.equal(prevented, 1); r.unmount();
+});
+
+test('232 새 메시지와 내용 크기·키보드 높이의 최종 배치를 함께 따라가요', () => {
+    for (const mock of [false, true]) {
+        const r = panel232(mock); r.controller232.messages = [...r.controller232.messages, message232(2)]; r.view232();
+        // 내용 높이가 같아 이벤트가 없어도 새 메시지를 처리해요.
+        r.advance(16); assert.equal(r.calls232.filter(c => c[0] === 'end').length, 1);
+        r.scroll232().props.onContentSizeChange(300, 1100); r.advance(8);
+        r.scroll232().props.onLayout({ nativeEvent: { layout: { height: 300 } } });
+        r.scrollEvent232(600, 1100, 300); r.advance(16);
+        assert.equal(r.calls232.filter(c => c[0] === 'end').length, 2);
+        r.controller232.aiPending = 1; assert.ok(textOf(r.scroll232()).includes(mock ? '답변을 작성' : '답변 중'));
+        r.controller232.aiPending = 0; r.scroll232().props.onContentSizeChange(300, 1050); r.advance(16);
+        assert.equal(r.calls232.filter(c => c[0] === 'end').length, 3); r.unmount(); assert.equal(r.timers.size, 0);
+    }
+});
+
+test('232 맨 아래 60px 경계: 안쪽이면 따라가고 위로 읽는 중이면 알림·마지막 한 줄만 보여줘요', () => {
+    for (const mock of [false, true]) for (const distance of [60, 61]) {
+        const r = panel232(mock); r.scroll232().props.onScrollBeginDrag(); r.scrollEvent232(600 - distance);
+        r.controller232.messages = [...r.controller232.messages, message232(2, 'AI', '**마지막 답변**\n둘째 줄')]; r.view232();
+        r.scroll232().props.onContentSizeChange(300, 1200); r.advance(16);
+        const alert = r.button232('새 메시지, 아래로 이동');
+        if (distance === 60) { assert.equal(alert, null); assert.ok(r.calls232.some(c => c[0] === 'end')); }
+        else {
+            assert.ok(alert); assert.equal(r.calls232.some(c => c[0] === 'end'), false);
+            assert.ok(findText(alert, '마지막 답변\n둘째 줄')); assert.equal(findText(alert, '마지막 답변\n둘째 줄').props.numberOfLines, 1);
+            alert.props.onPress(); r.advance(16); assert.equal(r.button232('새 메시지, 아래로 이동'), null);
+            assert.ok(r.calls232.some(c => c[0] === 'end'));
+        }
+        r.unmount();
+    }
+});
+
+test('232 위로 읽다가 내가 보내면 내려가고 실패 상태 변경만으로는 강제로 내려가지 않아요', () => {
+    const r = panel232(); r.scroll232().props.onScrollBeginDrag(); r.scrollEvent232(300);
+    r.controller232.pending = [{ clientId: 'p1', content: '내 메시지', createdAt: message232(2).createdAt, status: 'sending' }];
+    r.view232(); r.advance(16); assert.ok(r.calls232.some(c => c[0] === 'end'));
+    r.calls232.length = 0; r.scroll232().props.onScrollBeginDrag(); r.scrollEvent232(200);
+    r.controller232.pending = [{ ...r.controller232.pending[0], status: 'failed' }]; r.view232();
+    r.scroll232().props.onContentSizeChange(300, 1150); r.advance(16); assert.equal(r.calls232.some(c => c[0] === 'end'), false);
+    r.unmount();
+});
+
+test('232 이전 대화 추가는 기존 anchor 보정으로 읽던 위치를 유지하고 새 메시지 알림을 만들지 않아요', () => {
+    const r = panel232(); r.scroll232().props.onScrollBeginDrag(); r.scrollEvent232(100); r.controller232.hasMore = true;
+    const load = findElement(r.view232(), e => e.props?.label === '이전 메시지 더 보기'); load.props.onPress();
+    r.controller232.historyLoading = true;
+    r.controller232.messages = [message232(0), ...r.controller232.messages]; r.view232();
+    r.scroll232().props.onContentSizeChange(300, 1200);
+    assert.deepEqual(plain(r.calls232.at(-1)), ['offset', { y: 300, animated: false }]);
+    r.controller232.historyLoading = false; r.scroll232().props.onContentSizeChange(300, 1200); r.advance(16);
+    assert.equal(r.calls232.some(c => c[0] === 'end'), false); assert.equal(r.button232('새 메시지, 아래로 이동'), null); r.unmount();
+});
+
+test('232 역 검색 헤더는 용도별 제목과 동일한 뒤로가기·취소 동작을 유지하고 콜백을 호출하지 않아요', () => {
+    for (const purpose of ['origin', 'destination', 'departure', 'proposal', 'selected-station']) for (const back of [true, false]) {
+        const params = { purpose, contextLabel: '내 약속방' }; const routes = []; let picked = 0;
+        const r = createScreenRuntime({}, 'src/app/station-search.tsx', runtime => {
+            runtime.external['expo-router'].useLocalSearchParams = () => params;
+            Object.assign(runtime.external['expo-router'].router, { canGoBack: () => back, back: () => routes.push('back'), replace: value => routes.push(value) });
+        });
+        const expected = purpose === 'origin' ? '출발역 검색' : purpose === 'destination' ? '도착역 검색' : r.screen.pickerCopy(purpose, params.contextLabel).title.replace(/\n/g, ' ');
+        for (const label of ['뒤로가기', '취소']) {
+            r.screen.openStationPicker(params, () => picked++);
+            const view = r.render(); assert.ok(findText(view, expected));
+            findElement(view, e => e.type === 'Pressable' && e.props.accessibilityLabel === label).props.onPress();
+            r.screen.resolveStationPicker({ id: 1 }); assert.equal(picked, 0); assert.equal(routes.at(-1), back ? 'back' : '/home');
+        }
+        r.unmount();
+    }
+});
+
+test('232 출발 시각은 현재 분부터 서울 날짜 +365일 끝까지이며 지금 출발·도착 검사는 유지해요', () => {
+    const r = clock152(createRuntime()); const time = r.load('src/utils/route-time.ts');
+    assert.equal(time.validateRouteTimeOptions({}), null);
+    assert.equal(time.validateRouteTimeOptions({ departAt: '2026-11-14T12:34:00+09:00' }), null);
+    assert.equal(time.validateRouteTimeOptions({ departAt: '2026-11-14T03:34:00Z' }), null);
+    assert.equal(time.validateRouteTimeOptions({ departAt: '2026-11-14T12:33:59+09:00' }), '출발 시각은 현재 이후로 선택해 주세요.');
+    assert.equal(time.validateRouteTimeOptions({ departAt: '2027-11-14T23:59:59+09:00' }), null);
+    assert.ok(time.validateRouteTimeOptions({ departAt: '2027-11-15T00:00:00+09:00' }));
+    assert.equal(time.departureLastDate(Date.parse('2027-03-01T00:00:00+09:00')), '2028-02-29');
+    assert.equal(time.departureLastDate(Date.parse('2026-11-13T23:30:00Z')), '2027-11-14');
+    assert.equal(time.validateRouteTimeOptions({ arriveAt: '2026-11-14T12:34:00+09:00' }), '도착 시각은 현재 이후로 선택해 주세요.');
+});
+
+test('232 서버·mock 모두 과거 출발·상한 초과를 API 호출 전에 거절해요', async () => {
+    for (const mock of [false, true]) {
+        const r = clock152(createRuntime(mock ? {} : serverEnv)); let requests = 0;
+        r.context.fetch = async () => { requests++; return jsonResponse({}); };
+        for (const departAt of ['2026-11-14T12:33:00+09:00', '2027-11-15T00:00:00+09:00']) {
+            await assert.rejects(r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination, { departAt }), { code: 'VALIDATION_ERROR' });
+        }
+        assert.equal(requests, 0);
+    }
+});
+
+test('232 출발 시트의 범위 안내·날짜 휠 상한·확인 차단·지금 출발 우회를 확인해요', () => {
+    const r = selector152({ mode: 'departure', at: '2029-01-01T12:00:00+09:00' });
+    r.button152('검색 시각 선택').props.onPress(); r.pump152();
+    let wheel = r.child152('DateTimeWheel'); assert.equal(wheel.props.date, '2027-11-14'); assert.equal(wheel.props.maxDate, '2027-11-14');
+    assert.ok(findText(r.pump152(), '출발 날짜는 2027-11-14까지 선택할 수 있어요.'));
+    wheel.props.onChange('2026-11-14', '12:33'); r.button152('확인').props.onPress();
+    assert.equal(r.changes152.length, 0); assert.equal(r.props152.open, true);
+    assert.ok(findText(r.pump152(), '출발 시각은 현재 이후로 선택해 주세요.'));
+    r.button152('지금 출발').props.onPress(); assert.deepEqual(plain(r.changes152), [{ mode: 'now' }]); r.unmount();
+});
+
+test('232 전송 직후 위로 읽으면 확정 응답이 위치를 덮지 않고 다음 AI 답변만 알림으로 보여줘요', () => {
+    const r = panel232(true); r.controller232.pending = [{ clientId: 'pending', content: '@링크로 질문', createdAt: message232(2).createdAt, status: 'sending' }];
+    r.view232(); r.advance(16); r.calls232.length = 0;
+    r.scroll232().props.onScrollBeginDrag(); r.scrollEvent232(300);
+    r.controller232.pending = []; r.controller232.messages = [...r.controller232.messages, message232(2, 'USER', '@링크로 질문', 'me')];
+    r.view232(); r.scroll232().props.onContentSizeChange(300, 1100); r.advance(16);
+    assert.equal(r.calls232.some(c => c[0] === 'end'), false); assert.equal(r.button232('새 메시지, 아래로 이동'), null);
+    r.controller232.messages = [...r.controller232.messages, message232(3, 'AI', '새 답변')]; r.view232();
+    assert.ok(r.button232('새 메시지, 아래로 이동')); assert.equal(r.calls232.some(c => c[0] === 'end'), false); r.unmount();
+});
+
+test('232 웹의 정수·소수 높이 차이에도 키보드·휠로 위로 읽으면 새 메시지가 위치를 끌어내리지 않아요', () => {
+    const r = panel232(true, 'web');
+    r.scrollEvent232(300, 1000.5, 400.5);
+    r.controller232.messages = [...r.controller232.messages, message232(2)]; r.view232();
+    r.scroll232().props.onContentSizeChange(300, 1200.5); r.advance(16);
+    assert.equal(r.calls232.some(c => c[0] === 'end'), false); assert.ok(r.button232('새 메시지, 아래로 이동')); r.unmount();
+});
+
+test('232 출발 날짜만 범위 안에 맞추고 기존 도착 선택 값은 임의로 바꾸지 않아요', () => {
+    const r = selector152({ mode: 'arrival', at: '2026-11-13T10:00:00+09:00' });
+    r.button152('검색 시각 선택').props.onPress(); r.pump152();
+    assert.equal(r.child152('DateTimeWheel').props.date, '2026-11-13');
+    r.button152('확인').props.onPress(); assert.equal(r.changes152.length, 0);
+    assert.ok(findText(r.pump152(), '도착 시각은 현재 이후로 선택해 주세요.')); r.unmount();
+});
+
 
 test('233 36분 40초는 총시간·대기·구간에서 36분이며 도보·구간 최소 1분과 대기 0초 생략을 유지해요', () => {
     const r = createRuntime(); const f = r.load('src/components/route/format.ts');
@@ -9991,7 +10216,7 @@ test('233 mock·서버 응답 경로 1개·복수 모두 표시하고 독립 토
         // Mock normally returns one route; this in-memory fixture never changes mock data on disk.
         if (mock) r.load('src/services/route.ts').searchRoute = async () => data;
         else r.context.fetch = async url => jsonResponse({ success: true, data: url.endsWith('/routes/search') ? data
-            : stationSearchData([url.includes(encodeURIComponent('건대입구')) ? serverRouteStation(88001, '건대입구') : serverRouteStation(99002, '사당')]) });
+                : stationSearchData([url.includes(encodeURIComponent('건대입구')) ? serverRouteStation(88001, '건대입구') : serverRouteStation(99002, '사당')]) });
         for (let i = 0; i < 5; i++) { r.render(); await settle(); }
         const Card = r.load('src/components/route/RouteCard.tsx').default;
         const cards = () => findElements(r.render(), node => node.type === Card);

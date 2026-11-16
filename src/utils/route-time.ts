@@ -4,6 +4,7 @@ const DAY_MS = 86400000;
 const SEOUL_OFFSET_MS = 9 * 3600000;
 /** BE 기본 설정과 같은 서울 날짜 기준 상한이에요. 서버가 더 짧게 설정한 범위는 서버 검증을 따라요. */
 export const ARRIVAL_MAX_DAYS = 365;
+export const DEPARTURE_MAX_DAYS = 365;
 
 export function seoulDateTime(value: number | string = Date.now()) {
     const time = typeof value === 'number' ? value : Date.parse(value);
@@ -15,6 +16,10 @@ export function seoulDateTime(value: number | string = Date.now()) {
 
 export function arrivalLastDate(now = Date.now()) {
     return seoulDateTime(now + ARRIVAL_MAX_DAYS * DAY_MS)!.date;
+}
+
+export function departureLastDate(now = Date.now()) {
+    return seoulDateTime(now + DEPARTURE_MAX_DAYS * DAY_MS)!.date;
 }
 
 /** 기기 시간대와 관계없이 입력을 한국 시각으로 보내고, 2월 30일 같은 값은 보정하지 않아요. */
@@ -67,7 +72,11 @@ export function validateRouteTimeOptions(options: RouteSearchOptions, now = Date
             && new Date(`${parts[1]}T00:00:00Z`).toISOString().slice(0, 10) === parts[1];
         if (!valid) return '시간대를 포함한 올바른 날짜와 시각을 선택해 주세요.';
     }
-    // BE는 지난 departAt도 그대로 받아요. arriveAt만 초 단위의 현재 시각과 서울 날짜 상한으로 검사해요.
+    // 출발은 분 단위의 현재부터, 도착은 기존 초 단위 기준부터 검사해요. 상한은 각각 서울 날짜 +365일이에요.
+    if (options.departAt !== undefined) {
+        if (Math.floor(Date.parse(options.departAt) / 60000) < Math.floor(now / 60000)) return '출발 시각은 현재 이후로 선택해 주세요.';
+        if (seoulDateTime(options.departAt)!.date > departureLastDate(now)) return `출발 날짜는 한국 날짜 기준 ${departureLastDate(now)}까지 선택해 주세요.`;
+    }
     if (options.arriveAt !== undefined) {
         if (Math.floor(Date.parse(options.arriveAt) / 1000) < Math.floor(now / 1000)) return '도착 시각은 현재 이후로 선택해 주세요.';
         if (seoulDateTime(options.arriveAt)!.date > arrivalLastDate(now)) return `도착 날짜는 한국 날짜 기준 ${arrivalLastDate(now)}까지 선택해 주세요.`;
