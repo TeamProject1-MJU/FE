@@ -1,7 +1,10 @@
+import BottomTabBar, { useTabBarHeight } from '@/components/bottom-tab-bar';
+import Passenger from '@/components/passenger';
+import { UiColors } from '@/constants/linkro-colors';
 import { useMock } from '@/services/api/config';
 import { ApiError, API_ERROR_MESSAGES, isAuthError } from '@/services/api/errors';
 import { ComponentProps, ReactNode, useCallback, useEffect, useState } from 'react';
-import { router, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import {
     ActivityIndicator,
     BackHandler,
@@ -10,10 +13,9 @@ import {
     Pressable,
     ScrollView,
     StyleSheet,
-    Text,
-    TextInput,
     View,
 } from 'react-native';
+import { Text, TextInput } from '@/components/app-text';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -23,16 +25,7 @@ import { useAppPermissions } from '@/hooks/use-app-permissions';
 import { resetToLogin, useRedirectIfSignedOut } from '@/stores/auth-store';
 import { APP_PERMISSIONS, PERMISSION_DISPLAY, permissionAccessibilityLabel } from '@/utils/app-permission';
 import { NICKNAME_MAX, UserError, type UserProfile } from '@/types/user';
-
-const NAVY = '#0f1c3f';
-const MINT_DEEP = '#12a77a';
-const MINT_SOFT = '#e8f8f1';
-const RED = '#e5484d';
-const BACKGROUND = '#f3f5f8';
-const CARD = '#ffffff';
-const SECONDARY = '#6b7488';
-const DISABLED = '#a1a8b8';
-const DIVIDER = '#e6e9ef';
+import { CARD_PADDING } from '@/constants/layout';
 
 type IoniconName = ComponentProps<typeof Ionicons>['name'];
 type Sheet = 'nickname' | 'logout' | 'withdraw' | null;
@@ -45,10 +38,6 @@ function userErrorMessage(error: unknown, fallback: string): string {
     }
     return fallback;
 }
-
-
-const TAB_BAR_CONTENT_HEIGHT = 58;
-
 /**
  * 마이페이지 (#38, 상세설계서 5.5 그림 40~43, API 명세 4.3~4.6)
  *
@@ -75,7 +64,7 @@ export default function MyScreen() {
     useRedirectIfSignedOut();
     const permissions = useAppPermissions();
 
-    const tabBarHeight = TAB_BAR_CONTENT_HEIGHT + Math.max(insets.bottom, 8);
+    const tabBarHeight = useTabBarHeight();
 
     const loadUser = useCallback(async () => {
         setLoad({ kind: 'loading' });
@@ -104,14 +93,11 @@ export default function MyScreen() {
     const user = load.kind === 'done' ? load.user : null;
 
     return (
-        <View style={styles.container}>
+        <View style={[styles.container, { paddingTop: insets.top }]}>
             <StatusBar style="dark" />
 
-            <View style={[styles.header, { paddingTop: insets.top + 14 }]}>
-                <Text style={styles.headerTitle}>마이</Text>
-            </View>
-
             <ScrollView contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + 24 }]}>
+                <Text style={styles.headerTitle}>마이</Text>
                 {/* ❶ 프로필 카드 */}
                 {load.kind === 'loading' && (
                     <View style={[styles.card, styles.profile]}>
@@ -120,13 +106,13 @@ export default function MyScreen() {
                             <View style={[styles.skeletonLine, { width: 90 }]} />
                             <View style={[styles.skeletonLine, { width: 64, marginTop: 8 }]} />
                         </View>
-                        <ActivityIndicator color={NAVY} />
+                        <ActivityIndicator color={UiColors.purple} />
                     </View>
                 )}
 
                 {load.kind === 'error' && (
                     <View style={[styles.card, styles.errorCard]}>
-                        <Ionicons name="cloud-offline-outline" size={26} color={SECONDARY} />
+                        <Ionicons name="cloud-offline-outline" size={26} color={UiColors.muted} />
                         <Text style={styles.errorTitle}>내 정보를 불러오지 못했어요</Text>
                         <Text style={styles.errorText}>인터넷 연결을 확인한 뒤 다시 시도해 주세요.</Text>
                         <Pressable
@@ -134,7 +120,7 @@ export default function MyScreen() {
                             onPress={loadUser}
                             accessibilityRole="button"
                         >
-                            <Ionicons name="refresh" size={16} color={CARD} />
+                            <Ionicons name="refresh" size={16} color={UiColors.white} />
                             <Text style={styles.retryText}>다시 시도</Text>
                         </Pressable>
                     </View>
@@ -143,22 +129,25 @@ export default function MyScreen() {
                 {user && (
                     <View style={[styles.card, styles.profile]}>
                         <View style={styles.avatar}>
-                            <Text style={styles.avatarText}>{user.nickname.slice(0, 1)}</Text>
+                            <Passenger tone="me" size={52} />
                         </View>
                         <View style={styles.flex}>
-                            <Text style={styles.nickname} numberOfLines={1}>
-                                {user.nickname}
-                            </Text>
+                            <View style={styles.nicknameRow}>
+                                <Text style={styles.nickname} numberOfLines={1}>
+                                    {user.nickname}
+                                </Text>
+                                <Pressable
+                                    style={({ pressed }) => [styles.smallButton, pressed && styles.pressed]}
+                                    onPress={() => setSheet('nickname')}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="닉네임 수정"
+                                >
+                                    <Text style={styles.smallButtonText}>닉네임 수정</Text>
+                                </Pressable>
+                            </View>
                             {/* 로그인은 카카오만 지원 (명세 4.1) */}
                             <Text style={styles.loginType}>카카오 로그인</Text>
                         </View>
-                        <Pressable
-                            style={({ pressed }) => [styles.smallButton, pressed && styles.pressed]}
-                            onPress={() => setSheet('nickname')}
-                            accessibilityRole="button"
-                        >
-                            <Text style={styles.smallButtonText}>닉네임 수정</Text>
-                        </Pressable>
                     </View>
                 )}
 
@@ -168,7 +157,7 @@ export default function MyScreen() {
                     {APP_PERMISSIONS.map((item, index) => {
                         const state = permissions.states[item.key];
                         const display = state === 'loading' ? null : PERMISSION_DISPLAY[state];
-                        const color = state === 'granted' ? MINT_DEEP : state === 'denied' ? RED : SECONDARY;
+                        const color = state === 'granted' ? UiColors.purple : state === 'denied' ? UiColors.sheetDanger : UiColors.muted;
                         return (
                             <Pressable
                                 key={item.key}
@@ -190,8 +179,8 @@ export default function MyScreen() {
                                 </View>
                                 {display
                                     ? <Text style={[styles.permission, { color }]}>{display.text}</Text>
-                                    : <ActivityIndicator size="small" color={SECONDARY} />}
-                                <Ionicons name="chevron-forward" size={17} color={SECONDARY} />
+                                    : <ActivityIndicator size="small" color={UiColors.muted} />}
+                                <Ionicons name="chevron-forward" size={17} color={UiColors.chevron} />
                             </Pressable>
                         );
                     })}
@@ -205,7 +194,7 @@ export default function MyScreen() {
                         onPress={() => setSheet('logout')}
                         accessibilityRole="button"
                     >
-                        <Text style={[styles.listLabel, { color: RED }]}>로그아웃</Text>
+                        <Text style={[styles.listLabel, { color: UiColors.sheetDanger }]}>로그아웃</Text>
                     </Pressable>
                     <Pressable
                         style={({ pressed }) => [styles.listRow, styles.listDivider, pressed && styles.pressed]}
@@ -225,16 +214,11 @@ export default function MyScreen() {
             </ScrollView>
 
             {/* 하단 탭바 (홈·경로·약속방·마이) */}
-            <View style={[styles.tabBar, { height: tabBarHeight, paddingBottom: Math.max(insets.bottom, 8) }]}>
-                <BottomTab icon="home-outline" label="홈" onPress={() => router.navigate('/home')} />
-                <BottomTab icon="navigate-outline" label="경로" onPress={() => router.push('/route-search')} />
-                <BottomTab icon="chatbubbles-outline" label="약속방" onPress={() => router.push('/rooms')} />
-                <BottomTab icon="person" label="마이" active onPress={() => undefined} />
-            </View>
+            <BottomTabBar active="my" />
 
             {!!toast && (
                 <View style={[styles.toast, { bottom: tabBarHeight + 16 }]} accessibilityLiveRegion="polite">
-                    <Ionicons name="checkmark-circle" size={18} color="#7ee2bf" />
+                    <Ionicons name="checkmark-circle" size={18} color={UiColors.toastCheck} />
                     <Text style={styles.toastText}>{toast}</Text>
                 </View>
             )}
@@ -335,7 +319,7 @@ function SheetHero({ icon, heading, description }: { icon: IoniconName; heading:
     return (
         <View style={styles.hero}>
             <View style={styles.heroIcon}>
-                <Ionicons name={icon} size={24} color={MINT_DEEP} />
+                <Ionicons name={icon} size={24} color={UiColors.purple} />
             </View>
             <Text style={styles.heroHeading}>{heading}</Text>
             <Text style={styles.heroDescription}>{description}</Text>
@@ -357,6 +341,7 @@ function NicknameSheet({
     onSaved: (user: UserProfile) => void;
 }) {
     const [value, setValue] = useState(current);
+    const [focused, setFocused] = useState(false);
     const [saving, setSaving] = useState(false);
     const [saveError, setSaveError] = useState('');
     const [failNext, setFailNext] = useState(failFirstSave);
@@ -392,10 +377,12 @@ function NicknameSheet({
         <SheetFrame title="닉네임 수정" onClose={close}>
             <SheetHero icon="person-outline" heading="닉네임을 바꿀 수 있어요" description="2~20자로 입력해주세요." />
 
-            <View style={[styles.input, !!message && styles.inputError]}>
+            <View style={[styles.input, (focused || !!value) && styles.inputActive, !!message && styles.inputError]}>
                 <TextInput
                     style={styles.inputText}
                     value={value}
+                    onFocus={() => setFocused(true)}
+                    onBlur={() => setFocused(false)}
                     onChangeText={text => {
                         setValue(text);
                         setSaveError('');
@@ -406,13 +393,13 @@ function NicknameSheet({
                     onSubmitEditing={save}
                     accessibilityLabel="닉네임"
                     placeholder="닉네임"
-                    placeholderTextColor={DISABLED}
+                    placeholderTextColor={UiColors.faint}
                 />
-                <Text style={[styles.counter, length > NICKNAME_MAX && { color: RED }]}>
+                <Text style={[styles.counter, length > NICKNAME_MAX && { color: UiColors.sheetDanger }]}>
                     {length}/{NICKNAME_MAX}
                 </Text>
             </View>
-            <Text style={[styles.inputHelp, !!message && { color: RED }]}>
+            <Text style={[styles.inputHelp, !!message && { color: UiColors.sheetDanger }]}>
                 {message ?? '앞뒤 공백은 빼고 저장해요. 다른 사용자와 같은 닉네임도 쓸 수 있어요.'}
             </Text>
 
@@ -424,9 +411,9 @@ function NicknameSheet({
                 accessibilityState={{ disabled, busy: saving }}
             >
                 {saving ? (
-                    <ActivityIndicator color={CARD} />
+                    <ActivityIndicator color={UiColors.white} />
                 ) : (
-                    <Text style={styles.primaryText}>{saveError ? '다시 저장' : '저장'}</Text>
+                    <Text style={[styles.primaryText, disabled && styles.primaryTextDisabled]}>{saveError ? '다시 저장' : '저장'}</Text>
                 )}
             </Pressable>
             <Pressable
@@ -505,7 +492,7 @@ function ConfirmSheet({
         return (
             <SheetFrame title={title} onClose={close}>
                 <View style={styles.doneBox} accessibilityLiveRegion="polite">
-                    <Ionicons name="checkmark-circle" size={44} color={MINT_DEEP} />
+                    <Ionicons name="checkmark-circle" size={44} color={UiColors.purple} />
                     <Text style={styles.heroHeading}>{successText}</Text>
                     <Text style={styles.heroDescription}>로그인 화면으로 이동할게요.</Text>
                 </View>
@@ -530,7 +517,7 @@ function ConfirmSheet({
 
             {!!error && (
                 <View style={styles.sheetError} accessibilityLiveRegion="polite">
-                    <Ionicons name="alert-circle" size={17} color={RED} />
+                    <Ionicons name="alert-circle" size={17} color={UiColors.sheetDanger} />
                     <Text style={styles.sheetErrorText}>{error}</Text>
                 </View>
             )}
@@ -542,7 +529,7 @@ function ConfirmSheet({
                 accessibilityRole="button"
             >
                 {busy ? (
-                    <ActivityIndicator color={CARD} />
+                    <ActivityIndicator color={UiColors.white} />
                 ) : (
                     <Text style={styles.primaryText}>{error ? '다시 시도' : confirmLabel}</Text>
                 )}
@@ -559,30 +546,6 @@ function ConfirmSheet({
     );
 }
 
-function BottomTab({
-                       icon,
-                       label,
-                       active = false,
-                       onPress,
-                   }: {
-    icon: IoniconName;
-    label: string;
-    active?: boolean;
-    onPress: () => void;
-}) {
-    return (
-        <Pressable
-            style={styles.tabItem}
-            onPress={onPress}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: active }}
-        >
-            <Ionicons name={icon} size={23} color={active ? NAVY : DISABLED} />
-            <Text style={[styles.tabLabel, active && styles.tabLabelActive]}>{label}</Text>
-        </Pressable>
-    );
-}
-
 const styles = StyleSheet.create({
     flex: {
         flex: 1,
@@ -590,90 +553,90 @@ const styles = StyleSheet.create({
 
     container: {
         flex: 1,
-        backgroundColor: BACKGROUND,
-    },
-
-    header: {
-        paddingBottom: 12,
-        alignItems: 'center',
-        backgroundColor: BACKGROUND,
+        backgroundColor: UiColors.bg,
     },
 
     headerTitle: {
-        color: NAVY,
-        fontSize: 18,
+        color: UiColors.ink,
+        fontSize: 30,
         fontWeight: '800',
+        letterSpacing: -0.6,
+        paddingBottom: 14,
+        // #224 글자 줄 맞춤: 카드 안 글자 시작선에 맞춰요.
+        paddingHorizontal: CARD_PADDING,
     },
 
     content: {
         paddingHorizontal: 20,
-        paddingTop: 8,
+        paddingTop: 14,
     },
 
     card: {
         overflow: 'hidden',
-        borderRadius: 18,
-        backgroundColor: CARD,
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: UiColors.line,
+        backgroundColor: UiColors.white,
     },
 
     profile: {
-        padding: 18,
+        padding: 16,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 14,
     },
 
     avatar: {
-        width: 52,
-        height: 52,
-        borderRadius: 26,
+        width: 72,
+        height: 72,
+        borderRadius: 14,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: NAVY,
+        backgroundColor: UiColors.tint,
     },
 
-    avatarText: {
-        color: CARD,
+    nicknameRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+
+    nickname: {
+        flexShrink: 1,
+        color: UiColors.ink,
         fontSize: 20,
         fontWeight: '800',
     },
 
-    nickname: {
-        color: NAVY,
-        fontSize: 18,
-        fontWeight: '800',
-    },
-
     loginType: {
-        marginTop: 3,
-        color: SECONDARY,
+        marginTop: 4,
+        color: UiColors.muted,
         fontSize: 13,
-        fontWeight: '600',
     },
 
     smallButton: {
-        paddingHorizontal: 11,
-        paddingVertical: 8,
-        borderWidth: 1,
-        borderColor: DIVIDER,
-        borderRadius: 10,
-        backgroundColor: CARD,
+        paddingVertical: 6,
+        paddingHorizontal: 10,
+        borderRadius: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: UiColors.tint,
     },
 
     smallButtonText: {
-        color: NAVY,
-        fontSize: 13,
+        color: UiColors.purple,
+        fontSize: 12.5,
         fontWeight: '700',
     },
 
     skeleton: {
-        backgroundColor: '#e3e7ee',
+        backgroundColor: UiColors.tint,
     },
 
     skeletonLine: {
         height: 12,
         borderRadius: 6,
-        backgroundColor: '#e3e7ee',
+        backgroundColor: UiColors.tint,
     },
 
     errorCard: {
@@ -684,13 +647,13 @@ const styles = StyleSheet.create({
 
     errorTitle: {
         marginTop: 4,
-        color: NAVY,
+        color: UiColors.ink,
         fontSize: 16,
         fontWeight: '800',
     },
 
     errorText: {
-        color: SECONDARY,
+        color: UiColors.muted,
         fontSize: 13,
         fontWeight: '600',
     },
@@ -703,25 +666,26 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 6,
         borderRadius: 12,
-        backgroundColor: NAVY,
+        backgroundColor: UiColors.purple,
     },
 
     retryText: {
-        color: CARD,
+        color: UiColors.white,
         fontSize: 14,
         fontWeight: '700',
     },
 
     sectionTitle: {
-        marginTop: 24,
-        marginBottom: 10,
-        color: NAVY,
+        marginTop: 22,
+        marginHorizontal: CARD_PADDING,
+        marginBottom: 8,
+        color: UiColors.ink,
         fontSize: 15,
         fontWeight: '800',
     },
 
     listRow: {
-        minHeight: 54,
+        paddingVertical: 15,
         paddingHorizontal: 16,
         flexDirection: 'row',
         alignItems: 'center',
@@ -730,25 +694,24 @@ const styles = StyleSheet.create({
 
     listDivider: {
         borderTopWidth: 1,
-        borderTopColor: DIVIDER,
+        borderTopColor: UiColors.lineSoft,
     },
 
     listLabel: {
-        color: NAVY,
+        color: UiColors.ink,
         fontSize: 15,
-        fontWeight: '700',
     },
 
     permission: {
-        fontSize: 13.5,
+        fontSize: 13,
         fontWeight: '700',
     },
 
     permissionHint: {
         marginTop: 2,
-        color: SECONDARY,
+        color: UiColors.muted,
         fontSize: 12,
-        fontWeight: '600',
+        fontWeight: '400',
     },
 
     footer: {
@@ -760,46 +723,14 @@ const styles = StyleSheet.create({
     },
 
     footerText: {
-        color: SECONDARY,
-        fontSize: 12.5,
-        fontWeight: '600',
+        color: UiColors.tabInactive,
+        fontSize: 12,
     },
 
     footerBar: {
         width: 1,
         height: 11,
-        backgroundColor: DIVIDER,
-    },
-
-    tabBar: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        bottom: 0,
-        paddingTop: 10,
-        paddingHorizontal: 16,
-        flexDirection: 'row',
-        justifyContent: 'space-around',
-        borderTopWidth: 1,
-        borderTopColor: DIVIDER,
-        backgroundColor: CARD,
-    },
-
-    tabItem: {
-        width: 68,
-        alignItems: 'center',
-        gap: 3,
-    },
-
-    tabLabel: {
-        color: DISABLED,
-        fontSize: 12,
-        fontWeight: '600',
-    },
-
-    tabLabelActive: {
-        color: NAVY,
-        fontWeight: '800',
+        backgroundColor: UiColors.lineSoft,
     },
 
     toast: {
@@ -811,11 +742,11 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 7,
         borderRadius: 14,
-        backgroundColor: 'rgba(15,28,63,0.94)',
+        backgroundColor: UiColors.toast,
     },
 
     toastText: {
-        color: CARD,
+        color: UiColors.white,
         fontSize: 14,
         fontWeight: '700',
     },
@@ -827,7 +758,7 @@ const styles = StyleSheet.create({
 
     dim: {
         ...StyleSheet.absoluteFill,
-        backgroundColor: 'rgba(15,28,63,0.38)',
+        backgroundColor: UiColors.dim,
     },
 
     sheet: {
@@ -835,7 +766,7 @@ const styles = StyleSheet.create({
         paddingTop: 10,
         borderTopLeftRadius: 24,
         borderTopRightRadius: 24,
-        backgroundColor: CARD,
+        backgroundColor: UiColors.white,
     },
 
     sheetHandle: {
@@ -844,14 +775,14 @@ const styles = StyleSheet.create({
         marginBottom: 14,
         alignSelf: 'center',
         borderRadius: 2,
-        backgroundColor: '#d9dde4',
+        backgroundColor: UiColors.handle,
     },
 
     sheetTitle: {
         alignSelf: 'center',
-        color: NAVY,
-        fontSize: 16,
-        fontWeight: '800',
+        color: UiColors.ink,
+        fontSize: 15,
+        fontWeight: '700',
     },
 
     hero: {
@@ -861,24 +792,25 @@ const styles = StyleSheet.create({
     },
 
     heroIcon: {
-        width: 52,
-        height: 52,
-        borderRadius: 16,
+        width: 56,
+        height: 56,
+        borderRadius: 18,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: MINT_SOFT,
+        backgroundColor: UiColors.tint,
     },
 
     heroHeading: {
         marginTop: 14,
-        color: NAVY,
-        fontSize: 17,
+        color: UiColors.ink,
+        fontSize: 18,
         fontWeight: '800',
+        letterSpacing: -0.3,
     },
 
     heroDescription: {
         marginTop: 8,
-        color: SECONDARY,
+        color: UiColors.muted,
         fontSize: 13.5,
         fontWeight: '500',
         lineHeight: 20,
@@ -890,32 +822,36 @@ const styles = StyleSheet.create({
         paddingHorizontal: 14,
         flexDirection: 'row',
         alignItems: 'center',
-        borderWidth: 1.5,
-        borderColor: NAVY,
-        borderRadius: 13,
+        borderWidth: 1,
+        borderColor: UiColors.line,
+        borderRadius: 12,
+    },
+
+    inputActive: {
+        borderColor: UiColors.purple,
     },
 
     inputError: {
-        borderColor: RED,
+        borderColor: UiColors.sheetDanger,
     },
 
     inputText: {
         flex: 1,
-        color: NAVY,
-        fontSize: 16,
+        color: UiColors.ink,
+        fontSize: 15,
         fontWeight: '700',
     },
 
     counter: {
-        color: DISABLED,
-        fontSize: 12.5,
+        color: UiColors.muted,
+        fontSize: 12,
         fontWeight: '600',
     },
 
     inputHelp: {
         marginTop: 7,
         marginLeft: 2,
-        color: SECONDARY,
+        color: UiColors.muted,
         fontSize: 12.5,
         fontWeight: '600',
     },
@@ -926,7 +862,7 @@ const styles = StyleSheet.create({
         padding: 13,
         gap: 8,
         borderRadius: 13,
-        backgroundColor: BACKGROUND,
+        backgroundColor: UiColors.bg,
     },
 
     detailRow: {
@@ -940,12 +876,12 @@ const styles = StyleSheet.create({
         height: 5,
         marginTop: 7,
         borderRadius: 3,
-        backgroundColor: SECONDARY,
+        backgroundColor: UiColors.chevron,
     },
 
     detailText: {
         flex: 1,
-        color: '#4b5468',
+        color: UiColors.muted,
         fontSize: 13,
         fontWeight: '600',
         lineHeight: 19,
@@ -964,12 +900,12 @@ const styles = StyleSheet.create({
         alignItems: 'flex-start',
         gap: 7,
         borderRadius: 12,
-        backgroundColor: '#fdecec',
+        backgroundColor: UiColors.errorBg,
     },
 
     sheetErrorText: {
         flex: 1,
-        color: '#b42318',
+        color: UiColors.sheetDanger,
         fontSize: 13,
         fontWeight: '600',
         lineHeight: 18,
@@ -981,38 +917,40 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         borderRadius: 14,
-        backgroundColor: NAVY,
+        backgroundColor: UiColors.purple,
     },
 
     primaryDisabled: {
-        backgroundColor: '#c3c8d2',
+        backgroundColor: UiColors.buttonDisabled,
     },
 
     danger: {
-        backgroundColor: RED,
+        backgroundColor: UiColors.sheetDanger,
     },
 
     primaryText: {
-        color: CARD,
-        fontSize: 15.5,
-        fontWeight: '800',
+        color: UiColors.white,
+        fontSize: 15,
+        fontWeight: '600',
+    },
+
+    primaryTextDisabled: {
+        color: UiColors.faint,
     },
 
     secondary: {
-        height: 50,
+        height: 52,
         marginTop: 8,
         alignItems: 'center',
         justifyContent: 'center',
-        borderWidth: 1,
-        borderColor: DIVIDER,
         borderRadius: 14,
-        backgroundColor: CARD,
+        backgroundColor: UiColors.chip,
     },
 
     secondaryText: {
-        color: NAVY,
+        color: UiColors.purple,
         fontSize: 15,
-        fontWeight: '700',
+        fontWeight: '600',
     },
 
     pressed: {

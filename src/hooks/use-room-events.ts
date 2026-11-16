@@ -30,6 +30,7 @@ export function useRoomEvents(roomId: string, callbacks: Callbacks) {
         let active = true;
         const valid = () => active && generation === getSessionGeneration() && roomEventsScope() === scope;
         const queue = createRoomEventCoalescer(target => latest.current.refresh(target, valid), valid);
+        const synchronize = () => { if (valid()) queue.request(['detail', 'proposals', 'recommendation']); };
         let unsubscribe: () => void = () => {};
         try {
             unsubscribe = subscribeRoomEvents(roomId, event => {
@@ -37,7 +38,8 @@ export function useRoomEvents(roomId: string, callbacks: Callbacks) {
                 const result = latest.current.receive?.(event);
                 if (result !== false) queue.request(Array.isArray(result) ? result : roomEventTargets(event.type));
             }, {
-                onReconnected: () => { if (valid()) queue.request(['detail', 'proposals', 'recommendation']); },
+                onSubscribed: synchronize,
+                onReconnected: synchronize,
                 onRejected: code => {
                     if (valid() && (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND')) {
                         latest.current.rejected(code);

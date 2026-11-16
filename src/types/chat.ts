@@ -52,6 +52,11 @@ export type PendingChatMessage = {
     createdAt: string;
     status: 'sending' | 'failed';
     errorMessage?: string;
+    /**
+     * 응답이 유실된 뒤 재시도 전에 저장 여부를 끝까지 확인하지 못했어요(#139).
+     * 이 상태에서 다시 누르면 확인 없이 보내요(같은 메시지가 두 번 저장될 수 있다고 안내해요).
+     */
+    unconfirmed?: boolean;
 };
 
 /** 화면 검증용 쿼리 값: ?mock=chat-error 등 */

@@ -7,6 +7,26 @@ const vm = require('node:vm');
 const { test } = require('node:test');
 const ts = require('typescript');
 
+test('213 한국 날짜 기준 상대 시각: 오늘·내일·이후·다른 해·자정 경계', () => {
+    const { formatRouteRelativeDateTime: format } = createRuntime().load('src/utils/route-time.ts');
+    const now = Date.parse('2026-11-16T10:00:00+09:00');
+    for (const [iso, expected] of [
+        ['2026-11-16T11:51:00+09:00', '오전 11:51'],
+        ['2026-11-16T12:00:00+09:00', '오후 12:00'],
+        ['2026-11-16T00:00:00+09:00', '오전 12:00'],
+        ['2026-11-16T23:05:00+09:00', '오후 11:05'],
+        ['2026-11-17T11:51:00+09:00', '내일 오전 11:51'],
+        ['2026-11-18T11:51:00+09:00', '11.18 오전 11:51'],
+        ['2027-01-03T11:51:00+09:00', '2027.1.3 오전 11:51'],
+        ['2026-11-16T15:00:00Z', '내일 오전 12:00'],
+        ['', ''], ['invalid', ''], ['2026-02-30T11:51:00+09:00', ''],
+    ]) assert.equal(format(iso, now), expected, iso);
+    assert.equal(format('2026-11-17T00:00:00+09:00', Date.parse('2026-11-16T23:59:59+09:00')), '내일 오전 12:00');
+    assert.equal(format('2026-11-17T00:00:00+09:00', Date.parse('2026-11-17T00:00:00+09:00')), '오전 12:00');
+    assert.equal(format('2027-01-01T00:00:00+09:00', Date.parse('2026-12-31T23:59:59+09:00')), '내일 오전 12:00');
+    assert.equal(format('2026-11-16T11:51:00+09:00', NaN), '');
+});
+
 const root = path.resolve(__dirname, '..');
 
 function createRuntime(env = {}, react = require('react')) {
@@ -33,6 +53,7 @@ function createRuntime(env = {}, react = require('react')) {
             change(state) { this.currentState = state; for (const listener of [...this.listeners]) listener(state); },
         },
         StyleSheet: { create: value => value },
+        useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
         Platform: { OS: 'web', select: value => value.web },
         Keyboard: { dismiss() {} },
     };
@@ -46,6 +67,7 @@ function createRuntime(env = {}, react = require('react')) {
         'react-native-safe-area-context': { useSafeAreaInsets: () => ({ top: 0, bottom: 0 }) },
         '@expo/vector-icons/Ionicons': 'Ionicons',
         'react-native-webview': { WebView: 'WebView' },
+        'expo-image': { Image: 'Image' },
         'expo-location': {
             Accuracy: { Balanced: 3 },
             getForegroundPermissionsAsync: async () => ({ granted: false }),
@@ -53,6 +75,8 @@ function createRuntime(env = {}, react = require('react')) {
             getCurrentPositionAsync: async () => { throw Error('위치 응답을 지정하세요'); },
         },
         'expo-image-picker': { requestCameraPermissionsAsync: async () => ({ granted: false }) },
+        // #187 공용 글자 컴포넌트는 화면 검사에서 react-native 의 Text·TextInput 과 같은 가짜 요소로 연결해요.
+        '@/components/app-text': { Text: 'Text', TextInput: 'TextInput' },
     };
     Object.defineProperty(external, '@stomp/stompjs', { get() {
             const module = { exports: {} };
@@ -74,6 +98,7 @@ function createRuntime(env = {}, react = require('react')) {
         }).outputText;
         const evaluate = new vm.Script(`(function(require, module, exports) { ${code}\n})`, { filename }).runInContext(context);
         evaluate(id => {
+            if (id === '@/components/app-text') return external[id];
             if (id.startsWith('@/')) return load(`src/${id.slice(2)}`);
             assert.ok(Object.hasOwn(external, id), `예상하지 못한 모듈입니다: ${id}`);
             return external[id];
@@ -368,7 +393,7 @@ test('126 권한 시작은 순서대로 요청·이중 탭 차단·오류에도 
         r.external['expo-image-picker'].requestCameraPermissionsAsync = async () => { calls.push('camera'); await new Promise(resolve => { finish = resolve; }); throw Error(); };
         r.external['expo-location'].requestForegroundPermissionsAsync = async () => { calls.push('location'); throw Error(); };
         r.external['expo-router'].router.replace = route => routes.push(route);
-        const view = r.render(); const button = text => findElement(view, el => el.type === 'Pressable' && findText(el, text));
+        const view = r.render(); const button = text => findElement(view, el => el.type === 'Pressable' && (el.props.accessibilityLabel === text || findText(el, text)));
         if (later) { button('나중에 할게요').props.onPress(); assert.equal(calls.length, 0); }
         else {
             const promise = button('시작하기').props.onPress(); button('시작하기').props.onPress(); button('나중에 할게요').props.onPress();
@@ -459,7 +484,7 @@ test('#117 이벤트별 갱신 대상과 추천 안내 판단', () => {
     const expected = {
         MEMBER_JOINED: ['detail', 'recommendation'], MEMBER_LEFT: ['detail', 'proposals', 'recommendation'],
         OWNER_CHANGED: ['detail'], DEPARTURE_UPDATED: ['detail', 'recommendation'],
-        ROOM_UPDATED: [], SELECTED_STATION_CHANGED: [], MESSAGE_CREATED: [],
+        ROOM_UPDATED: ['recommendation'], SELECTED_STATION_CHANGED: [], MESSAGE_CREATED: [],
         RECOMMENDATION_CREATED: ['recommendation'], STATION_PROPOSAL_CREATED: ['proposals'],
         STATION_PROPOSAL_DELETED: ['proposals'], STATION_PROPOSAL_VOTE_CHANGED: ['proposals'],
     };
@@ -542,7 +567,7 @@ test('#117 구독 예외에도 마운트·언마운트와 coalescer 정리·개�
         r.load('src/services/realtime.ts').subscribeRoomEvents = (_roomId, _listener, options) => {
             subscriptions++;
             // Even queued work created immediately before a failed registration must be disposed.
-            options.onReconnected();
+            options.onSubscribed();
             throw Error('invalid https://private.test/api token=secret message=private');
         };
         const callbacks = { refresh: () => { refreshes++; }, rejected: () => assert.fail('구독 예외는 접근 거부가 아님') };
@@ -656,7 +681,7 @@ test('#117 추천: 기존 결과 유지·새 추천 배너·보기·자기 이�
 /* ---------- WebSocket/STOMP base (#116): real library, virtual socket and clock ---------- */
 const RT_ROOM = '00000000-0000-0000-0000-000000000116';
 const RT_OTHER = '00000000-0000-0000-0000-000000000117';
-async function realtimeRuntime({ mock = false, token = 'opaque-access', random = () => 0.5, native = false, base } = {}) {
+async function realtimeRuntime({ mock = false, token = 'opaque-access', random = () => 0.5, native = false, base, settleSubscriptions = true } = {}) {
     const r = createRuntime(mock ? {} : { ...serverEnv, ...(base ? { EXPO_PUBLIC_API_BASE_URL: base } : {}) });
     r.context.Date = class extends Date {
         constructor(...args) { super(...(args.length ? args : [2000000000000 + r.now()])); }
@@ -683,9 +708,11 @@ async function realtimeRuntime({ mock = false, token = 'opaque-access', random =
     r.context.WebSocket = FakeSocket;
     r.rt = r.load('src/services/realtime.ts');
     r.service = r.rt.createRealtimeService({ socketFactory: (url, protocols) => new FakeSocket(url, protocols), random });
-    r.connect = async () => {
+    r.connect = async (ready = settleSubscriptions) => {
         await settle(); const socket = r.sockets.at(-1); assert.ok(socket); socket.open();
-        socket.receive('CONNECTED', { version: '1.2', 'heart-beat': '10000,10000' }); await settle(); return socket;
+        socket.receive('CONNECTED', { version: '1.2', 'heart-beat': '10000,10000' }); await settle();
+        if (ready) { r.advance(r.rt.SUBSCRIBE_SETTLE_MS); await settle(); }
+        return socket;
     };
     r.reconnect = async (delay = 1000) => { r.advance(delay); await settle(); return r.connect(); };
     r.event = (socket, room = RT_ROOM, overrides = {}) => {
@@ -720,6 +747,7 @@ test('116 real STOMP CONNECT headers, RN binary option, shared subscription, rec
     const three = r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onReconnected: () => reconnected++ });
     assert.equal(reconnected, 0); assert.equal(socket.commands('SUBSCRIBE').length, 2);
     const ids = socket.commands('SUBSCRIBE').map(frame => frame.match(/\nid:([^\n]+)/)[1]); assert.equal(new Set(ids).size, 2);
+    socket.receive('RECEIPT', { 'receipt-id': socket.commands('SUBSCRIBE')[1].match(/\nreceipt:([^\n]+)/)[1] });
     socket.close(); const restored = await r.reconnect(); assert.equal(reconnected, 1);
     r.service.subscribeRoomEvents(RT_OTHER, () => {}, { onReconnected: () => reconnected++ }); assert.equal(reconnected, 1);
     assert.equal(new Set(restored.commands('SUBSCRIBE').map(frame => frame.match(/\nid:([^\n]+)/)[1])).size, 2);
@@ -747,7 +775,7 @@ test('116 idle grace cancels on a new subscriber and closes after 10 seconds wit
 
 test('116 denied subscription uses receipt-id or newest unconfirmed fallback; other rooms recover', async () => {
     for (const code of ['NOT_ROOM_MEMBER', 'ROOM_NOT_FOUND']) for (const receipt of [true, false]) {
-        const r = await realtimeRuntime(); const rejected = []; let restored = 0;
+        const r = await realtimeRuntime({ settleSubscriptions: false }); const rejected = []; let restored = 0;
         r.service.subscribeRoomEvents(RT_OTHER, () => {}, { onReconnected: () => restored++ });
         r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onRejected: value => rejected.push(value) });
         const socket = await r.connect();
@@ -756,13 +784,13 @@ test('116 denied subscription uses receipt-id or newest unconfirmed fallback; ot
         socket.receive('RECEIPT', { 'receipt-id': r.receipt(socket, RT_OTHER) });
         socket.receive('ERROR', { message: code, ...(receipt ? { 'receipt-id': r.receipt(socket, RT_ROOM) } : {}) });
         assert.deepEqual(rejected, [code]); assert.equal(cache.findCachedRoomIdByCode('ABC123'), undefined);
-        const next = await r.reconnect(); assert.equal(next.commands('SUBSCRIBE').length, 1); assert.match(next.commands('SUBSCRIBE')[0], new RegExp(RT_OTHER)); assert.equal(restored, 1); r.service.dispose();
+        const next = await r.reconnect(); next.receive('RECEIPT', { 'receipt-id': r.receipt(next, RT_OTHER) }); assert.equal(next.commands('SUBSCRIBE').length, 1); assert.match(next.commands('SUBSCRIBE')[0], new RegExp(RT_OTHER)); assert.equal(restored, 1); r.service.dispose();
     }
 });
 
 test('116 repeated validation/access/internal errors abandon only the offending room after three attempts', async () => {
     for (const code of ['VALIDATION_ERROR', 'ACCESS_DENIED', 'INTERNAL_ERROR']) {
-        const r = await realtimeRuntime(); const rejected = [];
+        const r = await realtimeRuntime({ settleSubscriptions: false }); const rejected = [];
         r.service.subscribeRoomEvents(RT_OTHER, () => {});
         r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onRejected: value => rejected.push(value) });
         let socket = await r.connect();
@@ -776,7 +804,7 @@ test('116 repeated validation/access/internal errors abandon only the offending 
 
 test('116 confirmed subscription resets room failures before a new consecutive failure streak', async () => {
     for (const code of ['VALIDATION_ERROR', 'ACCESS_DENIED', 'INTERNAL_ERROR']) {
-        const r = await realtimeRuntime(); const rejected = [];
+        const r = await realtimeRuntime({ settleSubscriptions: false }); const rejected = [];
         r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onRejected: value => rejected.push(value) });
         let socket = await r.connect();
         const fail = async () => {
@@ -892,7 +920,9 @@ test('116 logout/account switch rejects old messages and old unsubscribe cannot 
 test('116 background grace, suspension and foreground recovery; ACCOUNT_WITHDRAWN never retries', async () => {
     const r = await realtimeRuntime(); let recovered = 0;
     r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onReconnected: () => recovered++ }); const socket = await r.connect();
-    r.native.AppState.change('background'); r.advance(29999); r.native.AppState.change('active'); assert.equal(socket.readyState, 1); assert.equal(recovered, 0);
+    r.native.AppState.change('background'); r.advance(20000);
+    socket.onmessage?.({ data: '\n' }); // 구독 대기 시간과 별개로 서버 하트비트가 연결을 유지해요.
+    r.advance(9999); r.native.AppState.change('active'); assert.equal(socket.readyState, 1); assert.equal(recovered, 0);
     r.native.AppState.change('background'); r.advance(30000); await settle(); assert.equal(socket.readyState, 3);
     const count = r.sockets.length; r.advance(60000); await settle(); assert.equal(r.sockets.length, count);
     r.native.AppState.change('active'); const next = await r.connect(); assert.equal(recovered, 1);
@@ -933,7 +963,7 @@ test('116 auth recovery cannot connect or clear a different account after an awa
 });
 
 test('116 listener/state observer exceptions and delayed callbacks after cleanup remain isolated', async () => {
-    const r = await realtimeRuntime(); const states = []; let rejected = 0;
+    const r = await realtimeRuntime({ settleSubscriptions: false }); const states = []; let rejected = 0;
     const offState = r.service.subscribeRealtimeState(() => { throw Error('observer'); });
     r.service.subscribeRealtimeState(() => states.push(r.service.getRealtimeState()));
     r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onRejected: () => { throw Error('rejection'); } });
@@ -1877,6 +1907,53 @@ test('닉네임은 이모지 포함 코드 포인트 1·2·20·21자 경계를 �
     for (const value of ['', '  ']) await assert.rejects(service.updateNickname(value), { code: 'VALIDATION_ERROR' });
 });
 
+test('174 Java strip 공백과 보존 문자, NUL을 서버·mock에 동일하게 적용해요', async () => {
+    const spaces = [0x20, 9, 10, 11, 12, 13, 0x1c, 0x1d, 0x1e, 0x1f,
+        0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006,
+        0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x205f, 0x3000].map(code => String.fromCodePoint(code));
+    const r = authRuntime(); await r.auth.loginWithKakao();
+    const service = r.load('src/services/user.ts');
+    const mock = authRuntime(true); const mockService = mock.load('src/services/user.ts');
+    const run = async pending => { mock.advance(700); await flush(); return pending; };
+    const cases = spaces.map(space => [space + '가 나' + space, '가 나']);
+    cases.push([spaces.join('') + '가나' + spaces.join(''), '가나']);
+    for (const code of [0x00a0, 0x2007, 0x202f, 0xfeff, 0x85, 0x200b]) {
+        const char = String.fromCodePoint(code);
+        cases.push([' \t' + char + '가' + char + '\n ', char + '가' + char]);
+        assert.equal(service.nicknameLength(char + '가'.repeat(19) + char), 21);
+        assert.notEqual(service.validateNickname(char + '가'.repeat(19) + char), null);
+    }
+    for (const [input, expected] of cases) {
+        assert.equal(service.stripNickname(input), expected);
+        assert.equal(service.nicknameLength(input), Array.from(expected).length);
+        assert.equal(service.validateNickname(input), null);
+        r.respond(async () => ok({ id: 'user-1', nickname: expected }));
+        await service.updateNickname(input);
+        assert.deepEqual(JSON.parse(r.calls.at(-1).options.body), { nickname: expected });
+        assert.equal((await run(mockService.updateNickname(input))).nickname, expected);
+        assert.equal((await run(mockService.fetchMe())).nickname, expected);
+    }
+    for (const input of ['', ' ', spaces.join('')]) {
+        assert.equal(service.nicknameLength(input), 0);
+        assert.equal(service.validateNickname(input), '닉네임을 입력해주세요.');
+        const count = r.calls.length;
+        await assert.rejects(service.updateNickname(input), { code: 'VALIDATION_ERROR' });
+        assert.equal(r.calls.length, count);
+    }
+    for (const input of ['\u0000가나', '가\u0000나', '가나\u0000', ' \u0000 ', '\u0000' + '가'.repeat(21)]) {
+        const message = '닉네임에 사용할 수 없는 문자가 있어요.';
+        assert.equal(service.validateNickname(input), message);
+        const count = r.calls.length;
+        await assert.rejects(service.updateNickname(input), { code: 'VALIDATION_ERROR', message });
+        assert.equal(r.calls.length, count);
+        const before = (await run(mockService.fetchMe())).nickname;
+        const rejected = assert.rejects(mockService.updateNickname(input), { code: 'VALIDATION_ERROR', message });
+        mock.advance(700); await rejected;
+        assert.equal((await run(mockService.fetchMe())).nickname, before);
+    }
+    assert.equal(mock.calls.length, 0);
+});
+
 test('사용자 API는 VALIDATION_ERROR·ROOM_BUSY·TOKEN_INVALID 코드를 그대로 전달해요', async () => {
     for (const [method, invoke] of [
         ['GET', service => service.fetchMe()],
@@ -2386,8 +2463,9 @@ test('경로 오류 매핑 422·404·403·400·5xx와 TOKEN 계열 원본 보존
     const { ApiError } = r.load('src/services/api/errors.ts');
     for (const [code, status, expected] of [
         ['STATION_UNSUPPORTED', 422, 'STATION_UNSUPPORTED'], ['ROUTE_NOT_FOUND', 404, 'ROUTE_NOT_FOUND'],
-        ['STATION_NOT_FOUND', 404, 'STATION_NOT_FOUND'], ['NOT_ROOM_MEMBER', 403, 'EXTERNAL_API_ERROR'],
-        ['VALIDATION_ERROR', 400, 'EXTERNAL_API_ERROR'], ['EXTERNAL_API_ERROR', 502, 'EXTERNAL_API_ERROR'],
+        ['STATION_NOT_FOUND', 404, 'STATION_NOT_FOUND'], ['NOT_ROOM_MEMBER', 403, 'NOT_ROOM_MEMBER'],
+        ['ROOM_NOT_FOUND', 404, 'ROOM_NOT_FOUND'],
+        ['VALIDATION_ERROR', 400, 'VALIDATION_ERROR'], ['EXTERNAL_API_ERROR', 502, 'EXTERNAL_API_ERROR'],
         ['UNKNOWN_ERROR', 500, 'EXTERNAL_API_ERROR'], ['TOKEN_EXPIRED', 401, 'TOKEN_EXPIRED'],
         ['TOKEN_INVALID', 401, 'TOKEN_INVALID'], ['TOKEN_FUTURE', 401, 'TOKEN_FUTURE'], ['AUTH_REQUIRED', 401, 'AUTH_REQUIRED'],
     ]) {
@@ -2579,6 +2657,11 @@ test('늦은 경로 응답은 최신 검색·동일역·미선택·닫힌 화면
         pending[0].resolve(routeData()); await settle(); view = r.render();
         assert.equal(findElement(view, element => element.props?.route?.routeId === 'server-route-1'), null);
         if (outcome === 'newer') assert.ok(findElement(view, element => element.props?.route?.routeId === 'newest'));
+        if (outcome === 'same') {
+            assert.equal(pending.length, 2, '같은 역도 새 서버 응답을 기다려요');
+            pending[1].resolve(route141Data(true)); await settle();
+            assert.ok(sameMessage141(r.render()));
+        }
         assert.ok(types.RouteSearchError); r.unmount();
     }
 });
@@ -2837,9 +2920,9 @@ test('NextTrains: 첫 승차 구간 조건으로 부르고 카운트다운 중 1
     assert.equal(r.text(), '다음 열차 확인 중');
     await flush();
     assert.deepEqual(r.calls, ['https://example.test/api/v1/stations/222/arrivals?lineId=2&nextStationId=223&directionCode=INNER&limit=2']);
-    assert.equal(r.text(), '다음 열차 · 성수행 1분 1초 · 성수행 5분 0초');
-    r.advance(1000); assert.equal(r.text(), '다음 열차 · 성수행 1분 0초 · 성수행 4분 59초');
-    r.advance(1000); assert.equal(r.text(), '다음 열차 · 성수행 곧 도착 · 성수행 4분 58초');
+    assert.equal(r.text(), '다음 열차 성수행 1분 1초, 성수행 5분 0초');
+    r.advance(1000); assert.equal(r.text(), '다음 열차 성수행 1분 0초, 성수행 4분 59초');
+    r.advance(1000); assert.equal(r.text(), '다음 열차 성수행 곧 도착, 성수행 4분 58초');
     r.advance(17999); await flush();
     assert.equal(r.calls.length, 1);
     r.advance(1); await flush();
@@ -2852,9 +2935,9 @@ test('NextTrains: 첫 승차 구간 조건으로 부르고 카운트다운 중 1
             arrivalTrain({ secondsUntil: 200, message: '전역 출발' }),
         ] })));
     r.advance(20000); await flush();
-    assert.equal(r.text(), '다음 열차 · 성수행 · 2번째 전역 · 성수행 3분 20초');
+    assert.equal(r.text(), '다음 열차 성수행 · 2번째 전역, 성수행 3분 20초');
     r.advance(1000);
-    assert.equal(r.text(), '다음 열차 · 성수행 · 2번째 전역 · 성수행 3분 19초');
+    assert.equal(r.text(), '다음 열차 성수행 · 2번째 전역, 성수행 3분 19초');
     r.unmount();
     assert.equal(r.timers.size, 0);
 });
@@ -2864,7 +2947,7 @@ test('NextTrains: available:false(receivedAt null)·receivedAt 없음·빈 열�
         const r = nextTrainsRuntime();
         r.respond(async () => ok(arrivalsData({ receivedAt: r.receivedNow() })));
         r.text(); await flush();
-        assert.ok(r.text().startsWith('다음 열차 · 성수행'), outcome);
+        assert.ok(r.text().startsWith('다음 열차 성수행'), outcome);
         r.respond(async () => {
             // BE 는 available:false 여도 reason·receivedAt(null 가능)·trains([])를 항상 보내요.
             if (outcome === 'unavailable') return ok({ available: false, reason: 'UNSUPPORTED_STATION', receivedAt: null, trains: [] });
@@ -2894,12 +2977,12 @@ test('NextTrains: 인증 오류는 이전 값을 유지하고, 토큰 갱신 중
         return ok(arrivalsData({ receivedAt: r.receivedNow(), trains: [arrivalTrain({ secondsUntil: 600 })] }));
     });
     r.text(); await flush();
-    assert.equal(r.text(), '다음 열차 · 성수행 10분 0초');
+    assert.equal(r.text(), '다음 열차 성수행 10분 0초');
 
     // TOKEN_INVALID 처럼 갱신 없이 실패하는 인증 오류: 이전 값을 그대로 둬요.
     r.respond(async () => fail('TOKEN_INVALID'));
     r.advance(20000); await flush();
-    assert.equal(r.text(), '다음 열차 · 성수행 9분 40초');
+    assert.equal(r.text(), '다음 열차 성수행 9분 40초');
 
     // TOKEN_EXPIRED: 갱신이 끝날 때까지 요청이 끝나지 않으므로 이전 값이 보이고, 다음 폴링은 건너뛰어요.
     r.respond(async (_url, options) => {
@@ -2911,14 +2994,14 @@ test('NextTrains: 인증 오류는 이전 값을 유지하고, 토큰 갱신 중
     r.advance(20000); await flush();
     assert.equal(r.calls.length, before + 1);
     assert.equal(refreshes, 1);
-    assert.equal(r.text(), '다음 열차 · 성수행 9분 20초');
+    assert.equal(r.text(), '다음 열차 성수행 9분 20초');
     r.advance(20000); await flush();
     assert.equal(r.calls.length, before + 1, '갱신 중에는 다음 폴링을 겹쳐 보내지 않아요');
-    assert.equal(r.text(), '다음 열차 · 성수행 9분 0초');
+    assert.equal(r.text(), '다음 열차 성수행 9분 0초');
     refresh.resolve(); await flush();
     assert.equal(r.calls.length, before + 2);
     assert.equal(authHeaders.at(-1), 'Bearer token-new');
-    assert.equal(r.text(), '다음 열차 · 성수행 1분 30초');
+    assert.equal(r.text(), '다음 열차 성수행 1분 30초');
     r.unmount();
 });
 
@@ -2929,7 +3012,7 @@ test('NextTrains: mock 모드의 정상·none·fail 표시와 서버 미호출',
         r.advance(400); await flush();
         const shown = r.text({ mock: flag });
         if (flag) assert.equal(shown, null, flag);
-        else assert.match(shown, /^다음 열차 · 성수행 3분 2초 · 성수행 7분 2초$/);
+        else assert.match(shown, /^다음 열차 성수행 3분 2초, 성수행 7분 2초$/);
         assert.equal(r.calls.length, 0);
         r.unmount();
     }
@@ -2958,13 +3041,13 @@ test('NextTrains: message 가 항상 있는 실서버 응답도 secondsUntil 로
     const shown = r.text();
     assert.ok(shown, '줄이 보여야 해요');
     assert.equal((shown.match(/성수행/g) ?? []).length, 2);
-    assert.equal(shown, '다음 열차 · 성수행 1분 40초 · 성수행 6분 10초');
+    assert.equal(shown, '다음 열차 성수행 1분 40초, 성수행 6분 10초');
     r.advance(1000);
-    assert.equal(r.text(), '다음 열차 · 성수행 1분 39초 · 성수행 6분 9초');
+    assert.equal(r.text(), '다음 열차 성수행 1분 39초, 성수행 6분 9초');
     r.advance(40000); await flush();
     // 20초에 다시 불렀고, 그 요청이 끝나지 않아 40초 폴링은 겹침 방지로 건너뛰었어요.
     assert.equal(r.calls.length, 2);
-    assert.equal(r.text(), '다음 열차 · 성수행 곧 도착 · 성수행 5분 29초');
+    assert.equal(r.text(), '다음 열차 성수행 곧 도착, 성수행 5분 29초');
     r.unmount();
 });
 
@@ -3056,6 +3139,7 @@ function chat118Hook(realtimeState = 'closed') {
     r.event = (payload, type = 'MESSAGE_CREATED') => listener?.({ type, roomId: ROOM_QUERY_ID, payload, at: payload.createdAt });
     r.captureEvent = () => { const current = listener; return payload => current({ type: 'MESSAGE_CREATED', roomId: ROOM_QUERY_ID, payload, at: payload.createdAt }); };
     r.reconnect = () => options.onReconnected();
+    r.prepared = () => options.onSubscribed();
     r.reject = code => options.onRejected(code);
     r.realtimeState = value => { realtimeState = value; stateListeners.forEach(callback => callback()); };
     r.screen.default = () => r.screen.useRoomChat(ROOM_QUERY_ID);
@@ -3525,7 +3609,13 @@ function roomQueryRuntime() {
 }
 /* ---------- 중간역 추천 서버 연동 (#99) ---------- */
 
-const RECO_EXTRA = { boardingTrain: { trainNo: '2123', departAt: '2026-11-20T18:40:00+09:00' }, legs: [{ lineId: 2, minutes: 21 }], source: 'TIMETABLE', arriveAt: '2026-11-20T18:58:00+09:00', slackSeconds: 120 };
+// #153: v1.13 participantTimes 추가 필드의 정상 모양이에요. 이전에는 화면에 쓰지 않고 통과만 시키던 값이라 임의 모양이었어요.
+const RECO_EXTRA = {
+    boardingTrain: { lineId: 2, lineName: '2호선', stationId: 88001, stationName: '서버 역 88001', direction: 'INNER', departureAt: '2026-11-20T18:40:00+09:00', terminal: '성수', trainCode: '2123' },
+    legs: [{ lineId: 2, lineName: '2호선', trainCode: '2123', terminal: '성수', direction: 'INNER', fromStationName: '서버 역 88001', toStationName: '서버 추천역',
+        boardAt: '2026-11-20T18:40:00+09:00', alightAt: '2026-11-20T18:58:00+09:00', stationCount: 5, walkSec: 0, transferWaitSec: 0 }],
+    source: 'TIMETABLE', arriveAt: '2026-11-20T18:58:00+09:00', slackSeconds: 120,
+};
 function recoParticipant(overrides = {}) {
     return {
         userId: ROOM_QUERY_ME, nickname: '서버 나', departureStation: { id: 88001, name: '서버 역 88001' },
@@ -3840,7 +3930,12 @@ test('서버 방 상세는 서버의 내 카드·방장 권한·출발역을 사
         const r = roomQueryScreen('src/app/rooms/[roomId].tsx', { roomId: ROOM_QUERY_ID });
         r.context.fetch = async () => jsonResponse({ success: true, data: roomQueryDetail(role) });
         r.render(); await settle(); r.advance(1000); await settle(); const view = r.render();
-        assert.ok(findElement(view, element => element.props?.children === (role === 'OWNER' ? '내 역할 · 방장' : '내 역할 · 멤버')));
+        assert.ok(!textOf(view).includes('내 역할'));
+        if (role === 'OWNER') {
+            const avatar = findElement(view, element => element.type === r.load('src/components/rooms/member-avatar.tsx').default && element.props.isOwner);
+            assert.ok(avatar);
+            assert.ok(findElement(avatar.type(avatar.props), element => element.props?.accessibilityLabel === '방장'));
+        }
         assert.ok(findElement(view, element => element.props?.children === '나'));
         assert.ok(findElement(view, element => element.props?.accessibilityLabel === '내 출발역 변경'));
         const header = findElement(view, element => element.props?.topInset !== undefined && element.props?.onBack);
@@ -4154,7 +4249,8 @@ test('서버 생성 화면은 연타를 한 번만 보내고 생성 응답의 �
     resolve(jsonResponse({ success: true, data: createdRoomData() }, 201)); await Promise.all([first, second]);
     const completed = r.render(); const content = r.renderComponent(completed);
     assert.ok(findElement(content, element => element.props?.children === '서버가 저장한 모임'));
-    assert.ok(findElement(content, element => element.props?.children === 'A3K9PZ'));
+    const codeBox = findElement(content, element => element.props?.accessibilityLabel?.startsWith('초대 코드 A'));
+    assert.deepEqual(Array.from(codeBox.props.children, cell => textOf(cell)), 'A3K9PZ'.split(''));
     await findElement(content, element => element.props?.accessibilityLabel?.startsWith('초대 코드 A')).props.onPress();
     assert.deepEqual(copied, ['A3K9PZ']); r.unmount();
 });
@@ -4627,12 +4723,14 @@ test('추천 화면(서버): 빈 기록은 입력 보기, 계산 버튼 연타�
     assert.ok(findTextIncluding(opened[0], '기준 혼잡도'));
     assert.equal(findText(opened[1], '보통'), null);
     assert.equal(findTextIncluding(opened[1], '혼잡도'), null);
-    assert.ok(findTextIncluding(opened[1], '다익스트라 추정치예요'));
+    // #153: 계산 근거 문구는 source 로 나눠요(이 참여자는 TIMETABLE). 이전의 '다익스트라 추정치예요'는 TIMETABLE 에 틀린 말이라 바꿨어요.
+    assert.ok(findTextIncluding(opened[1], '열차 시각표 기준이에요'));
+    assert.equal(findTextIncluding(opened[1], '다익스트라'), null);
     r.unmount();
 });
 
 test('추천 빈 결과는 서버 안내를 한 번 표시하고, 안내가 없을 때만 조건 완화를 안내해요', async () => {
-    const fallback = '시간·환승·요금 조건을 조금 완화해서 다시 추천받아 보세요.';
+    const fallback = '시간, 환승, 요금 조건을 조금 완화해서 다시 추천받아 보세요.';
     for (const message of [
         '첫차 시각이 가까워 약속 시각까지 도착할 수 있는 역이 없습니다. 약속 시간을 늦춰 주세요.',
         '조건에 맞는 중간역이 없습니다. 조건을 완화해 보세요.',
@@ -4801,6 +4899,14 @@ function homeRuntime(env = serverEnv) {
     return r;
 }
 const homeMeetingCard = view => findElement(view, element => element.props?.accessibilityLabel?.startsWith('다가오는 약속 '));
+/** 홈 약속 배지 기대값을 서울 달력 날짜로 따로 세요 (기기 시간대와 무관). 0 → 오늘, 1 → 내일, 2 이상 → D-n. */
+const seoulDayKey = date => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+const expectedHomeBadge = (when, now = new Date()) => {
+    const diff = Math.round((Date.parse(seoulDayKey(when)) - Date.parse(seoulDayKey(now))) / 86_400_000);
+    if (diff === 0) return '오늘';
+    if (diff === 1) return '내일';
+    return diff > 0 ? `D-${diff}` : `D+${-diff}`;
+};
 
 test('서버 홈: 7.3 방 목록으로 가장 가까운 약속 카드(서버 값)를 보여주고 누르면 openRoom 과 같은 params 예요', async () => {
     const r = homeRuntime();
@@ -4818,9 +4924,8 @@ test('서버 홈: 7.3 방 목록으로 가장 가까운 약속 카드(서버 값
     const card = homeMeetingCard(view);
     assert.equal(card.props.accessibilityLabel, '다가오는 약속 가까운 서버 모임');
     const when = new Date(near.appointmentAt);
-    assert.ok(findText(card, format.formatDday(when)));
-    assert.ok(findText(card, format.formatMonthDay(when)));
-    assert.ok(findText(card, `${format.formatTime(when)} · 서버 역 88001역 · 3/4명`));
+    assert.ok(findText(card, expectedHomeBadge(when)));
+    assert.ok(findText(card, `${new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', hour: 'numeric', minute: '2-digit' }).format(when)} 서버 역 88001역 3명`));
     card.props.onPress();
     assert.deepEqual(plain(r.pushes), [{ pathname: '/rooms/[roomId]', params: {
             roomId: near.id, roomName: '가까운 서버 모임', appointmentAt: format.formatAppointmentParam(when), maxMembers: '4',
@@ -4829,7 +4934,7 @@ test('서버 홈: 7.3 방 목록으로 가장 가까운 약속 카드(서버 값
     // 약속역이 없으면 기존 문구 "약속역 미정"이에요.
     r.respond(async () => ok([{ ...near, selectedStation: null }]));
     r.refocus(); await settle(); view = r.view();
-    assert.ok(findText(homeMeetingCard(view), `${format.formatTime(when)} · 약속역 미정 · 3/4명`));
+    assert.ok(findText(homeMeetingCard(view), `${new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', hour: 'numeric', minute: '2-digit' }).format(when)} 역 정하는 중 3명`));
     r.unmount();
 });
 
@@ -5098,7 +5203,8 @@ test('후보 패널(서버): 방장은 남의 후보도 삭제 버튼, 멤버는
         assert.equal(findElement(view, element => element.props?.style?.backgroundColor && element.type === 'View' && element.props?.children?.type === 'Text' && /호선|^\d$/.test(textOf(element))), null, '노선 배지 없음');
         if (isOwner) {
             deleteOf('남의 역').props.onPress(); view = r.view();
-            findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '삭제')).props.onPress();
+            const dialog = findElement(view, element => element.type === 'Modal' && element.props.visible);
+            findElement(dialog, element => element.type === 'Pressable' && findText(element.props.children, '삭제')).props.onPress();
             await settle(); await settle(); view = r.view();
             assert.deepEqual(r.calls.map(call => [call.options.method, call.url.split('/station-proposals')[1]]), [['DELETE', '/other']]);
             assert.equal(r.reloads(), 1);
@@ -5113,14 +5219,12 @@ test('서버 홈: 서버 오류는 안내와 다시 시도, 다른 기능 버튼
     r.respond(async () => jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR' } }, 500));
     r.view(); await settle(); let view = r.view();
     assert.ok(findText(view, '약속을 불러오지 못했어요'));
-    assert.ok(findElement(view, element => element.type === 'Pressable' && element.props.accessibilityLabel === '경로 탐색'));
-    for (const title of ['AI 표지판 방향 확인', '약속방']) {
-        const feature = findElement(view, element => typeof element.type === 'function' && element.props?.title === title);
-        assert.ok(feature, title);
-        feature.props.onPress();
+    for (const label of ['전체 보기', '방 만들기', '코드로 참여']) {
+        const button = findElement(view, element => element.type === 'Pressable' && element.props?.accessibilityLabel === label);
+        assert.ok(button, label);
+        button.props.onPress();
     }
-    findElement(view, element => element.props?.accessibilityLabel === '경로 탐색').props.onPress();
-    assert.deepEqual(plain(r.pushes), ['/ai-direction', '/rooms', '/route-search']);
+    assert.deepEqual(plain(r.pushes), ['/rooms', '/rooms/new', '/rooms/join']);
     r.respond(async () => ok([homeRoom('aaaa0000-aaaa-4aaa-8aaa-aaaaaaaaaaaa', HOME_DAY, { name: '다시 불러온 모임' })]));
     findElement(view, element => element.props?.accessibilityLabel === '다가오는 약속 다시 불러오기').props.onPress();
     view = r.view();
@@ -5194,13 +5298,12 @@ test('서버 홈: 계정이 바뀌면 다시 불러오기 전에도 이전 계�
 test('mock 홈은 HOME_UPCOMING_MEETING 그대로이고 서버를 부르지 않아요', async () => {
     const r = homeRuntime({});
     r.respond(async () => { throw Error('서버를 부르면 안 돼요'); });
-    const { HOME_UPCOMING_MEETING, formatAppointmentParam, formatDday, formatMonthDay, formatTime } = r.load('src/constants/home-mock.ts');
+    const { HOME_UPCOMING_MEETING, formatAppointmentParam } = r.load('src/constants/home-mock.ts');
     let view = r.view(); await settle(); view = r.view();
     const card = homeMeetingCard(view);
     assert.equal(card.props.accessibilityLabel, `다가오는 약속 ${HOME_UPCOMING_MEETING.title}`);
-    assert.ok(findText(card, formatDday(HOME_UPCOMING_MEETING.appointmentAt)));
-    assert.ok(findText(card, formatMonthDay(HOME_UPCOMING_MEETING.appointmentAt)));
-    assert.ok(findText(card, `${formatTime(HOME_UPCOMING_MEETING.appointmentAt)} · 시청역 · 3/4명`));
+    assert.ok(findText(card, expectedHomeBadge(HOME_UPCOMING_MEETING.appointmentAt)));
+    assert.ok(findText(card, `${new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', hour: 'numeric', minute: '2-digit' }).format(HOME_UPCOMING_MEETING.appointmentAt)} 시청역 3명`));
     assert.equal(findText(view, '약속을 불러오고 있어요'), null);
     card.props.onPress();
     assert.deepEqual(plain(r.pushes), [{ pathname: '/rooms/[roomId]', params: {
@@ -5234,7 +5337,8 @@ test('후보 패널(서버): 9개 초과·중복 제안·남의 후보 삭제·�
                 ? findElement(view, element => element.props?.accessibilityLabel === '남의 역 후보 삭제')
                 : findElement(view, element => element.type === 'Pressable' && element.props?.accessibilityLabel?.startsWith('남의 역 1표'));
             target.props.onPress(); view = r.view();
-            findElement(view, element => element.type === 'Pressable' && findText(element.props.children, action === 'vote' ? '투표하기' : '삭제')).props.onPress();
+            const dialog = findElement(view, element => element.type === 'Modal' && element.props.visible);
+            findElement(dialog, element => element.type === 'Pressable' && findText(element.props.children, action === 'vote' ? '투표하기' : '삭제')).props.onPress();
         }
         await settle(); await settle(); view = r.view();
         if (message) {
@@ -5269,11 +5373,12 @@ test('추천 화면에서 올린 후보가 방 상세 후보 패널의 서버 �
     const reco = recoScreen();
     reco.context.fetch = async (url, options) => { reco.calls.push({ url, options }); return respond(url, options); };
     let view = await pumpScreen(reco);
-    findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '이 역으로 약속방에 공유')).props.onPress();
+    findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '후보로 제안')).props.onPress();
     view = await pumpScreen(reco);
     const post = reco.calls.find(call => call.options.method === 'POST' && call.url.includes('/station-proposals'));
     assert.deepEqual(JSON.parse(post.options.body), { stationId: 77001, resultId: 'result-TIME' });
-    assert.ok(findText(view, '이미 약속역 후보에 있어요'), '공유 뒤 7.15 로 다시 맞춘 목록 기준');
+    assert.ok(findText(view, '후보에 있어요'), '공유 뒤 7.15 로 다시 맞춘 목록 기준');
+    assert.ok(findElement(view, element => element.props?.accessibilityLabel === '이미 약속역 후보에 있어요'), '축약 전 문구를 접근성에 유지');
     reco.unmount();
 
     const room = roomQueryScreen('src/app/rooms/[roomId].tsx', { roomId: ROOM_QUERY_ID, tab: 'vote' });
@@ -6001,7 +6106,7 @@ test('114 화면 이중 제출·이탈 및 계정 전환 후 응답 폐기·임�
         if (stale === 'account') await r.load('src/services/auth.ts').clearLocalSession();
         finish(jsonResponse({ success: true, data: directionData114() }));
         for (let i = 0; i < 4; i++) await settle();
-        if (stale !== 'unmount') assert.equal(!!findElement(r.render(), e => e.props?.children === '올바른 방향이에요'), stale === 'none');
+        if (stale !== 'unmount') assert.equal(!!findElement(r.render(), e => e.props?.children === '맞는 방향이에요'), stale === 'none');
         assert.ok(r.deleted.includes('file:///cache/output.jpg')); r.unmount();
     }
 });
@@ -6155,14 +6260,15 @@ function findAll125(node, predicate, found = []) {
     return found;
 }
 const texts125 = view => findAll125(deep125(view), e => e.type === 'Text').map(textOf);
-const photoUri125 = view => findElement(view, e => e.type === 'Image')?.props.source.uri ?? null;
+// #198 승객 아이콘도 Image이므로 실제 선택 사진만 검사해요.
+const photoUri125 = view => findElement(view, e => e.type === 'Image' && e.props.accessibilityLabel === '선택한 표지판 사진')?.props.source.uri ?? null;
 const alertText125 = view => { const alert = findElement(deep125(view), e => e.props?.accessibilityRole === 'alert'); return alert ? textOf(alert) : null; };
 const SERVER_ERROR_TEXT125 = {
     AI_UNAVAILABLE: 'AI가 잠시 응답하지 않아요. 잠시 후 다시 시도해 주세요.',
     AI_QUOTA_EXCEEDED: '분석 요청이 많아요. 잠시 후 다시 시도해 주세요.',
     NETWORK_ERROR: '인터넷 연결을 확인한 뒤 다시 시도해 주세요.',
     UNKNOWN_ERROR: '분석 응답을 확인하지 못했어요. 다시 시도해 주세요.',
-    IMAGE_INVALID: '다른 사진을 선택해 주세요. JPG·PNG 5MB 이하 사진이 필요해요.',
+    IMAGE_INVALID: '다른 사진을 선택해 주세요. JPG / PNG 5MB 이하 사진이 필요해요.',
     STATION_NOT_FOUND: '경로를 다시 선택해 주세요.',
     VALIDATION_ERROR: '경로를 다시 선택해 주세요.',
 };
@@ -6201,9 +6307,9 @@ test('125 재시도 가능한 오류 4종은 사진을 유지하고 다시 시�
         assert.equal(r.sent[1].photo, r.sent[0].photo, `${code}: 같은 사진`); assert.equal(r.sent[1].photo.uri, OUTPUT125);
         assert.deepEqual(r.sent[1].route, r.sent[0].route); assert.deepEqual(r.sent[1].route, { stationId: 105, lineId: 2, headsign: '사당 방면' });
         view = r.render(); assert.equal(r.button('AI로 확인하기').props.disabled, true); assert.equal(r.button('다시 시도'), null);
-        assert.ok(texts125(view).includes('AI가 표지판을 읽고 있어요')); assert.ok(findElement(view, e => e.type?.name === 'ScanLine'));
+        assert.ok(texts125(view).includes('표지판을 읽는 중…')); assert.ok(findElement(view, e => e.type?.name === 'ScanLine'));
         finish(jsonResponse({ success: true, data: directionData114() })); view = await r.pump();
-        assert.ok(texts125(view).includes('올바른 방향이에요')); assert.equal(photoUri125(view), null); assert.equal(deletedCount125(r), 1);
+        assert.ok(texts125(view).includes('맞는 방향이에요')); assert.equal(photoUri125(view), null); assert.equal(deletedCount125(r), 1);
         r.unmount();
     }
 });
@@ -6236,7 +6342,7 @@ test('125 IMAGE_INVALID는 사진을 지우고 다른 사진을, 경로 오류�
     auth.load('src/services/api/client.ts').setAuthFailureHandler(() => { authFailures++; });
     await auth.press('표지판 촬영'); auth.respond(failure125('TOKEN_INVALID')); view = await auth.press('AI로 확인하기');
     assert.equal(authFailures, 1); assert.equal(alertText125(view), null); assert.equal(photoUri125(view), null); assert.equal(deletedCount125(auth), 1);
-    assert.equal(auth.alerts.length, 0); assert.ok(texts125(view).includes('표지판을 찍어 방향을 확인해요')); auth.unmount();
+    assert.equal(auth.alerts.length, 0); assert.ok(texts125(view).includes('표지판을 찍어 주세요')); auth.unmount();
 });
 
 test('125 결과 3종은 제목·색·아이콘이 다르고 읽은 값·내 경로 값을 나란히, null은 읽지 못했어요로 보여주며 사진을 정리해요', async () => {
@@ -6248,29 +6354,29 @@ test('125 결과 3종은 제목·색·아이콘이 다르고 읽은 값·내 경
         r.respond(async () => jsonResponse({ success: true, data: { ...directionData114(result), recognized, message: `서버 안내 ${result}` } }));
         const view = deep125(await r.press('AI로 확인하기'));
         assert.equal(photoUri125(view), null, `${result}: 사진 정리`); assert.equal(deletedCount125(r), 1);
-        const title = findAll125(view, e => e.type === 'Text' && e.props.style?.some?.(s => s?.fontSize === 19)).map(e => ({ text: textOf(e), color: e.props.style[1].color }))[0];
-        const icon = findAll125(view, e => e.type === 'Ionicons' && e.props.size === 22)[0].props.name;
+        const titleNode = findAll125(view, e => e.type === 'Text' && e.props.accessibilityRole === 'header')[0];
+        const title = { text: textOf(titleNode), color: flattenStyle125(titleNode.props.style).color };
+        const icon = findAll125(view, e => e.type === 'Ionicons' && e.props.size === 18)[0].props.name;
         looks[result] = { ...title, icon };
         assert.ok(texts125(view).includes(`서버 안내 ${result}`), `${result}: 서버 message`);
-        const cellViews = findAll125(view, e => e.type === 'View' && e.props.style?.width === '50%');
-        const cells = cellViews.map(cell => findAll125(cell, e => e.type === 'Text').map(textOf));
-        const read = value => value ?? '읽지 못했어요';
-        assert.deepEqual(cells, [
-            ['읽은 역 이름', recognized.stationName ? '강남역' : read(null)], ['내 경로 역 이름', '강남역'],
-            ['읽은 호선', read(recognized.lineName)], ['내 경로 호선', '2호선'],
-            ['읽은 방면', read(recognized.headsign)], ['내 경로 방면', '사당 방면'],
+        const rows = findAll125(view, e => e.type === 'View' && e.props.style?.[0]?.paddingVertical === 11);
+        assert.equal(rows.length, 2, '인식한 문구와 가야 할 방향 두 행으로 보여줘요');
+        const fields = findAll125(view, e => e.type === 'Text' && /^(읽은|내 경로) (역 이름|호선|방면)$/.test(e.props.accessibilityLabel ?? ''));
+        assert.deepEqual(fields.map(field => [field.props.accessibilityLabel, textOf(field)]), [
+            ['읽은 역 이름', recognized.stationName ? '강남역' : '읽지 못했어요'],
+            ['읽은 호선', recognized.lineName ?? '읽지 못했어요'], ['읽은 방면', recognized.headsign ?? '읽지 못했어요'],
+            ['내 경로 역 이름', '강남역'], ['내 경로 호선', '2호선'], ['내 경로 방면', '사당 방면'],
         ], result);
-        const headsignCell = findAll125(cellViews[4], e => e.type === 'Text')[1];
-        const color = Object.assign({}, ...headsignCell.props.style.filter(Boolean)).color;
-        assert.equal(color, { CORRECT: '#12a77a', WRONG: '#e5484d', RETAKE: '#6b7488' }[result], `${result}: 방면 비교 색`);
+        const headsignCell = fields.find(field => field.props.accessibilityLabel === '읽은 방면');
+        assert.equal(flattenStyle125(headsignCell.props.style).color, { CORRECT: '#5C3F78', WRONG: '#8C4166', RETAKE: '#83808B' }[result], `${result}: 방면 비교 색`);
         assert.equal(headsignCell.props.numberOfLines, undefined, '값은 자르지 않아요');
         assert.equal(r.button('표지판 촬영').props.disabled, false); assert.equal(!!r.button('경로 안내로 돌아가기'), true);
         r.unmount();
     }
     assert.deepEqual(looks, {
-        CORRECT: { text: '올바른 방향이에요', color: '#12a77a', icon: 'checkmark-circle' },
-        WRONG: { text: '경로와 다른 표지판이에요', color: '#e5484d', icon: 'close-circle' },
-        RETAKE: { text: '다시 촬영해 주세요', color: '#b7791f', icon: 'camera-reverse-outline' },
+        CORRECT: { text: '맞는 방향이에요', color: '#5C3F78', icon: 'checkmark-circle' },
+        WRONG: { text: '경로와 다른 표지판이에요', color: '#8C4166', icon: 'close-circle' },
+        RETAKE: { text: '다시 촬영해 주세요', color: '#725B86', icon: 'camera-reverse-outline' },
     });
 });
 
@@ -6287,7 +6393,7 @@ test('125 유지하던 사진은 화면을 떠나면 정리되고, 요청 중 �
         finish(late === 'success' ? jsonResponse({ success: true, data: directionData114() }) : await failure125(late)()); await r.pump();
         assert.equal(deletedCount125(r), 1, `${late}: 요청이 끝난 뒤 정리`);
         r.focus(); view = r.render();
-        assert.equal(texts125(view).includes('올바른 방향이에요'), false); assert.equal(alertText125(view), null); assert.equal(photoUri125(view), null);
+        assert.equal(texts125(view).includes('맞는 방향이에요'), false); assert.equal(alertText125(view), null); assert.equal(photoUri125(view), null);
         assert.equal(r.button('표지판 촬영').props.disabled, false); r.unmount();
     }
     const gone = await directionScreen125(); await gone.press('표지판 촬영');
@@ -6301,7 +6407,7 @@ test('125 계정이 바뀌면 재시도 응답을 버리고 유지하던 사진�
     const finish = r.hold(); r.button('다시 시도').props.onPress(); await settle();
     await r.load('src/services/auth.ts').clearLocalSession();
     finish(jsonResponse({ success: true, data: directionData114() })); let view = await r.pump();
-    assert.equal(texts125(view).includes('올바른 방향이에요'), false); assert.equal(alertText125(view), null); assert.equal(photoUri125(view), null);
+    assert.equal(texts125(view).includes('맞는 방향이에요'), false); assert.equal(alertText125(view), null); assert.equal(photoUri125(view), null);
     assert.equal(deletedCount125(r), 1); assert.equal(r.button('표지판 촬영').props.disabled, false, '처리 중 잠금 해제'); r.unmount();
     const kept = await directionScreen125(); await kept.press('표지판 촬영');
     kept.respond(failure125('NETWORK_ERROR')); await kept.press('AI로 확인하기'); const calls = kept.calls;
@@ -6313,14 +6419,14 @@ test('125 계정이 바뀌면 재시도 응답을 버리고 유지하던 사진�
 test('125 경로 정보가 없으면 안내와 경로 검색 버튼, 있으면 역·호선·방면 요약을 보여주고 보내는 route는 그대로예요', async () => {
     for (const params of [{}, { stationId: '105', lineId: '2' }, { stationId: '0', lineId: '2', headsign: '사당 방면' }, { stationId: '105', lineId: '2', headsign: '  ' }]) {
         const r = await directionScreen125(params); const view = r.render();
-        assert.ok(texts125(view).includes('확인할 경로가 없어요')); assert.ok(texts125(view).includes('방향을 확인할 경로를 먼저 선택해 주세요.'));
+        assert.ok(texts125(view).includes('확인할 경로가 없어요')); assert.ok(texts125(view).includes(r.load('src/utils/direction-route.ts').directionRouteIssue(params)));
         for (const label of ['표지판 촬영', '갤러리 선택', 'AI로 확인하기']) assert.equal(r.button(label), null);
         await r.press('경로 검색'); assert.deepEqual(r.routes, ['/route-search']); r.unmount();
     }
     const full = await directionScreen125({ stationId: '105', stationName: '강남', lineId: '2', lineName: '2호선', headsign: '사당 방면', direction: 'INNER' });
-    // 내 경로 칩: '내 경로' 글자, 노선 배지 숫자, 요약 순서예요.
-    const chipText = view => { const texts = texts125(view); assert.ok(texts.includes('내 경로')); assert.equal(texts[texts.indexOf('내 경로') + 1], '2'); return texts[texts.indexOf('내 경로') + 2]; };
-    assert.equal(chipText(full.render()), '강남역 · 2호선 사당 방면');
+    // #198 시안의 찾는 방향 안내로 바뀌어도 서버에 보내는 route는 같아요.
+    const chipText = view => { const texts = texts125(view); assert.ok(texts.includes('찾는 방향')); return texts[texts.indexOf('찾는 방향') + 1]; };
+    assert.equal(chipText(full.render()), '강남역 / 2호선 사당 방면');
     await full.press('표지판 촬영'); full.respond(async () => jsonResponse({ success: true, data: directionData114() })); await full.press('AI로 확인하기');
     assert.deepEqual(full.sent[0].route, { stationId: 105, lineId: 2, headsign: '사당 방면', direction: 'INNER' }); full.unmount();
     const partial = await directionScreen125({ stationId: '105', lineId: '2', headsign: '사당 방면' });
@@ -6336,13 +6442,13 @@ test('125 경로 정보가 없으면 안내와 경로 검색 버튼, 있으면 �
  */
 const MOCK_FIXTURE125 = path.join(root, 'scripts/fixtures/ai-direction-mock-125.json');
 const MOCK_FIXTURE_UPDATE125 = 'UPDATE_FIXTURES=1 node scripts/verify-api-client.cjs';
-test('125 mock 모드 화면은 #125 이전과 같은 트리·스타일·동작이에요', async () => {
+test('125 mock 모드 화면은 #198 디자인 기준의 단계별 트리·스타일·동작을 유지해요', async () => {
     const crypto = require('node:crypto');
     const actual = Object.fromEntries(Object.entries(await mockDirectionSnapshots125())
         .map(([key, value]) => [key, crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex')]));
     if (process.env.UPDATE_FIXTURES === '1') {
         fs.writeFileSync(MOCK_FIXTURE125, JSON.stringify({
-            note: 'mock 화면 단계별 트리의 sha256. scripts/verify-api-client.cjs 의 serialize125 로 만들고 UPDATE_FIXTURES=1 로 갱신해요.',
+            note: '#198 밝은 시안 디자인(블록 승객·두 행 비교표·촬영 프레임)을 반영해 mock 화면 기준을 갱신했어요. serialize125 로 만들고 UPDATE_FIXTURES=1 로 갱신해요.',
             snapshots: actual,
         }, null, 1) + '\n');
         return;
@@ -6520,7 +6626,7 @@ function permission130(env = serverEnv) {
     storage.calls.push = (...items) => { items.forEach(item => r.order.push(item)); return origin(...items); };
     r.external['expo-image-picker'].requestCameraPermissionsAsync = async () => { r.order.push(['camera']); return { granted: false }; };
     r.external['expo-location'].requestForegroundPermissionsAsync = async () => { r.order.push(['location']); throw Error(); };
-    r.button = text => findElement(r.render(), el => el.type === 'Pressable' && findText(el, text));
+    r.button = text => findElement(r.render(), el => el.type === 'Pressable' && (el.props.accessibilityLabel === text || findText(el, text)));
     return r;
 }
 
@@ -6613,8 +6719,8 @@ test('130 마이 권한: 조회 중에는 가짜 값 없이 확인 중, 4가지 
         assert.deepEqual(plain(r.shown(label)), { texts: [label], label: `${label} 권한 확인 중`, spinner: true, disabled: true });
     }
     finish(); await flush();
-    for (const [status, text, hint, color] of [['granted', '허용', null, '#12a77a'], ['denied', '허용 안 함', '설정에서 바꿀 수 있어요', '#e5484d'],
-        ['undetermined', '아직 묻지 않음', '눌러서 허용할 수 있어요', '#6b7488'], [Error('조회 실패'), '확인할 수 없음', '눌러서 다시 확인해요', '#6b7488']]) {
+    for (const [status, text, hint, color] of [['granted', '허용', null, '#5C3F78'], ['denied', '허용 안 함', '설정에서 바꿀 수 있어요', '#D4505A'],
+        ['undetermined', '아직 묻지 않음', '눌러서 허용할 수 있어요', '#83808B'], [Error('조회 실패'), '확인할 수 없음', '눌러서 다시 확인해요', '#83808B']]) {
         const v = myPermission130(); v.permissions.camera = typeof status === 'string' ? permission130State(status) : status;
         v.render(); await flush();
         const shown = v.shown('카메라');
@@ -7052,10 +7158,2786 @@ function shallow129(node) {
     }
     return { t: typeof node.type === 'function' ? node.type.name : String(node.type), k: node.key, p: props, c: shallow129(children) };
 }
-/** #129 이전(dev e970115) route-guide.tsx 의 mock 모드 트리 sha256 이에요. */
-const MOCK_GUIDE_SHA129 = 'b96b2ecb22153e475a783a02f6e1e08552c118446ec3e8764218114d4239d13e';
+/** #129 이전(dev e970115) route-guide.tsx 의 mock 모드 트리 sha256 이에요. #187 fontWeight 900→800 반영, #196 경로 안내 시안 반영 */
+// #213: 상대 시각·요약 3칸·혼잡도 행 재배치에 맞춰 화면 트리 해시 갱신.
+const MOCK_GUIDE_SHA129 = '9bd597db6a617859630319df55ad59c3ba1b0bf46d2fe960c053ab1e4349e2e8';
 test('129 mock 모드 경로 화면 트리는 #129 이전과 같아요', () => {
     const r = guide129({ mock: true });
     const sha = require('node:crypto').createHash('sha256').update(JSON.stringify(shallow129(r.render()))).digest('hex');
     assert.equal(sha, MOCK_GUIDE_SHA129);
+});
+
+
+test('145 receipt 없이 구독 전 변경을 동기화하고 준비된 방의 추가 등록은 재조회하지 않아요', async () => {
+    const r = await realtimeRuntime(); let server = '이전 이름'; let cached = server; let reads = 1;
+    const sync = () => { cached = server; reads++; };
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onSubscribed: sync, onReconnected: sync });
+    const socket = await r.connect(false);
+    server = '바뀐 이름';
+    assert.equal(cached, '이전 이름'); assert.equal(reads, 1);
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onSubscribed: sync, onReconnected: sync });
+    assert.equal(socket.commands('SUBSCRIBE').length, 1);
+    r.advance(r.rt.SUBSCRIBE_SETTLE_MS);
+    assert.equal(cached, server); assert.equal(reads, 3);
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onSubscribed: sync, onReconnected: sync });
+    socket.receive('RECEIPT', { 'receipt-id': r.receipt(socket, RT_ROOM) });
+    assert.equal(reads, 3); assert.equal(socket.commands('SUBSCRIBE').length, 1);
+    socket.close(); const next = await r.reconnect(); assert.equal(reads, 6);
+    next.close(); const stale = await r.reconnect(); r.service.dispose();
+    stale.receive('RECEIPT', { 'receipt-id': r.receipt(stale, RT_ROOM) });
+    assert.equal(reads, 9);
+});
+
+test('145 최초 구독 확인 후 방 상세·후보·추천 요청을 합쳐요', async () => {
+    const r = roomQueryScreen('src/hooks/use-room-events.ts'); let ready; const calls = [];
+    r.load('src/services/realtime.ts').subscribeRoomEvents = (_id, _listener, options) => {
+        ready = options.onSubscribed; return () => {};
+    };
+    const callbacks = { refresh: target => calls.push(target), rejected() {} };
+    r.renderComponent({ type: () => r.screen.useRoomEvents(ROOM_QUERY_ID, callbacks), props: {} });
+    r.advance(300); await settle(); assert.equal(calls.length, 0);
+    ready(); ready(); r.advance(300); await settle();
+    assert.deepEqual(calls, ['detail', 'proposals', 'recommendation']);
+    r.unmount(); ready(); r.advance(300); await settle(); assert.equal(calls.length, 3);
+});
+
+test('145 최초 REST 이후 구독 확인 전에 생긴 채팅을 최신 조회로 복구해요', async () => {
+    const r = chat118Hook('open'); let items = []; let reads = 0;
+    r.context.fetch = async () => { reads++; return ok({ items, hasMore: false, nextCursor: null }); };
+    r.render(); await settle(); assert.equal(reads, 1);
+    const message = chat118Message(); items = [message];
+    r.prepared(); await settle();
+    assert.equal(reads, 2); assert.equal(r.render().messages[0].id, message.id);
+    r.render(); await settle(); assert.equal(reads, 2);
+    r.unmount(); r.prepared(); await settle(); assert.equal(reads, 2);
+});
+
+test('145 최초 채팅 조회가 늦어도 구독 동기화와 조회 중 이벤트를 보존해요', async () => {
+    const r = chat118Hook('open'); const initial = deferred(); const sync = deferred(); let reads = 0;
+    r.context.fetch = () => ++reads === 1 ? initial.promise : sync.promise;
+    r.render(); await settle(); assert.equal(reads, 1);
+    r.prepared(); await settle(); assert.equal(reads, 2);
+    const missed = chat118Message();
+    const live = chat118Message({ id: '01900000-0000-7000-8000-000000000002', content: '구독 후 메시지' });
+    r.event(live);
+    sync.resolve(ok({ items: [missed], hasMore: false, nextCursor: null })); await settle();
+    initial.resolve(ok({ items: [], hasMore: false, nextCursor: null })); await settle();
+    assert.deepEqual(plain(r.render().messages.map(message => message.id)).sort(), [missed.id, live.id].sort());
+    r.unmount();
+});
+
+test('145 최초 조회 뒤 구독 확인 전 방 이름과 멤버 변경을 화면 캐시에 반영해요', async () => {
+    const r = roomQueryScreen('src/app/rooms/[roomId].tsx', { roomId: ROOM_QUERY_ID });
+    let ready; let detail = roomQueryDetail(); let detailReads = 0; let proposalReads = 0;
+    r.load('src/services/realtime.ts').subscribeRoomEvents = (_id, _receive, options) => {
+        ready ??= options.onSubscribed; return () => {};
+    };
+    r.context.fetch = async url => {
+        if (url.endsWith('/invite-code')) return ok({ roomCode: 'ABC123' });
+        if (url.includes('station-proposals')) {
+            proposalReads++; return ok({ items: [], maxProposals: 9, selectedStation: null });
+        }
+        detailReads++; return ok(detail);
+    };
+    r.render(); await settle(); await settle(); r.render();
+    const cache = r.load('src/services/room-cache.ts');
+    const initialDetailReads = detailReads; const initialProposalReads = proposalReads;
+    assert.ok(initialDetailReads > 0); assert.ok(initialProposalReads > 0);
+    detail = { ...detail, name: '구독 대기 중 바뀐 방', members: detail.members.slice(0, 1) };
+    assert.notEqual(cache.readCachedRoomDetail(ROOM_QUERY_ID).name, detail.name);
+    ready(); r.advance(300); await settle(); await settle(); r.render();
+    assert.equal(cache.readCachedRoomDetail(ROOM_QUERY_ID).name, detail.name);
+    assert.equal(cache.readCachedRoomDetail(ROOM_QUERY_ID).members.length, 1);
+    assert.equal(detailReads, initialDetailReads + 1); assert.equal(proposalReads, initialProposalReads + 1);
+    r.unmount();
+});
+
+test('145 receipt 없이 500ms 뒤 최초 동기화와 재연결 재조회를 한 번씩 실행해요', async () => {
+    const r = await realtimeRuntime({ settleSubscriptions: false }); let initial = 0; let recovered = 0;
+    const callbacks = { onSubscribed: () => initial++, onReconnected: () => recovered++ };
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, callbacks);
+    const socket = await r.connect();
+    assert.equal(r.rt.SUBSCRIBE_SETTLE_MS, 500);
+    r.advance(499); assert.equal(initial, 0);
+    r.advance(1); assert.equal(initial, 1); assert.equal(recovered, 0);
+    r.advance(500); assert.equal(initial, 1);
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, callbacks);
+    assert.equal(socket.commands('SUBSCRIBE').length, 1);
+    r.advance(500); assert.equal(initial, 1); assert.equal(recovered, 0);
+    socket.close(); await r.reconnect();
+    r.advance(499); assert.equal(recovered, 0);
+    r.advance(1); assert.equal(initial, 1); assert.equal(recovered, 2);
+    r.advance(500); assert.equal(recovered, 2);
+    r.service.dispose(); assert.equal(r.timers.size, 0);
+});
+
+test('145 receipt가 먼저 오면 즉시 준비되고 타이머나 늦은 receipt는 중복 호출하지 않아요', async () => {
+    for (const receiptFirst of [true, false]) {
+        const r = await realtimeRuntime({ settleSubscriptions: false }); let calls = 0;
+        r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onSubscribed: () => calls++ });
+        const socket = await r.connect();
+        r.advance(receiptFirst ? 100 : 500);
+        assert.equal(calls, receiptFirst ? 0 : 1);
+        socket.receive('RECEIPT', { 'receipt-id': r.receipt(socket, RT_ROOM) });
+        assert.equal(calls, 1);
+        assert.equal([...r.timers.values()].filter(timer => timer.ms === 500).length, 0);
+        r.advance(1000); assert.equal(calls, 1);
+        r.service.dispose();
+    }
+});
+
+test('145 화면 이탈·방 제거·로그아웃·연결 종료·dispose 뒤 준비 콜백과 타이머를 정리해요', async () => {
+    for (const action of ['unmount', 'forget', 'logout', 'stop', 'dispose']) {
+        const r = await realtimeRuntime({ settleSubscriptions: false }); let calls = 0;
+        const off = r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onSubscribed: () => calls++, onReconnected: () => calls++ });
+        const socket = await r.connect();
+        r.advance(100);
+        if (action === 'unmount') off();
+        if (action === 'forget') r.service.forgetRoom(RT_ROOM);
+        if (action === 'logout') await r.auth.clearLocalSession();
+        if (action === 'stop') socket.close();
+        if (action === 'dispose') r.service.dispose();
+        assert.equal([...r.timers.values()].filter(timer => timer.ms === 500).length, 0, action);
+        socket.receive('RECEIPT', { 'receipt-id': r.receipt(socket, RT_ROOM) });
+        r.advance(500); assert.equal(calls, 0, action);
+        r.service.dispose(); assert.equal(r.timers.size, 0);
+    }
+});
+
+test('145 대기 중 제거된 리스너는 무시하고 남은 화면만 동기화해요', async () => {
+    const r = await realtimeRuntime({ settleSubscriptions: false }); let removed = 0; let active = 0;
+    const off = r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onSubscribed: () => removed++ });
+    const socket = await r.connect();
+    r.service.subscribeRoomEvents(RT_ROOM, () => {}, { onSubscribed: () => active++ });
+    off(); r.advance(500);
+    assert.equal(removed, 0); assert.equal(active, 1); assert.equal(socket.commands('SUBSCRIBE').length, 1);
+    r.service.dispose();
+});
+
+/* ---------- INTERNAL 경로 안내 문구 (#147) ---------- */
+async function route147Search(data, roomId) {
+    const r = routeScreenRuntime({ departure: '강남', destination: '사당', ...(roomId ? { roomId } : {}) });
+    r.route147Data = data;
+    r.context.fetch = async url => jsonResponse({ success: true, data: url.endsWith('/routes/search') ? r.route147Data
+            : stationSearchData([url.includes(encodeURIComponent('강남')) ? serverRouteStation(88001, '강남') : serverRouteStation(99002, '사당')]) });
+    for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+    r.view147 = () => r.render();
+    r.card147 = () => findElement(r.view147(), element => element.type === r.load('src/components/route/RouteCard.tsx').default);
+    return r;
+}
+
+function route147Guide(selected) {
+    const r = guide129({ route: selected.route });
+    r.load('src/stores/route-store.ts').setSelectedRoute(selected);
+    return r;
+}
+
+test('147 KAKAO·정상 약속방 INTERNAL·대체 INTERNAL은 계산 원인을 단정하지 않고 검색·안내 문구가 같아요', async () => {
+    // 정상 시각표/장애 대체를 나타내는 서버 필드는 없어요. 같은 INTERNAL 계약을 각각의 사용 맥락에서 확인해요.
+    const cases = [
+        { label: '개인 KAKAO', source: 'KAKAO' },
+        { label: '약속방 KAKAO', source: 'KAKAO', roomId: 'room-147' },
+        { label: '정상 약속방 INTERNAL', source: 'INTERNAL', roomId: 'room-147' },
+        { label: '개인 대체 INTERNAL', source: 'INTERNAL' },
+        { label: '약속방 대체 INTERNAL', source: 'INTERNAL', roomId: 'room-147' },
+    ];
+    for (const scenario of cases) for (const fareSource of ['KAKAO', 'ESTIMATED']) {
+        const data = routeData(); data.routeSource = scenario.source; data.routes[0].summary.fareSource = fareSource;
+        const search = await route147Search(data, scenario.roomId); const view = search.view147(); const card = search.card147();
+        assert.ok(card, scenario.label); card.props.onStart();
+        const selected = search.load('src/stores/route-store.ts').getSelectedRoute();
+        const guide = route147Guide(selected); const guided = guide.render();
+        for (const screen of [view, guided]) {
+            assert.equal(!!findText(screen, '자체 계산한 경로예요.'), scenario.source === 'INTERNAL', scenario.label);
+            assert.doesNotMatch(textOf(screen), /실시간 경로를 불러오지 못해|예상 경로를 보여|요금은 예상 금액이에요|시각표로 계산|카카오.*실패/, scenario.label);
+        }
+        const Card = search.load('src/components/route/RouteCard.tsx').default;
+        assert.equal(!!findText(Card({ ...card.props, expanded: true }), '예상'), fareSource === 'ESTIMATED');
+        assert.equal(!!findTextIncluding(Card({ ...card.props, expanded: false }), '예상 '), fareSource === 'ESTIMATED');
+        assert.equal(!!findTextIncluding(guided, '예상 '), fareSource === 'ESTIMATED');
+        assert.equal(selected.routeSource, scenario.source);
+        search.unmount(); guide.unmount();
+    }
+});
+
+test('147 INTERNAL의 중립 문구를 표시해도 기존 지난 약속·첫차·지각 안내는 유지돼요', async () => {
+    const data = routeData(); data.routeSource = 'INTERNAL';
+    Object.assign(data, { appointmentPassed: true, notice: '약속 시각이 지나 지금 출발 기준으로 안내해요.' });
+    Object.assign(data.routes[0].summary, { noService: true, serviceNotice: '첫차 운행 시각부터 안내해요.', arrivesAfterAppointment: true });
+    const search = await route147Search(data, 'room-147'); const view = search.view147(); const card = search.card147();
+    assert.ok(findText(view, data.notice)); assert.ok(findText(view, '자체 계산한 경로예요.'));
+    const Notices = search.load('src/components/route/RouteNotices.tsx').default;
+    const Card = search.load('src/components/route/RouteCard.tsx').default;
+    for (const expanded of [false, true]) {
+        const notices = findElement(Card({ ...card.props, expanded }), element => element.type === Notices);
+        assert.ok(notices); const rendered = Notices(notices.props);
+        assert.ok(findText(rendered, data.routes[0].summary.serviceNotice)); assert.ok(findText(rendered, '약속 시각보다 늦게 도착해요'));
+    }
+    card.props.onStart(); const guide = route147Guide(search.load('src/stores/route-store.ts').getSelectedRoute()); const guided = guide.render();
+    assert.ok(findText(guided, '자체 계산한 경로예요.'));
+    const guideNotices = findElement(guided, element => element.type === guide.load('src/components/route/RouteNotices.tsx').default);
+    const rendered = guideNotices.type(guideNotices.props);
+    assert.ok(findText(rendered, data.routes[0].summary.serviceNotice)); assert.ok(findText(rendered, '약속 시각보다 늦게 도착해요'));
+    // 응답 최상위 appointmentPassed·notice를 안내 화면으로 전달하는 변경은 #148에서 별도로 진행해요.
+    search.unmount(); guide.unmount();
+});
+
+test('147 INTERNAL 다음 KAKAO를 검색·선택하면 이전 자체 계산 안내가 남지 않아요', async () => {
+    const data = routeData(); data.routeSource = 'INTERNAL';
+    const search = await route147Search(data, 'room-147'); assert.ok(findText(search.view147(), '자체 계산한 경로예요.'));
+    search.card147().props.onStart(); const guide = route147Guide(search.load('src/stores/route-store.ts').getSelectedRoute());
+    assert.ok(findText(guide.render(), '자체 계산한 경로예요.'));
+    search.route147Data = routeData(); search.route147Data.routes[0].routeId = 'server-route-147-next';
+    findElement(search.view147(), element => element.props?.accessibilityLabel === '출발역과 도착역 바꾸기').props.onPress();
+    for (let i = 0; i < 5; i++) { search.render(); await settle(); }
+    assert.equal(findText(search.view147(), '자체 계산한 경로예요.'), null);
+    search.card147().props.onStart(); const selected = search.load('src/stores/route-store.ts').getSelectedRoute();
+    guide.load('src/stores/route-store.ts').setSelectedRoute(selected);
+    guide.external['expo-router'].useLocalSearchParams = () => ({ routeId: selected.route.routeId });
+    assert.equal(findText(guide.render(), '자체 계산한 경로예요.'), null);
+    search.unmount(); guide.unmount();
+});
+
+/* ---------- #146 환승 단계를 도보가 아니라 환승 소요로 표시 ---------- */
+
+/** 도보(90초) → 2호선 → 환승(660초: 도보 1분 + 대기 10분) → 3호선 → 환승(20초) → 7호선 → 도보(200초) */
+function route146({ walkingMinutes = 1, transferCount = 2 } = {}) {
+    const subway = (id, name, stops) => ({ type: 'SUBWAY', guidance: `${name} 탑승`, durationSec: 600, distanceM: 5000,
+        line: { id, name, color: '#00a84d' }, direction: null, directionCode: 'UP',
+        stops: stops.map((stopName, order) => ({ id: id * 100 + order, name: stopName, order })), path: null, stations: [] });
+    const walk = (guidance, durationSec) => ({ type: 'WALKING', guidance, durationSec, distanceM: 80, line: null, direction: null, directionCode: null, stops: [], path: null, stations: [] });
+    return {
+        routeId: 'route-146', routeType: null,
+        summary: { noService: false, serviceNotice: null, arrivesAfterAppointment: false, totalTimeSec: 2770, arrivalAt: '2026-11-14T09:00:00+09:00',
+            fare: 1500, fareSource: 'KAKAO', transferCount, walkingMinutes, congestion: { supported: false, kind: null, pct: null, level: null, levelLabel: null } },
+        steps: [
+            walk('출발역까지 걷기', 90),
+            subway(2, '2호선', ['강남', '교대']),
+            walk('서버 환승 안내', 660),
+            subway(3, '3호선', ['교대', '고속터미널']),
+            walk('고속터미널역 7호선 승강장으로 환승', 20),
+            subway(7, '7호선', ['고속터미널', '이수']),
+            walk('도착지까지 걷기', 200),
+        ],
+    };
+}
+/** 도보 줄은 끝에 ", 80m"(거리)가 붙어서 앞부분으로 비교해요. */
+function texts146(node) {
+    return findAll125(node, element => element.type === 'Text').map(textOf);
+}
+function timeline146(route) {
+    const r = createRuntime(serverEnv, { ...require('react'), useState: initial => [initial, () => {}] });
+    const Timeline = r.load('src/components/route/RouteTimeline.tsx').default;
+    return texts146(Timeline({ route, onSignCheck() {} }));
+}
+function card146(route, expanded) {
+    const r = createRuntime(serverEnv);
+    return texts146(r.load('src/components/route/RouteCard.tsx').default({ route, expanded, onPress() {}, onStart() {} }));
+}
+
+test('146 환승 판별과 분 계산: 두 SUBWAY 사이 WALKING 만 환승, 최소 1분, 안내 끝 "환승"은 "이동"으로', () => {
+    const format = createRuntime().load('src/components/route/format.ts');
+    const steps = route146().steps;
+    assert.deepEqual(steps.map((_, index) => format.isTransferStep(steps, index)), [false, false, true, false, true, false, false]);
+    assert.equal(format.isTransferStep(steps, 99), false);
+    for (const [sec, minutes] of [[660, 11], [20, 1], [29, 1], [0, 1], [89, 1], [90, 2], [NaN, 1]]) assert.equal(format.stepMinutes(sec), minutes, String(sec));
+    assert.equal(format.formatTransferDuration(steps[2]), '환승 소요 11분');
+    assert.deepEqual(steps.map((step, index) => step.type === 'WALKING' ? format.formatWalkingStep(steps, index) : null).filter(Boolean), [
+        '출발역까지 걷기 · 도보 2분', '서버 환승 안내 · 환승 소요 11분', '고속터미널역 7호선 승강장으로 이동 · 환승 소요 1분', '도착지까지 걷기 · 도보 3분']);
+    // 안내 중간의 "환승"과 단독 "환승"
+    const only = [...steps]; only[2] = { ...steps[2], guidance: '환승' };
+    assert.equal(format.formatWalkingStep(only, 2), '이동 · 환승 소요 11분');
+    only[2] = { ...steps[2], guidance: '환승통로로 이동' };
+    assert.equal(format.formatWalkingStep(only, 2), '환승통로로 이동 · 환승 소요 11분');
+    // 지하철 하나 앞뒤의 도보는 환승이 아니에요.
+    const single = [steps[0], steps[1], steps[6]];
+    assert.deepEqual(single.map((_, index) => format.isTransferStep(single, index)), [false, false, false]);
+});
+
+test('146 도보 1분 + 대기 10분 환승: 어디에도 "도보 11분" 없이 "환승 소요 11분", 요약은 서버 값 "도보 1분"', async () => {
+    const route = route146();
+    const detail = timeline146(route); const expanded = card146(route, true); const collapsed = card146(route, false);
+    for (const texts of [detail, expanded, collapsed]) assert.ok(!texts.some(text => /도보 11분|환승 도보/.test(text)), texts.join(' / '));
+    assert.ok(detail.some((text, index) => text === '3호선으로 갈아타요' && detail[index + 1].startsWith('환승 소요 11분')));
+    assert.ok(expanded.some(text => text.trim() === '환승 소요 11분'));
+    assert.ok(expanded.some(text => text.includes('환승 2회, 도보 1분')));
+    // 경로 안내 화면 요약도 서버 값 그대로예요.
+    const r = guide129({ route }); const view = r.render();
+    assert.ok(findText(view, '환승')); assert.ok(findText(view, '2회'));
+    assert.ok(findText(view, '도보')); assert.ok(findText(view, '1분'));
+    assert.ok(!textOf(view).includes('도보 11분'));
+    assert.ok(findElement(view, element => element.type === r.Timeline && element.props.route === route));
+});
+
+test('146 환승 여러 번: 펼친 카드와 경로 상세가 환승마다 같은 숫자, 첫·마지막 도보는 "도보", 요약과 모순 없음', () => {
+    for (const walkingMinutes of [1, 5]) {
+        const route = route146({ walkingMinutes });
+        const format = createRuntime().load('src/components/route/format.ts');
+        const detail = timeline146(route); const expanded = card146(route, true);
+        // #213: 환승 시간은 두 줄 안내 상자의 아랫줄에 한 번 표시해요.
+        const detailMinutes = detail.map(text => /(?:환승 (?:소요|도보)|걸어서) (\d+)분/.exec(text)).filter(Boolean).map(match => match[1]);
+        const detailTransfers = detailMinutes.filter((minutes, index) => index === 0 || minutes !== detailMinutes[index - 1]);
+        assert.equal(detailMinutes.length, detailTransfers.length, detailMinutes.join(' / '));
+        const cardTransfers = expanded.filter(text => text.includes('환승 소요')).map(text => /환승 소요 (\d+)분/.exec(text)[1]);
+        assert.deepEqual(detailTransfers, ['11', '1']); assert.deepEqual(cardTransfers, detailTransfers);
+        assert.deepEqual(cardTransfers, route.steps.filter((_, index) => format.isTransferStep(route.steps, index)).map(step => String(format.stepMinutes(step.durationSec))));
+        // 첫 지하철 전 도보는 "도보"(이전에는 펼친 카드가 "환승 도보"로 잘못 표시했어요), 마지막 도보도 "도보"
+        assert.ok(expanded.some(text => text.trim() === '도보 2분'));
+        assert.ok(detail.some(text => text.startsWith('출발역까지 걷기, 도보 2분'))); assert.ok(detail.some(text => text.startsWith('도착지까지 걷기, 도보 3분')));
+        // 요약 도보는 서버 값 그대로, 환승 횟수는 환승 단계 수와 같아요.
+        assert.ok(expanded.some(text => text.includes(`환승 2회, 도보 ${walkingMinutes}분`)));
+        assert.equal(cardTransfers.length, route.summary.transferCount);
+        assert.ok(!expanded.some(text => text.includes('환승 도보')) && !detail.some(text => text.includes('환승 도보')));
+        // 접힌 카드는 단계 시간을 보여주지 않고 환승 횟수만 보여줘요.
+        const collapsed = card146(route, false);
+        assert.ok(collapsed.some(text => text.includes('환승 2회'))); assert.ok(!collapsed.some(text => /환승 소요|도보 \d+분/.test(text)));
+    }
+});
+
+test('146 카카오(KAKAO)·시각표(INTERNAL) 경로는 같은 문구, 30초 미만 환승도 1분', () => {
+    const results = [];
+    for (const routeSource of ['KAKAO', 'INTERNAL']) {
+        const route = route146();
+        const r = guide129({ route });
+        r.load('src/stores/route-store.ts').setSelectedRoute({ ...r.load('src/stores/route-store.ts').getSelectedRoute(), routeSource });
+        const view = r.render();
+        assert.equal(r.load('src/stores/route-store.ts').getSelectedRoute().routeSource, routeSource);
+        const timeline = findElement(view, element => element.type === r.Timeline);
+        results.push(JSON.stringify([timeline146(timeline.props.route), card146(route, true)]));
+        assert.ok(timeline146(route).some((text, index, texts) => text === '7호선으로 갈아타요' && texts[index + 1].startsWith('환승 소요 1분')));
+        assert.ok(!timeline146(route).some(text => /환승 소요 0분|도보 0분/.test(text)));
+    }
+    assert.equal(results[0], results[1]);
+});
+
+/* #146 보완: 다음 열차 대기가 따로 표시되면 환승 단계는 걷는 시간만이라 "환승 도보", 아니면 "환승 소요" */
+
+/** route146 의 지하철 단계에 대기를 넣어요. waits[i] 는 i번째 지하철 단계의 waitSec(undefined 면 넣지 않음). */
+function route146Waits(waits, ...kind) {
+    const waitKind = kind.length ? kind[0] : 'ESTIMATED'; // undefined 를 넘기면 waitKind 없음
+    const route = route146(); let subway = 0;
+    route.steps = route.steps.map(step => {
+        if (step.type !== 'SUBWAY') return step;
+        const waitSec = waits[subway++];
+        return waitSec === undefined ? step : { ...step, waitSec, waitKind };
+    });
+    return route;
+}
+
+test('146 보완: mock 건대입구 → 사당은 "환승 도보 3분"과 "환승 대기 약 2분", "환승 소요" 없음', async () => {
+    const r = createRuntime();
+    const { MOCK_STATIONS } = r.load('src/mocks/routes.ts');
+    const station = name => MOCK_STATIONS.find(item => item.name === name);
+    const pending = r.load('src/services/route.ts').searchRoute(station('건대입구'), station('사당'));
+    r.advance(5000); const result = await pending;
+    const route = result.routes.find(item => item.routeId === 'r1');
+    const format = r.load('src/components/route/format.ts');
+    const transfers = route.steps.map((_, index) => index).filter(index => format.isTransferStep(route.steps, index));
+    assert.ok(transfers.length >= 1);
+    for (const index of transfers) assert.equal(format.hasSeparateTransferWait(route.steps, index), true);
+    const expanded = card146(route, true); const detail = timeline146(route);
+    assert.ok(expanded.some(text => text.trim() === '환승 도보 3분'), expanded.join(' / '));
+    assert.ok(expanded.some(text => text === '환승 대기 약 2분'));
+    assert.ok(detail.some((text, index) => text === '4호선으로 갈아타요' && detail[index + 1].startsWith('환승 도보 3분')), detail.join(' / '));
+    assert.ok(detail.some(text => text === '환승 대기 약 2분'));
+    for (const texts of [expanded, detail]) assert.ok(!texts.some(text => text.includes('환승 소요')));
+});
+
+test('146 보완: 대기가 따로 오지 않는 660초 환승은 "환승 소요 11분", 섞인 경로는 환승마다 맞게', () => {
+    // 첫 환승(660초) 뒤 열차는 대기 없음, 둘째 환승(20초) 뒤 열차는 대기 120초
+    const mixed = route146Waits([180, undefined, 120]);
+    const format = createRuntime().load('src/components/route/format.ts');
+    assert.deepEqual([2, 4].map(index => format.hasSeparateTransferWait(mixed.steps, index)), [false, true]);
+    const expanded = card146(mixed, true); const detail = timeline146(mixed);
+    assert.ok(expanded.some(text => text.trim() === '환승 소요 11분')); assert.ok(expanded.some(text => text.trim() === '환승 도보 1분'));
+    assert.ok(expanded.some(text => text === '환승 대기 약 2분')); assert.ok(expanded.some(text => text === '승차 대기 약 3분'));
+    assert.ok(detail.some((text, index) => text === '3호선으로 갈아타요' && detail[index + 1].startsWith('환승 소요 11분')));
+    assert.ok(detail.some((text, index) => text === '7호선으로 갈아타요' && detail[index + 1].startsWith('환승 도보 1분')));
+    assert.ok(expanded.some(text => text.trim() === '도보 2분')); // 첫 열차 전 걷기는 그대로 "도보"
+    for (const texts of [expanded, detail, card146(mixed, false)]) assert.ok(!texts.some(text => text.includes('도보 11분')), texts.join(' / '));
+    assert.ok(expanded.some(text => text.includes('환승 2회, 도보 1분')));
+    // 펼친 카드와 경로 상세의 숫자가 환승마다 같아요.
+    const numbers = texts => texts.map(text => /환승 (?:소요|도보) (\d+)분|걸어서 (\d+)분/.exec(text)).filter(Boolean).map(match => match[1] ?? match[2]);
+    assert.deepEqual(numbers(expanded.filter(text => /^\s*환승 (소요|도보)/.test(text))), ['11', '1']);
+    assert.deepEqual(numbers(detail.filter(text => /^환승 (소요|도보)/.test(text))), ['11', '1']);
+});
+
+test('146 보완: waitSec 이 0·null 이거나 waitKind 가 없거나 NONE 이면 따로 표시되지 않는 경우(환승 소요)', () => {
+    const format = createRuntime().load('src/components/route/format.ts');
+    for (const [wait, kind] of [[0, 'ESTIMATED'], [null, 'ESTIMATED'], [-5, 'REALTIME'], [120, 'NONE'], [120, undefined]]) {
+        const route = route146Waits([undefined, wait, wait], kind);
+        assert.equal(format.formatWait(route.steps[3], true), '', `${wait} ${kind}`);
+        assert.deepEqual([2, 4].map(index => format.hasSeparateTransferWait(route.steps, index)), [false, false], `${wait} ${kind}`);
+        const expanded = card146(route, true); const detail = timeline146(route);
+        assert.ok(expanded.some(text => text.trim() === '환승 소요 11분')); assert.ok(!expanded.some(text => text.includes('환승 대기')));
+        assert.ok(detail.some((text, index) => text === '7호선으로 갈아타요' && detail[index + 1].startsWith('환승 소요 1분')));
+    }
+    // 대기 줄과 환승 문구 판단은 같은 함수를 써서 어긋나지 않아요.
+    const shown = route146Waits([undefined, 60, 60], 'REALTIME');
+    assert.equal(format.formatWait(shown.steps[3], true), '환승 대기 1분'); assert.equal(format.hasSeparateTransferWait(shown.steps, 2), true);
+    assert.ok(card146(shown, true).some(text => text.trim() === '환승 도보 11분'));
+});
+
+/* ---------- 지난 약속 안내의 경로 안내 전달 (#148) ---------- */
+test('148 검색 응답의 지난 약속 여부·안내를 선택 경로에 그대로 저장하고 안내에서도 같은 조건으로 표시해요', async () => {
+    const message = '약속 시각이 이미 지나 지금 출발 기준으로 안내해요.';
+    for (const routeSource of ['KAKAO', 'INTERNAL']) for (const [appointmentPassed, notice] of [
+        [true, message], [false, message], [true, null], [false, null], [true, ''],
+    ]) {
+        const data = { ...routeData(), routeSource, appointmentPassed, notice };
+        const search = await route147Search(data, 'room-148'); const card = search.card147(); assert.ok(card);
+        card.props.onStart(); const selected = search.load('src/stores/route-store.ts').getSelectedRoute();
+        assert.equal(selected.appointmentPassed, appointmentPassed);
+        assert.equal(selected.notice, notice, '서버 문구를 새로 만들거나 변경하지 않아요');
+        assert.equal(selected.route, card.props.route);
+        const guide = route147Guide(selected); const view = guide.render();
+        assert.equal(!!findText(view, message), appointmentPassed && notice === message);
+        assert.equal(!!findText(view, '자체 계산한 경로예요.'), routeSource === 'INTERNAL');
+        search.unmount(); guide.unmount();
+    }
+});
+
+test('148 다음 방·일반 경로의 새 응답을 선택하면 같은 routeId여도 이전 지난 약속 안내가 남지 않아요', async () => {
+    const message = '지난 방의 지금 출발 안내예요.';
+    for (const nextRoom of ['future-room-148', undefined]) for (const sameRouteId of [true, false]) {
+        const past = { ...routeData(), appointmentPassed: true, notice: message };
+        const search = await route147Search(past, 'past-room-148'); search.card147().props.onStart();
+        const guide = route147Guide(search.load('src/stores/route-store.ts').getSelectedRoute());
+        assert.ok(findText(guide.render(), message));
+        search.route147Data = { ...routeData(), appointmentPassed: false, notice: null };
+        if (!sameRouteId) search.route147Data.routes[0].routeId = 'route-148-next';
+        search.external['expo-router'].useLocalSearchParams = () => ({ departure: '강남', destination: '사당', ...(nextRoom ? { roomId: nextRoom } : {}) });
+        for (let i = 0; i < 5; i++) { search.render(); await settle(); }
+        search.card147().props.onStart(); const selected = search.load('src/stores/route-store.ts').getSelectedRoute();
+        assert.equal(selected.appointmentPassed, false); assert.equal(selected.notice, null);
+        guide.load('src/stores/route-store.ts').setSelectedRoute(selected);
+        guide.external['expo-router'].useLocalSearchParams = () => ({ routeId: selected.route.routeId });
+        assert.equal(findText(guide.render(), message), null);
+        search.unmount(); guide.unmount();
+    }
+});
+
+test('148 지난 약속·첫차·지각·자체 계산 안내가 함께 있어도 경로 안내에서 모두 유지돼요', async () => {
+    const data = { ...routeData(), routeSource: 'INTERNAL', appointmentPassed: true, notice: '약속 시각이 지나 지금 출발 기준으로 안내해요.' };
+    Object.assign(data.routes[0].summary, { noService: true, serviceNotice: '첫차부터 이용할 수 있는 경로예요.', arrivesAfterAppointment: true });
+    const search = await route147Search(data, 'room-148'); search.card147().props.onStart();
+    const selected = search.load('src/stores/route-store.ts').getSelectedRoute(); const guide = route147Guide(selected); const view = guide.render();
+    assert.ok(findText(view, data.notice)); assert.ok(findText(view, '자체 계산한 경로예요.'));
+    const notices = findElement(view, element => element.type === guide.load('src/components/route/RouteNotices.tsx').default);
+    assert.ok(notices); const rendered = notices.type(notices.props);
+    assert.ok(findText(rendered, data.routes[0].summary.serviceNotice)); assert.ok(findText(rendered, '약속 시각보다 늦게 도착해요'));
+    assert.equal(selected.route.summary.noService, true); assert.equal(selected.route.summary.arrivesAfterAppointment, true);
+    search.unmount(); guide.unmount();
+});
+
+test('148 같은 응답의 다른 경로를 고르면 새 경로와 응답 최상위 지난 약속 안내가 함께 전달돼요', async () => {
+    const data = { ...routeData(), appointmentPassed: true, notice: '이 검색은 지금 출발 기준이에요.' };
+    data.routes.push({ ...data.routes[0], routeId: 'route-148-alternative', summary: { ...data.routes[0].summary, totalTimeSec: 1200 } });
+    const search = await route147Search(data, 'room-148');
+    const Card = search.load('src/components/route/RouteCard.tsx').default;
+    const first = findElement(search.view147(), element => element.type === Card && element.props.route.routeId === 'server-route-1');
+    first.props.onStart();
+    const second = findElement(search.view147(), element => element.type === Card && element.props.route.routeId === 'route-148-alternative');
+    second.props.onStart(); const selected = search.load('src/stores/route-store.ts').getSelectedRoute();
+    assert.equal(selected.route.routeId, 'route-148-alternative'); assert.equal(selected.notice, data.notice); assert.equal(selected.appointmentPassed, true);
+    const guide = route147Guide(selected); assert.ok(findText(guide.render(), data.notice));
+    guide.external['expo-router'].useLocalSearchParams = () => ({ routeId: 'unrelated-route-148' });
+    const empty = guide.render(); assert.ok(findText(empty, '선택한 경로가 없어요')); assert.equal(findText(empty, data.notice), null);
+    search.unmount(); guide.unmount();
+});
+
+test('148 실제 사용자 서비스의 로그아웃은 지난 약속 안내가 포함된 선택 경로 전체를 지워요', async () => {
+    for (const mock of [false, true]) {
+        const r = guide129({ mock }); const store = r.load('src/stores/route-store.ts'); let calls = 0;
+        r.context.fetch = () => { calls++; throw Error('로그아웃 검사에서 서버를 호출하지 않아요'); };
+        const notice = '이전 사용자의 지난 약속 안내예요.';
+        store.setSelectedRoute({ ...store.getSelectedRoute(), appointmentPassed: true, notice });
+        assert.ok(findText(r.render(), notice));
+        const pending = r.load('src/services/user.ts').logout();
+        if (mock) await finishRoomMock(r, pending); else await pending;
+        assert.equal(store.getSelectedRoute(), null);
+        assert.ok(findText(r.render(), '선택한 경로가 없어요')); assert.equal(findText(r.render(), notice), null);
+        r.load('src/stores/auth-store.ts').signIn({ userId: 'next-user-148', nickname: '다음 사용자' });
+        assert.equal(store.getSelectedRoute(), null); assert.equal(calls, 0); r.unmount();
+    }
+});
+
+/* ---------- 약속 시각 변경 후 추천 최신 상태 갱신 (#136) ---------- */
+async function roomUpdated136(screen = 'src/app/rooms/[roomId]/recommendations.tsx', missing = false) {
+    const params = { roomId: ROOM_QUERY_ID };
+    const r = roomQueryScreen(screen, params); const calls = []; let listener;
+    const events = r.load('src/services/room-events.ts'); const mergeRoomUpdated = events.mergeRoomUpdated;
+    events.mergeRoomUpdated = (...args) => { const next = mergeRoomUpdated(...args); r.merged136 = next; return next; };
+    const hooks = r.load('src/hooks/use-room-events.ts'); const useRoomEvents = hooks.useRoomEvents;
+    hooks.useRoomEvents = (roomId, callbacks) => useRoomEvents(roomId, { ...callbacks, receive: event => {
+            const targets = callbacks.receive?.(event); r.targets136 = targets; return targets;
+        } });
+    r.load('src/services/realtime.ts').subscribeRoomEvents = (_id, receive) => { listener ??= receive; return () => {}; };
+    r.latest136 = recoRun({ results: [] });
+    r.context.fetch = async (url, options = {}) => {
+        calls.push({ url, method: options.method ?? 'GET' });
+        if (url.includes('/recommendations')) return r.pending136 ? r.pending136() : ok(r.latest136);
+        if (missing) return new Promise(() => {});
+        return ok(url.endsWith('/invite-code') ? { roomCode: 'ABC123' }
+            : url.includes('station-proposals') ? { items: [], maxProposals: 9, selectedStation: null }
+                : { ...roomQueryDetail(), id: params.roomId });
+    };
+    for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+    calls.length = 0;
+    return Object.assign(r, { calls136: calls, params136: params,
+        emit136: (payload = { ...roomQuerySummary(), appointmentAt: '2026-11-15T10:00:00Z' }, type = 'ROOM_UPDATED') =>
+            listener({ type, roomId: params.roomId, payload, at: '2026-11-13T10:00:00Z' }) });
+}
+
+test('#136 ROOM_UPDATED는 추천만 예약하고 SELECTED_STATION_CHANGED는 그대로예요', () => {
+    const { roomEventTargets } = createRuntime().load('src/services/room-events.ts');
+    assert.deepEqual(plain(roomEventTargets('ROOM_UPDATED')), ['recommendation']);
+    assert.deepEqual(plain(roomEventTargets('SELECTED_STATION_CHANGED')), []);
+});
+
+test('#136 연속 ROOM_UPDATED는 8.2 GET 한 번으로 합치고 서버 stale 사유를 표시해요', async () => {
+    const r = await roomUpdated136();
+    r.latest136 = recoRun({ results: [], isStale: true, staleReasons: ['APPOINTMENT_CHANGED'] });
+    r.emit136(); r.advance(100); r.emit136(); r.advance(100); r.emit136();
+    r.advance(99); await settle(); assert.equal(r.calls136.length, 0);
+    r.advance(1); await settle(); const view = r.render();
+    assert.deepEqual(r.calls136.map(call => [call.method, call.url.split('/api/v1')[1]]),
+        [['GET', `/rooms/${ROOM_QUERY_ID}/recommendations/latest`]]);
+    assert.ok(findText(view, '약속 시각이 바뀌었어요'));
+    assert.equal(findText(view, '참여자나 출발역이 바뀌었어요'), null);
+    assert.equal(r.merged136.appointmentAt, '2026-11-15T10:00:00Z');
+    await settle(); await settle();
+    // 약속이 바뀌어도 프론트에서 stale을 계산하지 않아요.
+    r.latest136 = recoRun({ results: [], isStale: false, staleReasons: [] });
+    r.emit136(); r.advance(300); await settle();
+    assert.equal(findText(r.render(), '약속 시각이 바뀌었어요'), null);
+    assert.equal(r.calls136.filter(call => call.method === 'POST').length, 0); r.unmount();
+});
+
+test('#136 ROOM_UPDATED 병합 실패·상세 미로딩 경로도 상세와 최신 추천을 조회해요', async () => {
+    for (const missing of [false, true]) {
+        const r = await roomUpdated136('src/app/rooms/[roomId]/recommendations.tsx', missing);
+        // receive 반환값과 실제 refresh 경로를 함께 검사해요.
+        const calls = [];
+        r.context.fetch = async (url, options = {}) => {
+            calls.push([url, options.method ?? 'GET']);
+            return ok(url.includes('/recommendations') ? recoRun({ results: [] }) : { ...roomQueryDetail(), id: r.params136.roomId });
+        };
+        r.emit136({}); r.advance(300); await settle();
+        assert.equal(calls.filter(([url]) => url.endsWith('/recommendations/latest')).length, 1);
+        assert.deepEqual(plain(r.targets136), ['detail', 'recommendation']);
+        // 상세 미로딩이면 기존 진행 중인 상세 조회를 공유해요.
+        assert.equal(calls.filter(([url]) => url.endsWith(`/rooms/${r.params136.roomId}`)).length, missing ? 0 : 1);
+        assert.ok(calls.every(([, method]) => method === 'GET')); r.unmount();
+    }
+});
+
+test('#136 로그아웃·계정 변경·방 이동 뒤 늦은 ROOM_UPDATED 추천 응답을 무시해요', async () => {
+    for (const change of ['logout', 'account', 'room']) {
+        const r = await roomUpdated136(); let finish;
+        r.pending136 = () => new Promise(resolve => { finish = resolve; });
+        r.emit136(); r.advance(300); await settle(); assert.ok(finish);
+        if (change === 'logout') r.load('src/stores/auth-store.ts').signOut();
+        else if (change === 'account') r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_OTHER, nickname: '다음 계정' });
+        else r.params136.roomId = ROOM_QUERY_ID2;
+        r.pending136 = null; r.render(); await settle(); await settle(); r.render();
+        finish(ok(recoRun({ results: [], isStale: true, staleReasons: ['APPOINTMENT_CHANGED'] })));
+        await settle(); assert.equal(findText(r.render(), '약속 시각이 바뀌었어요'), null);
+        assert.equal(r.calls136.filter(call => call.method === 'POST').length, 0); r.unmount();
+    }
+});
+
+test('#136 최신 요청 이후 도착한 이전 ROOM_UPDATED 추천 응답은 무시해요', async () => {
+    const r = await roomUpdated136(); let finish;
+    r.pending136 = () => new Promise(resolve => { finish = resolve; });
+    r.emit136(); r.advance(300); await settle();
+    r.pending136 = null;
+    r.emit136({ runId: 'new-run-136' }, 'RECOMMENDATION_CREATED');
+    const view = r.render();
+    const refresh = findElement(view, node => node.type === 'Pressable' && findText(node.props.children, '보기'));
+    assert.ok(refresh); refresh.props.onPress(); await settle();
+    finish(ok(recoRun({ results: [], isStale: true, staleReasons: ['APPOINTMENT_CHANGED'] })));
+    await settle(); assert.equal(findText(r.render(), '약속 시각이 바뀌었어요'), null); r.unmount();
+});
+
+test('#136 방 상세 ROOM_UPDATED는 방 정보만 반영하고 추천 API를 호출하지 않아요', async () => {
+    const r = await roomUpdated136('src/app/rooms/[roomId].tsx');
+    r.emit136(); r.emit136(); r.advance(300); await settle(); r.render();
+    assert.equal(r.load('src/services/room-cache.ts').readCachedRoomDetail(ROOM_QUERY_ID).appointmentAt, '2026-11-15T10:00:00Z');
+    assert.equal(r.calls136.length, 0);
+    r.emit136({}); r.advance(300); await settle();
+    assert.equal(r.calls136.filter(call => call.url.includes('/recommendations')).length, 0); r.unmount();
+});
+
+/* ---------- #143 방 이름 글자 수 기준 통일 ---------- */
+
+const ROOM_NAME_EMPTY143 = '약속방 이름을 입력해 주세요.';
+const ROOM_NAME_LONG143 = '약속방 이름은 30자까지 쓸 수 있어요.';
+/** [이름, 기대 문구(null 이면 통과)] */
+function roomNameCases143() {
+    const mixed30 = '가'.repeat(10) + 'a'.repeat(10) + '😀🚇'.repeat(5);
+    return [
+        ['가'.repeat(30), null], ['가'.repeat(31), ROOM_NAME_LONG143],
+        ['a'.repeat(30), null], ['a'.repeat(31), ROOM_NAME_LONG143],
+        ['😀'.repeat(15) + '🚇'.repeat(15), null], ['😀'.repeat(16) + '🚇'.repeat(15), ROOM_NAME_LONG143],
+        [mixed30, null], [mixed30 + '가', ROOM_NAME_LONG143],
+        [`  ${'가'.repeat(30)}  `, null], [`\t${'😀'.repeat(30)}\n`, null], [` ${'a'.repeat(31)} `, ROOM_NAME_LONG143],
+        ['', ROOM_NAME_EMPTY143], ['   ', ROOM_NAME_EMPTY143], ['\t\n　', ROOM_NAME_EMPTY143],
+    ];
+}
+
+test('143 validateRoomName: 한글·영문·이모지·혼합 30/31, 앞뒤 공백 제외, 공백만은 빈 이름', () => {
+    const room = createRuntime().load('src/services/room.ts');
+    assert.equal(room.ROOM_NAME_MAX, 30);
+    for (const [name, expected] of roomNameCases143()) {
+        assert.equal(room.validateRoomName(name), expected, JSON.stringify(name));
+        if (expected === null) assert.ok(room.roomNameLength(name) <= 30 && room.roomNameLength(name) >= 1);
+    }
+    // 이모지 30자는 UTF-16 으로 60이지만 30자로 세요.
+    assert.equal('😀'.repeat(30).length, 60); assert.equal(room.roomNameLength('😀'.repeat(30)), 30);
+});
+
+test('143 mock 서비스 생성·수정도 같은 판정·같은 문구, 저장되는 이름은 trim 된 값', async () => {
+    for (const [name, expected] of roomNameCases143()) {
+        const r = createRuntime(); const room = r.load('src/services/room.ts');
+        const created = room.createRoom({ name, appointmentAt: null }); r.advance(1000);
+        if (expected) await assert.rejects(created, { code: 'VALIDATION_ERROR', message: expected }, JSON.stringify(name));
+        else assert.equal((await created).name, name.trim());
+        const updated = room.updateRoom('room-4', { name }); r.advance(1000);
+        if (expected) await assert.rejects(updated, { code: 'VALIDATION_ERROR', message: expected }, JSON.stringify(name));
+        else assert.equal((await updated).name, name.trim());
+    }
+});
+
+test('143 서버 모드 생성·수정: 같은 판정·문구로 전송 전에 막고, 보내는 name 은 trim 된 값', async () => {
+    for (const [name, expected] of roomNameCases143()) {
+        const r = roomQueryRuntime(); const bodies = [];
+        r.respond(async (url, options) => {
+            if (options.method === 'POST') { bodies.push(['POST', JSON.parse(options.body)]); return jsonResponse({ success: true, data: { ...createdRoomData(), name: name.trim() || 'x' } }, 201); }
+            if (options.method === 'PATCH') { bodies.push(['PATCH', JSON.parse(options.body)]); return jsonResponse({ success: true, data: null }); }
+            return jsonResponse({ success: true, data: roomQueryDetail() });
+        });
+        const create = r.room.createRoom({ name, appointmentAt: null });
+        const update = r.room.updateRoom(ROOM_QUERY_ID, { name });
+        if (expected) {
+            await assert.rejects(create, { code: 'VALIDATION_ERROR', message: expected });
+            await assert.rejects(update, { code: 'VALIDATION_ERROR', message: expected });
+            assert.deepEqual(bodies, []);
+        } else {
+            await create; await update.catch(() => {});
+            assert.deepEqual(bodies.map(([method, body]) => [method, body.name]), [['POST', name.trim()], ['PATCH', name.trim()]], JSON.stringify(name));
+        }
+    }
+});
+
+/** 글자 수가 기본 색이 아닌 색(빨강)으로 바뀌었는지. 두 화면의 빨강 값은 원래 달라서 기본 색과 비교해요. */
+function overColor143(counter) {
+    const styles = [counter.props.style].flat().filter(Boolean);
+    return Object.assign({}, ...styles).color !== styles[0].color;
+}
+test('143 생성·수정 화면: 수정 화면 maxLength 없음, 이모지 30자 기존 이름 그대로·저장 가능, 두 화면 같은 판정·문구', async () => {
+    // 수정 화면: 이모지 30자 기존 이름
+    const emojiName = '😀'.repeat(15) + '🚇'.repeat(15);
+    const r = roomQueryScreen('src/app/rooms/[roomId]/edit.tsx', { roomId: ROOM_QUERY_ID }); const patches = [];
+    let detail = { ...roomQueryDetail(), name: emojiName };
+    r.context.fetch = async (_url, options) => {
+        if (options.method === 'PATCH') { patches.push(JSON.parse(options.body)); detail = { ...detail, ...JSON.parse(options.body) }; return jsonResponse({ success: true, data: null }); }
+        return jsonResponse({ success: true, data: detail });
+    };
+    r.render(); await settle(); let view = r.render();
+    const input = () => findElement(view, element => element.props?.accessibilityLabel === '약속 이름');
+    assert.equal(input().props.maxLength, undefined);
+    assert.equal(input().props.value, emojiName);
+    assert.ok(findElement(view, element => element.type === 'Text' && textOf(element) === '30/30'));
+    // 이름을 바꾸지 않으면 바뀐 것이 없어요(잘리지 않음). 한 글자 바꿔 저장하면 30자 이모지 이름이 그대로 가요.
+    assert.equal(roomWriteButton(view, '저장').props.disabled, true);
+    const changed = '🚇' + emojiName.slice(2);
+    input().props.onChangeText(` ${changed} `); view = r.render();
+    await roomWriteButton(view, '저장').props.onPress(); await settle();
+    assert.deepEqual(patches, [{ name: changed }]);
+    r.unmount();
+
+    // 같은 입력에 두 화면이 같은 판정·같은 문구
+    for (const [name, expected] of roomNameCases143()) {
+        const create = roomQueryScreen('src/app/rooms/new.tsx'); let createCalls = 0;
+        create.context.fetch = async () => { createCalls++; return jsonResponse({ success: true, data: { ...createdRoomData(), name: name.trim() } }, 201); };
+        let createView = create.render();
+        findElement(createView, element => element.type === 'TextInput').props.onChangeText(name); createView = create.render();
+        // 성공하면 결과 화면으로 바뀌므로 글자 수는 누르기 전에 읽어요.
+        const counter = findElement(createView, element => element.type === 'Text' && /^\d+\/30$/.test(textOf(element)));
+        const createRed = overColor143(counter);
+        await roomWriteButton(createView, '약속방 만들기').props.onPress(); createView = create.render();
+
+        const edit = roomQueryScreen('src/app/rooms/[roomId]/edit.tsx', { roomId: ROOM_QUERY_ID }); let editCalls = 0;
+        edit.context.fetch = async (_url, options) => {
+            if (options.method === 'PATCH') { editCalls++; return jsonResponse({ success: true, data: null }); }
+            return jsonResponse({ success: true, data: roomQueryDetail() });
+        };
+        edit.render(); await settle(); let editView = edit.render();
+        findElement(editView, element => element.props?.accessibilityLabel === '약속 이름').props.onChangeText(name); editView = edit.render();
+        const editCounter = findElement(editView, element => element.type === 'Text' && /^\d+\/30$/.test(textOf(element)));
+        const editRed = overColor143(editCounter);
+        await roomWriteButton(editView, '저장').props.onPress(); await settle(); editView = edit.render();
+
+        const label = JSON.stringify(name);
+        assert.equal(textOf(counter), textOf(editCounter), label);
+        assert.equal(createRed, editRed, label); assert.equal(createRed, Array.from(name.trim()).length > 30, label);
+        if (expected) {
+            assert.ok(findElement(createView, element => element.type === 'Text' && textOf(element) === expected), label);
+            assert.ok(findElement(editView, element => element.type === 'Text' && textOf(element) === expected), label);
+            assert.equal(createCalls, 0, label); assert.equal(editCalls, 0, label);
+        } else {
+            assert.equal(createCalls, 1, label); assert.equal(editCalls, name.trim() === roomQueryDetail().name ? 0 : 1, label);
+        }
+        create.unmount(); edit.unmount();
+    }
+});
+
+/* ---------- #144 방 생성 결과를 모를 때 중복 생성 방지 안내 ---------- */
+
+const ROOM_CREATE_UNKNOWN144 = '방이 만들어졌을 수 있어요. 다시 만들기 전에 방 목록을 먼저 확인해 주세요.';
+/** 생성 응답 시나리오. stored 면 서버는 방을 저장했어요. */
+const create144 = {
+    lost: { stored: true, respond: () => Promise.reject(new TypeError('Network request failed')) },
+    timeout: { stored: true, respond: options => new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(new Error('aborted')))) },
+    badBody: { stored: true, respond: () => Promise.resolve(jsonResponse({ success: true, data: { id: 'not-a-uuid' } }, 201)) },
+    notJson: { stored: true, respond: () => Promise.resolve({ ok: true, status: 201, text: async () => '<html>ok</html>' }) },
+    server500: { stored: false, respond: () => Promise.resolve(jsonResponse({ success: false, error: { code: 'INTERNAL_SERVER_ERROR' } }, 500)) },
+    gateway504: { stored: true, respond: () => Promise.resolve({ ok: false, status: 504, text: async () => '<html>Gateway Timeout</html>' }) },
+    validation: { stored: false, respond: () => Promise.resolve(jsonResponse({ success: false, error: { code: 'VALIDATION_ERROR' } }, 400)) },
+    busy: { stored: false, respond: () => Promise.resolve(jsonResponse({ success: false, error: { code: 'ROOM_BUSY' } }, 409)) },
+    proxy413: { stored: false, respond: () => Promise.resolve({ ok: false, status: 413, text: async () => 'too large' }) },
+};
+const UNKNOWN144 = ['lost', 'timeout', 'badBody', 'notJson', 'server500', 'gateway504'];
+
+test('144 결과 불명 분류: 응답 유실·시간 초과·2xx 파싱 실패·5xx 는 결과 불명, 4xx·보내기 전 검사·인증 오류는 아님', async () => {
+    for (const [kind, scenario] of Object.entries(create144)) {
+        const r = roomQueryRuntime(); let posts = 0;
+        r.respond((url, options) => { if (options.method === 'POST') { posts++; return scenario.respond(options); } return Promise.resolve(jsonResponse({ success: true, data: [] })); });
+        const pending = r.room.createRoom({ name: '모임', appointmentAt: null }).catch(error => error);
+        for (let i = 0; i < 5; i++) { await settle(); r.advance(5000); }
+        const error = await pending;
+        assert.equal(error instanceof r.load('src/types/room.ts').RoomError, true, kind);
+        assert.equal(r.room.isRoomCreateOutcomeUnknown(error), UNKNOWN144.includes(kind), kind);
+        assert.equal(posts, 1, kind); // 자동 재전송 없음
+    }
+    const r = roomQueryRuntime(); r.respond(() => { throw Error('보내면 안 돼요'); });
+    const local = await r.room.createRoom({ name: ' ', appointmentAt: null }).catch(error => error);
+    assert.equal(local.code, 'VALIDATION_ERROR'); assert.equal(r.room.isRoomCreateOutcomeUnknown(local), false);
+    const { ApiError } = r.load('src/services/api/errors.ts');
+    for (const [error, expected] of [[new ApiError('TOKEN_EXPIRED', null, null, 401), false], [new ApiError('AUTH_REQUIRED'), false], [new ApiError('NETWORK_ERROR'), true],
+        [new ApiError('UNKNOWN_ERROR', null, null, 201), true], [new ApiError('UNKNOWN_ERROR', null, null, 502), true], [new ApiError('ROOM_FULL', null, null, 409), false]]) {
+        assert.equal(r.room.isRoomCreateOutcomeUnknown(error), expected, `${error.code} ${error.status}`);
+    }
+    // 인증 오류는 RoomError 로 바꾸지 않고 그대로 던져요(기존 처리).
+    const auth = roomQueryRuntime(); auth.respond((_url, options) => Promise.resolve(options.method === 'POST' ? jsonResponse({ success: false, error: { code: 'TOKEN_INVALID' } }, 401) : jsonResponse({ success: true, data: [] })));
+    const authError = await auth.room.createRoom({ name: '모임', appointmentAt: null }).catch(error => error);
+    assert.equal(authError.code, 'TOKEN_INVALID'); assert.equal(auth.room.isRoomCreateOutcomeUnknown(authError), false);
+});
+
+test('144 결과 불명 뒤 목록은 생성 전에 시작한 조회를 함께 쓰지 않고 서버에서 새로 조회해요', async () => {
+    const r = roomQueryRuntime(); let gets = 0; let first; const created = roomQuerySummary({ id: ROOM_QUERY_ID, name: '모임' });
+    r.respond((url, options) => {
+        if (options.method === 'POST') return create144.lost.respond();
+        gets++;
+        if (gets === 1) return new Promise(resolve => { first = resolve; });
+        return Promise.resolve(jsonResponse({ success: true, data: [created] }));
+    });
+    const before = r.room.fetchMyRooms(); await settle();
+    const error = await r.room.createRoom({ name: '모임', appointmentAt: null }).catch(value => value);
+    assert.equal(r.room.isRoomCreateOutcomeUnknown(error), true);
+    const after = r.room.fetchMyRooms(); await settle();
+    assert.equal(gets, 2);
+    first(jsonResponse({ success: true, data: [] })); assert.deepEqual(plain(await before), []);
+    assert.deepEqual(plain(await after).map(room => room.id), [ROOM_QUERY_ID]);
+});
+
+function createScreen144() {
+    const r = roomQueryScreen('src/app/rooms/new.tsx'); r.posts = 0; r.moves = [];
+    r.external['expo-router'].router.dismissTo = href => r.moves.push(['dismissTo', href]);
+    r.external['expo-router'].router.replace = href => r.moves.push(['replace', href]);
+    r.scenario = create144.lost;
+    r.context.fetch = async (_url, options) => {
+        if (options.method === 'POST') { r.posts++; return r.scenario.respond(options); }
+        return jsonResponse({ success: true, data: [] });
+    };
+    r.type = name => { findElement(r.render(), element => element.type === 'TextInput').props.onChangeText(name); return r.render(); };
+    r.press = async label => {
+        const pending = roomWriteButton(r.render(), label).props.onPress();
+        for (let i = 0; i < 5; i++) { await settle(); r.advance(5000); }
+        await pending; return r.render();
+    };
+    return r;
+}
+
+test('144 생성 화면: 응답 유실·시간 초과·파싱 실패는 결과 불명 안내와 "방 목록 확인", 요청은 한 번만, 확인 누르면 목록으로', async () => {
+    for (const kind of UNKNOWN144) {
+        const r = createScreen144(); r.scenario = create144[kind];
+        r.type('금요 모임'); let view = await r.press('약속방 만들기');
+        assert.ok(findText(view, ROOM_CREATE_UNKNOWN144), kind);
+        assert.ok(findElement(view, element => element.props?.accessibilityRole === 'alert'), kind);
+        assert.equal(findTextIncluding(view, '서버에 연결하지 못했어요'), null, kind);
+        assert.equal(findTextIncluding(view, '서버의 방 정보를 확인하지 못했어요'), null, kind);
+        assert.equal(findElement(view, element => element.type === 'TextInput').props.value, '금요 모임', kind);
+        r.advance(60000); await settle(); assert.equal(r.posts, 1, kind); // 자동 재전송 없음
+        roomWriteButton(view, '방 목록 확인').props.onPress();
+        assert.deepEqual(r.moves, [['dismissTo', '/rooms']], kind);
+        // 다시 만들기는 막지 않지만 버튼 문구로 한 번 더 확인해요.
+        assert.equal(roomWriteButton(view, '약속방 만들기'), null); assert.ok(roomWriteButton(view, '그래도 새로 만들기'));
+        r.scenario = { respond: () => Promise.resolve(jsonResponse({ success: true, data: createdRoomData({ name: '금요 모임' }) }, 201)) };
+        view = await r.press('그래도 새로 만들기'); assert.equal(r.posts, 2, kind);
+        assert.equal(view.props.room.roomCode, 'A3K9PZ', kind);
+        r.unmount();
+    }
+});
+
+test('144 "방 목록 확인" 뒤 목록 화면은 서버 목록을 다시 조회해 새 방을 보여줘요', async () => {
+    const list = roomQueryScreen('src/app/rooms/index.tsx'); const gets = [];
+    list.context.fetch = async (url, options) => { gets.push([options.method ?? 'GET', url]); return jsonResponse({ success: true, data: [roomQuerySummary({ name: '금요 모임' })] }); };
+    list.render(); await settle(); const view = list.render();
+    assert.deepEqual(gets.filter(([, url]) => url.endsWith('/rooms')).length, 1);
+    assert.ok(findElement(view, element => element.props?.room?.id === ROOM_QUERY_ID && element.props.room.name === '금요 모임'));
+    list.unmount();
+});
+
+test('144 4xx(VALIDATION_ERROR·ROOM_BUSY·본문 없는 413)는 기존 실패 안내 그대로, 결과 불명 안내 없음', async () => {
+    for (const [kind, message] of [['validation', '요청한 방 정보를 확인해 주세요.'], ['busy', '다른 요청을 처리하고 있어요. 잠시 후 다시 시도해 주세요.'], ['proxy413', '서버의 방 정보를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.']]) {
+        const r = createScreen144(); r.scenario = create144[kind];
+        r.type('모임'); const view = await r.press('약속방 만들기');
+        assert.ok(findText(view, message), kind);
+        assert.equal(findText(view, ROOM_CREATE_UNKNOWN144), null, kind);
+        assert.equal(roomWriteButton(view, '방 목록 확인'), null, kind); assert.ok(roomWriteButton(view, '약속방 만들기'), kind);
+        assert.equal(r.posts, 1, kind); r.unmount();
+    }
+});
+
+test('144 같은 이름의 방을 연속으로 만들 수 있어요(이름으로 막거나 단정하지 않음)', async () => {
+    const r = roomQueryRuntime(); const bodies = []; let id = 0;
+    r.respond((_url, options) => {
+        if (options.method !== 'POST') return Promise.resolve(jsonResponse({ success: true, data: [] }));
+        bodies.push(JSON.parse(options.body)); id++;
+        return Promise.resolve(jsonResponse({ success: true, data: createdRoomData({ id: `${ROOM_QUERY_ID.slice(0, -1)}${id}`, name: '같은 이름', roomCode: `A3K9P${id}` }) }, 201));
+    });
+    const first = await r.room.createRoom({ name: '같은 이름', appointmentAt: null });
+    const second = await r.room.createRoom({ name: '같은 이름', appointmentAt: null });
+    assert.equal(bodies.length, 2); assert.notEqual(first.id, second.id); assert.equal(first.name, second.name);
+    // 화면에서도: 결과 불명 뒤 같은 이름으로 다시 만들면 그대로 보내요.
+    const s = createScreen144(); s.type('같은 이름'); await s.press('약속방 만들기');
+    s.scenario = { respond: options => { bodies.push(JSON.parse(options.body)); return Promise.resolve(jsonResponse({ success: true, data: createdRoomData({ name: '같은 이름' }) }, 201)); } };
+    await s.press('그래도 새로 만들기');
+    assert.deepEqual(bodies.slice(2).map(body => body.name), ['같은 이름']); s.unmount();
+});
+
+test('144 mock 모드 생성 실패는 이전과 같은 안내이고 결과 불명 안내가 없어요', async () => {
+    let calls = 0;
+    const m = createScreenRuntime({}, 'src/app/rooms/new.tsx', runtime => {
+        runtime.external['expo-clipboard'] = { setStringAsync: async () => {} }; runtime.native.ScrollView = 'ScrollView';
+        runtime.external['expo-router'].useLocalSearchParams = () => ({ mock: 'error' });
+    });
+    m.context.fetch = async () => { calls++; throw Error(); };
+    findElement(m.render(), element => element.type === 'TextInput').props.onChangeText('모임');
+    const pending = roomWriteButton(m.render(), '약속방 만들기').props.onPress(); m.advance(1000); await pending; await settle();
+    let view = m.render();
+    assert.ok(findText(view, '약속방을 만들지 못했어요. 잠시 후 다시 시도해 주세요.'));
+    assert.equal(findText(view, ROOM_CREATE_UNKNOWN144), null); assert.equal(roomWriteButton(view, '방 목록 확인'), null);
+    assert.ok(roomWriteButton(view, '약속방 만들기'));
+    const retry = roomWriteButton(view, '약속방 만들기').props.onPress(); m.advance(1000); await retry; await settle(); view = m.render();
+    assert.ok(view.props.room); assert.equal(calls, 0); m.unmount();
+});
+
+/* ---------- 동일 역의 정상 경로 안내 (#141) ---------- */
+function route141Data(empty = false) {
+    const data = { ...routeData(), routeSource: 'INTERNAL' };
+    data.routes = empty ? [] : [{ ...data.routes[0], steps: [], summary: { ...data.routes[0].summary,
+            totalTimeSec: 0, transferCount: 0, walkingMinutes: 0, fare: 1550, congestion: null,
+            departureAt: '2026-11-11T23:41:17+09:00', noService: false, serviceNotice: null, arrivesAfterAppointment: false,
+            waitSec: null, waitKind: null, totalWithWaitSec: null, slackSeconds: null } }];
+    return data;
+}
+const sameMessage141 = view => findElement(view, element => element.props?.title === '지하철 이동이 필요 없어요');
+async function screen141(params = { departure: '강남', destination: '강남역' }, response = () => jsonResponse({ success: true, data: route141Data() })) {
+    const r = routeScreenRuntime(params); r.calls141 = [];
+    r.context.fetch = async (url, options) => {
+        r.calls141.push({ url, options });
+        if (url.endsWith('/routes/search')) return response(JSON.parse(options.body));
+        return jsonResponse({ success: true, data: stationSearchData([url.includes(encodeURIComponent('사당')) ? serverRouteStation(99002, '사당') : serverRouteStation(88001, '강남')]) });
+    };
+    for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+    return r;
+}
+
+test('141 동일 역의 서버 요청은 방·서버 역 ID를 그대로 보내고 0초·빈 단계·서버 요금을 보존해요', async () => {
+    for (const roomId of [undefined, 'room-141']) {
+        const r = createRuntime(serverEnv); const calls = [];
+        r.context.fetch = async (url, options) => { calls.push({ url, options }); return jsonResponse({ success: true, data: route141Data() }); };
+        const station = { id: 88001, name: '강남', lines: [2], isSupported: true };
+        const data = await r.load('src/services/route.ts').searchRoute(station, station, roomId ? { roomId } : {});
+        assert.deepEqual(JSON.parse(calls[0].options.body), { originStationId: 88001, destinationStationId: 88001, ...(roomId ? { roomId } : {}) });
+        assert.equal(calls.length, 1); assert.equal(data.routes[0].summary.totalTimeSec, 0); assert.equal(data.routes[0].summary.fare, 1550);
+        assert.equal(data.routes[0].summary.waitKind, null); assert.equal(data.routes[0].summary.totalWithWaitSec, null);
+        assert.deepEqual(plain(data.routes[0].steps), []);
+    }
+});
+
+test('141 직접 검색·약속방 동일 역은 서버의 빈 목록·빈 단계 결과를 이동 불필요 정상 상태로 표시해요', async () => {
+    for (const roomId of [undefined, 'room-141']) for (const empty of [false, true]) {
+        const r = await screen141({ departure: '강남', destination: '강남역', ...(roomId ? { roomId } : {}) }, () => jsonResponse({ success: true, data: route141Data(empty) }));
+        const view = r.render(); const message = sameMessage141(view); assert.ok(message);
+        assert.match(message.props.description, /선택한 출발역과 도착역이 같아요/);
+        assert.doesNotMatch(message.props.title + message.props.description, /도착했|현재 위치|GPS/);
+        assert.equal(findElement(view, element => element.props?.code), null);
+        assert.equal(findElement(view, element => element.type === 'ActivityIndicator'), null);
+        assert.equal(findElement(view, element => element.props?.route), null, '같은 역을 이동 경로 카드로 표시하지 않아요');
+        const calls = r.calls141.filter(call => call.options.method === 'POST'); assert.equal(calls.length, 1);
+        assert.deepEqual(JSON.parse(calls[0].options.body), { originStationId: 88001, destinationStationId: 88001, ...(roomId ? { roomId } : {}) });
+        r.unmount();
+    }
+});
+
+test('141 같은 역이어도 서버의 권한·지원 역 검사를 우회하거나 실패를 성공으로 바꾸지 않아요', async () => {
+    for (const [code, status] of [['NOT_ROOM_MEMBER', 403], ['STATION_UNSUPPORTED', 422], ['STATION_NOT_FOUND', 404]]) {
+        const r = await screen141({ departure: '강남', destination: '강남역', roomId: 'room-141' }, () => jsonResponse({ success: false, error: { code } }, status));
+        const view = r.render(); assert.equal(sameMessage141(view), null);
+        assert.ok(findElement(view, element => element.props?.code), code);
+        assert.equal(r.calls141.filter(call => call.options.method === 'POST').length, 1); r.unmount();
+    }
+});
+
+test('141 동일 역에서 출발·도착역을 다시 바꾸면 일반 경로 검색과 안내 시작이 정상 동작해요', async () => {
+    const params = { departure: '강남', destination: '강남역' };
+    const r = await screen141(params, body => jsonResponse({ success: true, data: body.originStationId === body.destinationStationId ? route141Data() : routeData() }));
+    assert.ok(sameMessage141(r.render()));
+    params.destination = '사당';
+    for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+    let view = r.render(); assert.equal(sameMessage141(view), null);
+    const card = findElement(view, element => element.props?.route?.routeId === 'server-route-1'); assert.ok(card); card.props.onStart();
+    const selected = r.load('src/stores/route-store.ts').getSelectedRoute(); assert.equal(selected.origin.id, 88001); assert.equal(selected.destination.id, 99002);
+    params.departure = '사당';
+    for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+    view = r.render(); assert.ok(sameMessage141(view)); assert.equal(findElement(view, element => element.props?.route), null);
+    assert.equal(r.calls141.filter(call => call.options.method === 'POST').length, 3); r.unmount();
+});
+
+test('141 이전 일반 경로 응답은 나중에 선택한 동일 역의 정상 결과를 덮지 않아요', async () => {
+    const params = { departure: '강남', destination: '사당' }; let resolveOld;
+    const r = await screen141(params, body => body.originStationId !== body.destinationStationId
+        ? new Promise(done => { resolveOld = done; }) : jsonResponse({ success: true, data: route141Data(true) }));
+    params.destination = '강남역';
+    for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+    assert.ok(sameMessage141(r.render()));
+    resolveOld(jsonResponse({ success: true, data: routeData() })); await settle(); const view = r.render();
+    assert.ok(sameMessage141(view)); assert.equal(findElement(view, element => element.props?.route), null); r.unmount();
+});
+
+test('141 mock 동일 역도 지원 여부 검사 후 빈 정상 결과이며 서버를 호출하지 않아요', async () => {
+    const r = createRuntime(); let calls = 0;
+    r.context.fetch = () => { calls++; throw Error(); };
+    const service = r.load('src/services/route.ts'); const station = { id: 109, name: '사당', lines: [2, 4], isSupported: true };
+    const data = await finishRoomMock(r, service.searchRoute(station, station)); assert.deepEqual(plain(data.routes), []);
+    const unsupported = { ...station, isSupported: false };
+    await finishRoomMock(r, assert.rejects(service.searchRoute(unsupported, unsupported), { code: 'STATION_UNSUPPORTED' }));
+    assert.equal(calls, 0);
+    const screen = routeScreenRuntime({ departure: '사당', destination: '사당' }, true);
+    for (let i = 0; i < 5; i++) { screen.render(); await settle(); screen.advance(800); await settle(); }
+    assert.ok(sameMessage141(screen.render())); screen.unmount();
+});
+
+test('141 동일 역의 빈 단계 안내는 요금·도착 예정·지도·표지판 버튼 대신 정상 설명을 표시해요', () => {
+    const data = route141Data(); const route = { ...data.routes[0], summary: { ...data.routes[0].summary, congestion: { supported: false, kind: null, pct: null, level: null, levelLabel: null }, noService: false, serviceNotice: null, arrivesAfterAppointment: false } };
+    const r = guide129({ route }); const store = r.load('src/stores/route-store.ts'); const selected = store.getSelectedRoute();
+    store.setSelectedRoute({ ...selected, routeSource: 'INTERNAL', origin: { ...selected.origin, id: 88001, name: '강남' }, destination: { ...selected.destination, id: 88001, name: '강남' },
+        appointmentPassed: true, notice: '지난 약속은 지금 기준으로 안내해요.' });
+    const view = r.render(); assert.ok(findText(view, '지하철 이동이 필요 없어요')); assert.ok(findText(view, '선택한 출발역과 도착역이 같아요.'));
+    assert.ok(findText(view, '지난 약속은 지금 기준으로 안내해요.')); assert.ok(findText(view, '자체 계산한 경로예요.'));
+    assert.equal(r.map(view), null); assert.equal(findElement(view, element => element.type === r.Timeline), null);
+    assert.doesNotMatch(textOf(view), /1,550|도착 예정|도착했|현재 위치|GPS/);
+    assert.equal(store.getSelectedRoute().route.summary.fare, 1550, '서버 요금 자체는 보정하지 않아요'); r.unmount();
+});
+
+test('141 일반 검색의 빈 목록과 안내의 빈 단계·선택 없음도 오류나 무한 로딩 없이 표시해요', async () => {
+    const r = await screen141({ departure: '강남', destination: '사당' }, () => jsonResponse({ success: true, data: route141Data(true) }));
+    assert.ok(findElement(r.render(), element => element.props?.title === '이 조건으로 찾은 경로가 없어요'));
+    assert.equal(findElement(r.render(), element => element.type === 'ActivityIndicator'), null); r.unmount();
+    const g = guide129({ route: { ...route129(), steps: [] } }); let view = g.render();
+    const timeline = findElement(view, element => element.type === g.Timeline); assert.ok(timeline); assert.doesNotThrow(() => g.renderComponent(timeline));
+    g.load('src/stores/route-store.ts').clearSelectedRoute(); view = g.render(); assert.ok(findText(view, '선택한 경로가 없어요')); g.unmount();
+});
+
+test('141 정상 null 대기 필드는 허용하되 잘못된 문자열·객체·대기 출처는 계속 거절해요', async () => {
+    for (const [field, value] of [['waitKind', 'BROKEN'], ['waitKind', 1], ['totalWithWaitSec', '0'], ['totalWithWaitSec', {}], ['waitSec', '0']]) {
+        const r = createRuntime(serverEnv); const data = route141Data(); data.routes[0].summary[field] = value;
+        r.context.fetch = async () => jsonResponse({ success: true, data });
+        await assert.rejects(r.load('src/services/route.ts').searchRoute(routeOrigin, routeOrigin), { code: 'EXTERNAL_API_ERROR' });
+    }
+});
+
+/* ---------- 시각표 대기 출처 응답 호환 (PR #161) ---------- */
+function timetable161Data(waitSec = 180) {
+    const data = { ...routeData(), routeSource: 'INTERNAL', appointmentPassed: false, notice: null };
+    Object.assign(data.routes[0].summary, {
+        totalTimeSec: 1200, departureAt: '2026-11-13T14:03:00+09:00', arrivalAt: '2026-11-13T14:23:00+09:00',
+        noService: false, serviceNotice: null, arrivesAfterAppointment: false,
+        waitSec, waitKind: 'TIMETABLE', totalWithWaitSec: 1200 + waitSec, slackSeconds: null,
+    });
+    return data;
+}
+
+test('161 TIMETABLE 정상 응답은 대기 0초·양수를 그대로 파싱하고 원본 시각·총시간을 보존해요', async () => {
+    for (const waitSec of [0, 180]) {
+        const r = createRuntime(serverEnv); const raw = timetable161Data(waitSec); const calls = [];
+        r.context.fetch = async (url, options) => { calls.push({ url, options }); return jsonResponse({ success: true, data: raw }); };
+        const parsed = await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination);
+        assert.equal(parsed.routes[0].summary.waitKind, 'TIMETABLE');
+        for (const field of ['waitSec', 'totalTimeSec', 'totalWithWaitSec', 'departureAt', 'arrivalAt']) {
+            assert.equal(parsed.routes[0].summary[field], raw.routes[0].summary[field], field);
+        }
+        assert.equal(calls.length, 1); assert.equal(calls[0].url, 'https://example.test/api/v1/routes/search');
+        assert.deepEqual(JSON.parse(calls[0].options.body), { originStationId: routeOrigin.id, destinationStationId: routeDestination.id });
+    }
+});
+
+test('161 TIMETABLE 경로의 펼침·접힘·안내 화면은 서버의 대기 포함 총시간을 사용하고 약을 붙이지 않아요', async () => {
+    for (const waitSec of [0, 180]) {
+        const search = await route147Search(timetable161Data(waitSec)); const card = search.card147(); assert.ok(card);
+        const summary = card.props.route.summary; const expected = `대기 포함 ${waitSec === 0 ? 20 : 23}분`;
+        const format = search.load('src/components/route/format.ts');
+        assert.equal(format.formatTotalTime(summary), expected);
+        assert.equal(format.formatTotalTime({ ...summary, transferWaitSec: 300 }), expected, '이미 포함된 대기를 다시 합산하지 않아요');
+        const Card = search.load('src/components/route/RouteCard.tsx').default;
+        for (const expanded of [false, true]) assert.ok(findText(Card({ ...card.props, expanded }), expected));
+        card.props.onStart(); const selected = search.load('src/stores/route-store.ts').getSelectedRoute();
+        assert.equal(selected.route.summary.waitKind, 'TIMETABLE');
+        const guide = route147Guide(selected); const guideView = guide.render();
+        const guideExpected = expected.replace('대기 포함 ', '');
+        assert.ok(findText(guideView, guideExpected));
+        assert.ok(!findTextIncluding(guideView, `약 ${guideExpected}`));
+        assert.ok(!findTextIncluding(guideView, '대기 포함 '));
+        assert.equal(findElement(search.render(), element => element.props?.code), null);
+        search.unmount(); guide.unmount();
+    }
+});
+
+test('161 대기 포함 서버 값이 null·생략이면 이동 시간으로 표시하고 waitSec을 임의로 더하지 않아요', async () => {
+    for (const omit of [false, true]) {
+        const r = createRuntime(serverEnv); const raw = timetable161Data(180);
+        if (omit) delete raw.routes[0].summary.totalWithWaitSec; else raw.routes[0].summary.totalWithWaitSec = null;
+        r.context.fetch = async () => jsonResponse({ success: true, data: raw });
+        const parsed = await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination); const summary = parsed.routes[0].summary;
+        assert.equal(summary.waitKind, 'TIMETABLE'); assert.equal(summary.waitSec, 180);
+        assert.equal(Object.hasOwn(summary, 'totalWithWaitSec'), !omit);
+        if (!omit) assert.equal(summary.totalWithWaitSec, null);
+        assert.equal(r.load('src/components/route/format.ts').formatTotalTime(summary), '20분');
+    }
+});
+
+test('161 기존 생략·null·REALTIME·ESTIMATED·NONE의 파싱·시간 표시는 유지돼요', async () => {
+    for (const kind of [undefined, null, 'REALTIME', 'ESTIMATED', 'NONE']) {
+        const r = createRuntime(serverEnv); const raw = timetable161Data(kind === 'NONE' ? 0 : 180); const summary = raw.routes[0].summary;
+        if (kind === undefined) { delete summary.waitKind; delete summary.waitSec; delete summary.totalWithWaitSec; }
+        else if (kind === null) Object.assign(summary, { waitKind: null, waitSec: null, totalWithWaitSec: null });
+        else summary.waitKind = kind;
+        r.context.fetch = async () => jsonResponse({ success: true, data: raw });
+        const parsed = (await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination)).routes[0].summary;
+        assert.equal(Object.hasOwn(parsed, 'waitKind'), kind !== undefined); assert.equal(parsed.waitKind, kind);
+        const expected = kind == null ? '20분' : kind === 'ESTIMATED' ? '대기 포함 약 23분' : kind === 'NONE' ? '대기 포함 20분' : '대기 포함 23분';
+        assert.equal(r.load('src/components/route/format.ts').formatTotalTime(parsed), expected);
+    }
+});
+
+test('161 TIMETABLE 추가 후에도 미등록 출처·잘못된 대기 값은 계속 거절해요', async () => {
+    for (const [field, value] of [['waitKind', 'UNKNOWN'], ['waitKind', 'timetable'], ['waitKind', 'TIMETABLE '], ['waitKind', 1],
+        ['waitSec', '0'], ['waitSec', {}], ['totalWithWaitSec', '1380'], ['totalWithWaitSec', {}]]) {
+        const r = createRuntime(serverEnv); const raw = timetable161Data(); raw.routes[0].summary[field] = value;
+        r.context.fetch = async () => jsonResponse({ success: true, data: raw });
+        await assert.rejects(r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination), { code: 'EXTERNAL_API_ERROR' });
+    }
+});
+
+/* ---------- #137 채팅 재연결 뒤 끊긴 동안 쌓인 메시지 빠짐없이 복구 ---------- */
+
+const chat137Id = n => `01900000-0000-7000-8000-${String(n).padStart(12, '0')}`;
+const chat137Message = n => chat118Message({ id: chat137Id(n), senderId: ROOM_QUERY_OTHER, nickname: '상대', content: `메시지 ${n}`,
+    createdAt: new Date(Date.UTC(2026, 10, 12, 10, 0, 0) + n * 1000).toISOString() });
+/** 명세 10.2 처럼 최신순·cursor(이전 페이지 마지막 id) 페이지를 돌려주는 가짜 서버 */
+function chat137Server(r, count) {
+    const server = { count, gets: [], fail: null, hold: null };
+    server.add = to => { server.count = to; };
+    r.context.fetch = async (url) => {
+        const query = new URL(url).searchParams;
+        const cursor = query.get('cursor'); const size = Number(query.get('size') ?? 30);
+        server.gets.push(cursor);
+        if (server.hold) await server.hold(server.gets.length);
+        if (server.fail?.(server.gets.length, cursor)) return jsonResponse({ success: false, error: { code: 'NETWORK_ERROR' } }, 503);
+        const all = Array.from({ length: server.count }, (_, i) => server.count - i); // 최신 → 오래된
+        const start = cursor ? all.indexOf(Number(cursor.slice(-12))) + 1 : 0;
+        const items = all.slice(start, start + size);
+        const hasMore = start + size < all.length;
+        return ok({ items: items.map(chat137Message), hasMore, nextCursor: hasMore ? chat137Id(items.at(-1)) : null });
+    };
+    return server;
+}
+const chat137Numbers = view => plain(view.messages.map(message => Number(message.id.slice(-12))));
+/** 여러 페이지를 이어 받는 복구가 끝날 때까지 기다려요. */
+const drain137 = async () => { for (let i = 0; i < 40; i++) await settle(); };
+const range137 = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+async function chat137Load(count) {
+    const r = chat118Hook('open'); const server = chat137Server(r, count);
+    r.render(); await drain137();
+    return { r, server };
+}
+async function chat137LoadAll(r) {
+    for (let i = 0; i < 40 && r.render().hasMore; i++) { r.render().loadOlder(); await drain137(); }
+}
+
+test('137 복구 함수: 겹침·처음까지·상한 세 경우와 결과 반영', async () => {
+    const hook = createRuntime(serverEnv).load('src/hooks/use-room-chat.ts');
+    const page = (numbers, hasMore) => ({ items: numbers.map(chat137Message), hasMore, nextCursor: hasMore ? chat137Id(numbers.at(-1)) : null });
+    const pages = new Map([[null, page(range137(71, 100).reverse(), true)], [chat137Id(71), page(range137(41, 70).reverse(), true)], [chat137Id(41), page(range137(11, 40).reverse(), true)], [chat137Id(11), page(range137(1, 10).reverse(), false)]]);
+    const fetch = async cursor => pages.get(cursor);
+    const overlap = await hook.recoverChatGap(fetch, new Set([chat137Id(30)]), () => true);
+    assert.equal(overlap.mode, 'overlap'); assert.equal(overlap.items.length, 90);
+    const complete = await hook.recoverChatGap(fetch, new Set(), () => true);
+    assert.deepEqual([complete.mode, complete.items.length, complete.cursor, complete.hasMore], ['complete', 100, null, false]);
+    const capped = await hook.recoverChatGap(fetch, new Set(), () => true, 2);
+    assert.deepEqual([capped.mode, capped.items.length, capped.cursor, capped.hasMore], ['replace', 60, chat137Id(41), true]);
+    assert.equal(await hook.recoverChatGap(fetch, new Set(), () => false), null);
+    assert.equal(hook.CHAT_RECOVERY_MAX_PAGES, 10);
+    // 상한 결과 반영: 받은 범위보다 오래된 기존 메시지만 버리고 더 최신(WS) 메시지는 남겨요.
+    const current = [...range137(1, 30), 101].map(chat137Message);
+    assert.deepEqual(plain(hook.applyChatRecovery(current, capped).map(message => Number(message.id.slice(-12)))), [...range137(41, 100), 101]);
+    assert.deepEqual(plain(hook.applyChatRecovery(current, overlap).map(message => Number(message.id.slice(-12)))), [...range137(1, 100), 101]);
+});
+
+test('137 이슈 시나리오: 30개 본 뒤 끊긴 동안 70개 추가 → 재연결 → 빈 구간 없이 표시, 이전 메시지 조회도 이어져요', async () => {
+    const { r, server } = await chat137Load(60);
+    assert.deepEqual(chat137Numbers(r.render()), range137(31, 60)); assert.equal(r.render().hasMore, true);
+    server.add(130); server.gets.length = 0;
+    r.reconnect(); await drain137();
+    assert.deepEqual(chat137Numbers(r.render()), range137(31, 130));
+    assert.deepEqual(server.gets, [null, chat137Id(101), chat137Id(71)]); // 31~60 과 겹치는 페이지까지만
+    assert.equal(r.render().error, null);
+    await chat137LoadAll(r);
+    assert.deepEqual(chat137Numbers(r.render()), range137(1, 130)); assert.equal(r.render().hasMore, false);
+    // 이슈 원래 모양(1~30 이 전부인 방)도 1~100 이 돼요.
+    const small = await chat137Load(30); small.server.add(100);
+    small.r.reconnect(); await drain137();
+    assert.deepEqual(chat137Numbers(small.r.render()), range137(1, 100)); assert.equal(small.r.render().hasMore, false);
+    r.unmount(); small.r.unmount();
+});
+
+test('137 누락이 30개 이하면 한 페이지로 복구하고 화면 복귀·reload 도 같은 방식이에요', async () => {
+    const { r, server } = await chat137Load(60);
+    server.add(75); server.gets.length = 0;
+    r.reconnect(); await drain137();
+    assert.deepEqual(chat137Numbers(r.render()), range137(31, 75)); assert.deepEqual(server.gets, [null]);
+    server.add(120); r.blur(); r.focus(); await drain137();
+    assert.deepEqual(chat137Numbers(r.render()), range137(31, 120));
+    server.add(160); await r.render().reload(); await settle();
+    assert.deepEqual(chat137Numbers(r.render()), range137(31, 160));
+    r.unmount();
+});
+
+test('137 누락이 상한(300개)을 넘으면 받은 범위로 바꾸고 이전 메시지 조회로 빈 구간 없이 이어 받아요', async () => {
+    const { r, server } = await chat137Load(60);
+    server.add(460); server.gets.length = 0;
+    r.reconnect(); await drain137();
+    assert.equal(server.gets.length, 10);
+    assert.deepEqual(chat137Numbers(r.render()), range137(161, 460)); assert.equal(r.render().hasMore, true);
+    await chat137LoadAll(r);
+    assert.deepEqual(chat137Numbers(r.render()), range137(1, 460));
+    r.unmount();
+});
+
+test('137 복구 중 WS 로 받은 메시지는 한 번만, 목록을 바꿀 때도 사라지지 않아요', async () => {
+    for (const added of [75, 460]) {
+        const { r, server } = await chat137Load(60);
+        server.add(added); let release; const gate = new Promise(resolve => { release = resolve; });
+        server.hold = count => count === 2 ? gate : undefined; // 첫 복구 페이지 응답 직후 멈춰요
+        r.reconnect(); await settle();
+        const ws = chat137Message(added + 1); r.event(ws); r.event(chat137Message(added)); // 새 메시지와 이미 받을 메시지
+        release(); await drain137();
+        server.hold = null;
+        const numbers = chat137Numbers(r.render());
+        assert.equal(numbers.filter(n => n === added + 1).length, 1, String(added));
+        assert.equal(new Set(numbers).size, numbers.length, String(added));
+        assert.deepEqual(numbers, range137(added > 300 ? added - 299 : 31, added + 1), String(added));
+        r.unmount();
+    }
+});
+
+test('137 복구 중 화면 이탈·권한 상실·계정 전환이면 결과를 버리고 더 받지 않아요', async () => {
+    for (const cause of ['blur', 'reject', 'account']) {
+        const { r, server } = await chat137Load(60);
+        server.add(200); let release; const gate = new Promise(resolve => { release = resolve; });
+        server.hold = count => count === 3 ? gate : undefined; server.gets.length = 0;
+        r.reconnect(); await settle();
+        assert.equal(server.gets.length, 2);
+        if (cause === 'blur') r.blur();
+        if (cause === 'reject') r.reject('NOT_ROOM_MEMBER');
+        if (cause === 'account') r.load('src/stores/auth-store.ts').signIn({ userId: 'other-user', nickname: '다른 사람' });
+        release(); await drain137();
+        assert.equal(server.gets.length, 2, cause); // 더 받지 않아요
+        const view = r.render();
+        if (cause === 'blur') assert.deepEqual(chat137Numbers(view), range137(31, 60));
+        else assert.equal(view.messages.length, 0, cause);
+        if (cause === 'reject') assert.equal(view.blocked, true);
+        r.unmount();
+    }
+});
+
+test('137 복구 중 두 번째 페이지 실패: 기존 목록 그대로·오류 표시, 다시 시도하면 빈 구간 없이 복구', async () => {
+    const { r, server } = await chat137Load(60);
+    server.add(130); server.gets.length = 0;
+    server.fail = count => count === 2;
+    r.reconnect(); await drain137();
+    let view = r.render();
+    assert.deepEqual(chat137Numbers(view), range137(31, 60)); // 받은 첫 페이지(101~130)를 합치지 않아요
+    assert.ok(view.error); assert.equal(view.status, 'ready');
+    server.fail = null;
+    await view.reload(); await settle(); view = r.render();
+    assert.deepEqual(chat137Numbers(view), range137(31, 130)); assert.equal(view.error, null);
+    r.unmount();
+});
+
+test('137 AI 답변 대기 폴링의 최신 페이지가 목록과 이어지지 않으면 같은 복구로 채워요', async () => {
+    const r = chat118Hook('closed'); const server = chat137Server(r, 60);
+    r.render(); await drain137();
+    server.add(130); server.gets.length = 0;
+    r.prepared(); await drain137(); await settle(); // 구독 직후 최신 한 페이지 조회
+    assert.deepEqual(chat137Numbers(r.render()), range137(31, 130));
+    r.unmount();
+});
+
+/* ---------- #138 AI 답변 하나는 질문 하나만 해제 ---------- */
+
+const ai138Id = n => `01900000-0000-7000-8000-${String(900000 + n).padStart(12, '0')}`;
+const ai138At = second => new Date(Date.UTC(2026, 10, 12, 10, 0, second)).toISOString();
+const ai138Question = (n, second, mine = true) => chat118Message({ id: ai138Id(n), senderId: mine ? ROOM_QUERY_ME : ROOM_QUERY_OTHER,
+    nickname: mine ? '서버 나' : '상대', content: `@링크로 질문 ${n}`, createdAt: ai138At(second) });
+const ai138Reply = (n, second, content = `답변 ${n}`, senderType = 'AI') => chat118Message({ id: ai138Id(n), senderType, senderId: null, nickname: null, content, createdAt: ai138At(second) });
+/** 질문을 보내면 POST 응답으로 questions 를 차례로 돌려주는 채팅 훅. GET 은 items 를 돌려줘요. */
+async function ai138Hook(questions, realtime = 'open') {
+    const r = chat118Hook(realtime); r.items = []; let sent = 0; r.gets = 0;
+    r.context.fetch = async (_url, options) => {
+        if (options.method === 'POST') { const question = questions[sent++]; return ok({ message: question, aiPending: true }); }
+        r.gets++;
+        return ok({ items: [...r.items].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)), hasMore: false, nextCursor: null });
+    };
+    r.render(); await settle();
+    r.ask = async () => { r.render().setDraft('@링크로 질문'); r.render().send(); await settle(); };
+    return r;
+}
+
+test('138 짝짓기 규칙: 답변 하나는 그보다 먼저 쓴 가장 오래된 미답 질문 하나만, 같은 id 는 한 번만, 순서와 무관', () => {
+    const wait = createRuntime().load('src/services/chat-ai-wait.ts');
+    const q1 = ai138Question(1, 1); const q2 = ai138Question(2, 2); const other = ai138Question(3, 0, false); // 다른 사람 질문이 가장 먼저
+    const r1 = ai138Reply(11, 5); const r2 = ai138Reply(12, 6);
+    assert.deepEqual([...wait.matchAiReplies([q1, q2], [r1])], [q1.id]);
+    assert.deepEqual([...wait.matchAiReplies([q2, q1], [r2, r1])].sort(), [q1.id, q2.id].sort());
+    // 답변보다 나중에 쓴 질문은 해제하지 않아요.
+    assert.deepEqual([...wait.matchAiReplies([ai138Question(4, 9)], [r1])], []);
+    // 같은 시각이면 id 순서
+    const sameTime = ai138Question(5, 5);
+    assert.deepEqual([...wait.matchAiReplies([sameTime], [ai138Reply(4, 5)])], []);
+    assert.deepEqual([...wait.matchAiReplies([sameTime], [ai138Reply(6, 5)])], [sameTime.id]);
+    // 추적기: 같은 답변을 여러 번 받아도 한 번, 받은 순서와 상관없이 같은 결과
+    const tracker = wait.createAiReplyTracker();
+    tracker.observe([r1]); tracker.observe([r1, r1]); tracker.addQuestion(q2); tracker.observe([other]); tracker.addQuestion(q1);
+    assert.deepEqual([q1, q2, other].map(q => tracker.isAnswered(q.id)), [false, false, true]);
+    // 답변·질문 판단
+    assert.equal(wait.isAiQuestion(chat118Message({ content: '@LinkRo 안녕' })), true);
+    assert.equal(wait.isAiQuestion(chat118Message({ content: '안녕' })), false);
+    assert.equal(wait.isAiQuestion(ai138Reply(1, 0, '@링크로')), false);
+    for (const [content, type, expected] of [['답변', 'AI', true], ['AI 사용 한도를 초과해 답변하지 못했어요.', 'SYSTEM', true], ['AI가 답변을 만들지 못했어요.', 'SYSTEM', true],
+        ['AI링크로님이 참여했어요.', 'SYSTEM', false], ['상대님이 나갔어요.', 'SYSTEM', false], ['약속역이 강남역으로 정해졌어요.', 'SYSTEM', false]]) {
+        assert.equal(wait.isAiReply(ai138Reply(1, 0, content, type)), expected, content);
+    }
+});
+
+test('138 내 질문 2개 → 답변 1개: 대기 남음 → 두 번째 답변: 해제', async () => {
+    const r = await ai138Hook([ai138Question(1, 0), ai138Question(2, 1)]);
+    await r.ask(); await r.ask();
+    assert.equal(r.render().aiPending, 1);
+    r.event(ai138Reply(11, 5)); assert.equal(r.render().aiPending, 1);
+    r.event(ai138Reply(12, 6)); assert.equal(r.render().aiPending, 0); assert.equal(r.timers.size, 0);
+    r.unmount();
+});
+
+test('138 다른 사람 질문 + 내 질문 → 답변 1개: 다른 사람 질문이 먼저 소비돼 내 대기는 남아요', async () => {
+    const r = await ai138Hook([ai138Question(2, 1)]);
+    r.event(ai138Question(1, 0, false));
+    await r.ask(); assert.equal(r.render().aiPending, 1);
+    r.event(ai138Reply(11, 5)); assert.equal(r.render().aiPending, 1);
+    r.event(ai138Reply(12, 6)); assert.equal(r.render().aiPending, 0);
+    r.unmount();
+});
+
+test('138 답변이 질문 POST 응답보다 먼저 오면 질문 등록 즉시 해제', async () => {
+    const r = chat118Hook('open'); let resolve;
+    r.context.fetch = async (_url, options) => options.method === 'POST' ? await new Promise(done => { resolve = done; }) : ok({ items: [], hasMore: false, nextCursor: null });
+    r.render(); await settle(); r.render().setDraft('@링크로 질문'); r.render().send(); await settle();
+    r.event(ai138Reply(11, 5));
+    resolve(ok({ message: ai138Question(1, 0), aiPending: true })); await settle();
+    assert.equal(r.render().aiPending, 0); assert.equal(r.timers.size, 0); r.unmount();
+});
+
+test('138 같은 답변을 WS·REST(reload)·재연결 복구로 여러 번 받아도 한 번만 소비', async () => {
+    const q1 = ai138Question(1, 0); const q2 = ai138Question(2, 1); const reply = ai138Reply(11, 5);
+    const r = await ai138Hook([q1, q2]);
+    await r.ask(); await r.ask(); r.items = [q1, q2, reply];
+    r.event(reply); r.event(reply);
+    await r.render().reload(); await settle();
+    r.reconnect(); await settle(); await settle();
+    assert.ok(r.gets >= 2);
+    assert.equal(r.render().messages.filter(message => message.id === reply.id).length, 1);
+    assert.equal(r.render().aiPending, 1);
+    r.event(ai138Reply(12, 6)); assert.equal(r.render().aiPending, 0);
+    r.unmount();
+});
+
+test('138 AI 실패 SYSTEM 안내도 답변으로 소비하고, 입장·퇴장·약속역 SYSTEM 은 소비하지 않아요', async () => {
+    const r = await ai138Hook([ai138Question(1, 0), ai138Question(2, 1)]);
+    await r.ask(); await r.ask();
+    for (const [n, content] of [[21, 'AI링크로님이 참여했어요.'], [22, '상대님이 나갔어요.'], [23, '약속역이 강남역으로 정해졌어요.']]) r.event(ai138Reply(n, 4, content, 'SYSTEM'));
+    assert.equal(r.render().aiPending, 1);
+    r.event(ai138Reply(24, 5, 'AI 사용 한도를 초과해 답변하지 못했어요.', 'SYSTEM')); assert.equal(r.render().aiPending, 1);
+    r.event(ai138Reply(25, 6, 'AI가 답변을 만들지 못했어요.', 'SYSTEM')); assert.equal(r.render().aiPending, 0);
+    r.unmount();
+});
+
+test('138 답변이 오지 않으면 60초 뒤 대기가 해제돼요(질문마다)', async () => {
+    const r = await ai138Hook([ai138Question(1, 0), ai138Question(2, 1)]);
+    await r.ask(); r.advance(30000); await settle(); await r.ask();
+    r.event(ai138Reply(11, 5)); // 첫 질문만 소비
+    assert.equal(r.render().aiPending, 1);
+    r.advance(30000); await settle(); await settle(); assert.equal(r.render().aiPending, 1); // 첫 질문 기한이지만 이미 답변됨
+    r.advance(30000); await settle(); await settle(); assert.equal(r.render().aiPending, 0); // 두 번째 질문 60초
+    assert.equal(r.timers.size, 0); r.unmount();
+});
+
+test('138 표시: 내 질문 여러 개가 대기여도 숫자가 아니라 "답변 작성 중" 한 줄', async () => {
+    const r = await ai138Hook([ai138Question(1, 0), ai138Question(2, 1), ai138Question(3, 2)]);
+    await r.ask(); await r.ask(); await r.ask();
+    const controller = r.render(); assert.equal(controller.aiPending, 1);
+    const panel = createScreenRuntime(serverEnv, 'src/components/rooms/chat-panel.tsx', runtime => {
+        Object.assign(runtime.native, { ScrollView: 'ScrollView', Platform: { OS: 'ios', select: value => value.ios }, Keyboard: { dismiss() {}, addListener: () => ({ remove() {} }) } });
+    });
+    const view = panel.renderComponent({ type: panel.screen.default, props: { controller, myUserId: ROOM_QUERY_ME, members: [] } });
+    const status = findAll125(view, element => element.type === 'Text').map(textOf).filter(text => text.includes('답변'));
+    assert.deepEqual(status, ['링크로가 답변 중...']);
+    assert.ok(!status.some(text => /\d/.test(text)));
+    r.unmount();
+});
+
+/* #138 보완: 60초 시간 창 — 답이 오지 않은 옛 질문이 이후 답변을 가로채지 않아요 */
+
+/** 초 단위 + 밀리초까지 정할 수 있는 시각 */
+const ai138WindowAt = ms => new Date(Date.UTC(2026, 10, 12, 10, 0, 0) + ms).toISOString();
+const ai138WindowQuestion = (n, ms, mine = true) => ({ ...ai138Question(n, 0, mine), createdAt: ai138WindowAt(ms) });
+const ai138WindowReply = (n, ms) => ({ ...ai138Reply(n, 0), createdAt: ai138WindowAt(ms) });
+
+test('138 시간 창: 60초 넘게 답이 없던 옛 질문 + 새 질문 + 답변 1개 → 새 질문만 해제, 옛 질문은 미답', () => {
+    const wait = createRuntime().load('src/services/chat-ai-wait.ts');
+    assert.equal(wait.AI_REPLY_WINDOW_MS, 60_000);
+    const old = ai138WindowQuestion(1, 0, false); const fresh = ai138WindowQuestion(2, 120_000); const reply = ai138WindowReply(11, 125_000);
+    assert.deepEqual([...wait.matchAiReplies([old, fresh], [reply])], [fresh.id]);
+    const tracker = wait.createAiReplyTracker();
+    tracker.observe([old, fresh, reply]);
+    assert.deepEqual([tracker.isAnswered(old.id), tracker.isAnswered(fresh.id)], [false, true]);
+    // 창 안의 질문이 여럿이면 기존대로 가장 오래된 하나만, 다른 사람 질문도 소비해요.
+    const other = ai138WindowQuestion(3, 110_000, false);
+    assert.deepEqual([...wait.matchAiReplies([old, other, fresh], [reply])], [other.id]);
+});
+
+test('138 시간 창 경계: 질문 60초 뒤 정각 답변은 짝지어지고 60.001초 뒤는 짝지어지지 않아요', () => {
+    const wait = createRuntime().load('src/services/chat-ai-wait.ts');
+    const question = ai138WindowQuestion(1, 0);
+    assert.deepEqual([...wait.matchAiReplies([question], [ai138WindowReply(11, 60_000)])], [question.id]);
+    assert.deepEqual([...wait.matchAiReplies([question], [ai138WindowReply(11, 60_001)])], []);
+    // 질문보다 먼저 쓴 답변은 여전히 짝짓지 않아요.
+    assert.deepEqual([...wait.matchAiReplies([ai138WindowQuestion(1, 5_000)], [ai138WindowReply(11, 4_999)])], []);
+});
+
+test('138 시간 창: 방 기록(옛 질문들)을 먼저 받은 뒤 새 질문·답변이 와도, 순서를 섞어도 같은 결과', () => {
+    const wait = createRuntime().load('src/services/chat-ai-wait.ts');
+    const history = [ai138WindowQuestion(1, 0, false), ai138WindowQuestion(2, 10_000), ai138WindowQuestion(3, 20_000, false)];
+    const fresh = ai138WindowQuestion(4, 300_000); const reply = ai138WindowReply(11, 305_000);
+    const expected = { [history[0].id]: false, [history[1].id]: false, [history[2].id]: false, [fresh.id]: true };
+    const orders = [
+        tracker => { tracker.observe(history); tracker.addQuestion(fresh); tracker.observe([reply]); }, // 기록 → 새 질문 → 답변
+        tracker => { tracker.observe([reply]); tracker.observe(history.slice().reverse()); tracker.addQuestion(fresh); }, // 답변 먼저, 질문 나중
+        tracker => { tracker.observe([fresh, reply, ...history]); tracker.observe([reply]); tracker.observe(history); }, // 섞어서·중복
+    ];
+    for (const order of orders) {
+        const tracker = wait.createAiReplyTracker(); order(tracker);
+        assert.deepEqual(Object.fromEntries(Object.keys(expected).map(id => [id, tracker.isAnswered(id)])), expected);
+    }
+});
+
+test('138 시간 창: 화면에서도 옛 미답 질문이 답변을 가로채지 않아 내 대기가 바로 해제돼요', async () => {
+    const r = await ai138Hook([ai138WindowQuestion(2, 120_000)]);
+    r.event(ai138WindowQuestion(1, 0)); // 답이 오지 않은 옛 질문(기록)
+    await r.ask(); assert.equal(r.render().aiPending, 1);
+    r.event(ai138WindowReply(11, 125_000)); assert.equal(r.render().aiPending, 0); assert.equal(r.timers.size, 0);
+    r.unmount();
+});
+
+/* ---------- #153 추천 결과의 참여자별 출발·도착·여유·탑승 열차 ---------- */
+
+/** 강남(18:38, 2호선 내선 성수행) → 교대 환승(도보 3분·대기 2분) → 3호선 → 고속터미널 18:52 도착, 약속 19:00 */
+function reco153Timetable(overrides = {}) {
+    return {
+        departureAt: '2026-11-20T18:33:00+09:00', arriveAt: '2026-11-20T18:52:00+09:00', slackSeconds: 480, source: 'TIMETABLE',
+        boardingTrain: { lineId: 2, lineName: '2호선', stationId: 88001, stationName: '강남', direction: 'INNER', departureAt: '2026-11-20T18:38:00+09:00', terminal: '성수', trainCode: '2314' },
+        legs: [
+            { lineId: 2, lineName: '2호선', trainCode: '2314', terminal: '성수', direction: 'INNER', fromStationName: '강남', toStationName: '교대',
+                boardAt: '2026-11-20T18:38:00+09:00', alightAt: '2026-11-20T18:42:00+09:00', stationCount: 2, walkSec: 0, transferWaitSec: 0 },
+            { lineId: 3, lineName: '3호선', trainCode: 'S3101', terminal: '대화', direction: 'DOWN', fromStationName: '교대', toStationName: '고속터미널',
+                boardAt: '2026-11-20T18:47:00+09:00', alightAt: '2026-11-20T18:52:00+09:00', stationCount: 1, walkSec: 180, transferWaitSec: 120 },
+        ],
+        ...overrides,
+    };
+}
+const reco153Estimate = (overrides = {}) => ({ departureAt: '2026-11-20T18:38:00+09:00', arriveAt: '2026-11-20T19:00:00+09:00', slackSeconds: 0, source: 'ESTIMATE', boardingTrain: null, legs: [], ...overrides });
+const reco153Past = { departureAt: '2026-11-20T18:38:00+09:00', arriveAt: null, slackSeconds: null, source: null, boardingTrain: null, legs: [] };
+/** 내 참여자만 바꾼 실행 */
+const reco153Run = (mine, runOverrides = {}) => recoRun({ results: ['TIME', 'FARE', 'DISTANCE'].map((criterion, i) => {
+    const result = recoResult(criterion, 77001 + (i === 1 ? 1 : 0));
+    result.participantTimes[0] = { ...result.participantTimes[0], ...mine };
+    return result;
+}), ...runOverrides });
+async function reco153Screen(run) {
+    const r = recoScreen(); r.recoRespond(() => ok(run));
+    const view = await pumpScreen(r);
+    const box = findElement(view, element => element.props?.accessibilityLabel === '내 이동');
+    const rows = []; findElement(view, element => { if (typeof element.type === 'function' && element.type.name === 'ParticipantRow') rows.push(element); return false; });
+    const mineRow = rows.find(row => row.props.mine);
+    const detail = mineRow ? findAll125(mineRow.type({ ...mineRow.props, opened: true }), element => element.type === 'Text').map(textOf) : [];
+    return { r, view, box: box ? findAll125(box, element => element.type === 'Text').map(textOf) : null, detail };
+}
+
+test('153 문구 함수: 여유(양수·0·음수·null), 탑승 열차, 열차 구간, 환승 도보·대기(0 생략), 계산 근거', () => {
+    const trip = createRuntime().load('src/utils/recommendation-trip.ts');
+    for (const [sec, text] of [[480, '약속 8분 전 도착'], [539, '약속 8분 전 도착'], [30, '약속 1분 전 도착'], [0, '약속 시각에 딱 맞춰 도착'],
+        [-60, '약속보다 1분 늦게 도착'], [-61, '약속보다 2분 늦게 도착'], [-20, '약속보다 1분 늦게 도착'], [null, null]]) {
+        assert.equal(trip.formatSlack(sec), text, String(sec));
+    }
+    const t = reco153Timetable();
+    assert.equal(trip.formatBoardingTrain(t.boardingTrain), '강남역 18:38 · 2호선 성수행(내선)');
+    assert.equal(trip.formatBoardingTrain(t.boardingTrain, true), '강남역 18:38 · 2호선 성수행(내선) · 열차 2314');
+    assert.equal(trip.formatBoardingTrain({ ...t.boardingTrain, terminal: null, direction: null }), '강남역 18:38 · 2호선');
+    assert.equal(trip.formatLeg(t.legs[0]), '강남역 18:38 → 교대역 18:42 (2개 역)');
+    assert.equal(trip.formatLegTrain(t.legs[1]), '3호선 대화행(하행) · 열차 S3101');
+    assert.equal(trip.formatLegTransfer(t.legs[1]), '환승 도보 3분 · 열차 대기 2분');
+    assert.equal(trip.formatLegTransfer({ ...t.legs[1], walkSec: 0 }), '열차 대기 2분');
+    assert.equal(trip.formatLegTransfer({ ...t.legs[1], transferWaitSec: 0 }), '환승 도보 3분');
+    assert.equal(trip.formatLegTransfer({ ...t.legs[1], walkSec: 20, transferWaitSec: 0 }), '환승 도보 1분'); // #146 최소 1분
+    assert.equal(trip.formatLegTransfer(t.legs[0]), null);
+    assert.equal(trip.sourceNote('TIMETABLE'), '열차 시각표 기준이에요');
+    assert.equal(trip.sourceNote('ESTIMATE'), '고정 소요시간으로 계산한 예상값이에요');
+    assert.equal(trip.sourceNote(null), '이전 계산 결과라 열차 정보가 없어요');
+    assert.equal(trip.stalePlanText(['APPOINTMENT_CHANGED']), '약속·멤버가 바뀌기 전 계획이에요 (약속 시각이 바뀌었어요)');
+    assert.equal(trip.staleReasonText(['APPOINTMENT_CHANGED', 'MEMBERS_CHANGED']), '약속 시각이 바뀌었어요 · 참여자나 출발역이 바뀌었어요');
+});
+
+test('153 출발·도착: 도착 없으면 출발만, 자정을 넘으면 "다음 날", 약속과 다른 날 출발이면 날짜', () => {
+    const trip = createRuntime().load('src/utils/recommendation-trip.ts');
+    assert.equal(trip.formatTripLine({ departureAt: '2026-11-20T18:33:00+09:00', arriveAt: '2026-11-20T18:52:00+09:00' }, '2026-11-20T19:00:00+09:00'), '18:33 출발 → 18:52 도착');
+    assert.equal(trip.formatTripLine({ departureAt: '2026-11-20T18:38:00+09:00', arriveAt: null }, '2026-11-20T19:00:00+09:00'), '18:38 출발');
+    // 23:50 출발 → 00:20 도착, 약속 00:30(다음 날) → 출발 날짜와 "다음 날" 도착
+    assert.equal(trip.formatTripLine({ departureAt: '2026-11-20T23:50:00+09:00', arriveAt: '2026-11-21T00:20:00+09:00' }, '2026-11-21T00:30:00+09:00'), '11.20 23:50 출발 → 다음 날 00:20 도착');
+    // 약속이 없으면 날짜를 붙이지 않아요. UTC 오프셋으로 와도 서울 기준이에요.
+    assert.equal(trip.formatTripLine({ departureAt: '2026-11-20T14:50:00Z', arriveAt: '2026-11-20T15:20:00Z' }, null), '23:50 출발 → 다음 날 00:20 도착');
+    assert.equal(trip.formatTripLine({ departureAt: 'bad', arriveAt: null }, null), '');
+});
+
+test('153 시간대: 기기 시간대를 바꿔도(America/New_York·UTC·Asia/Seoul) 같은 서울 시각·날짜', () => {
+    const { execFileSync } = require('node:child_process');
+    const code = `
+        const ts = require('typescript'); const fs = require('fs');
+        const out = ts.transpileModule(fs.readFileSync('src/utils/seoul-time.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
+        const m = { exports: {} }; new Function('module', 'exports', out)(m, m.exports);
+        const s = m.exports;
+        console.log(JSON.stringify({
+            local: new Date('2026-11-20T18:38:00+09:00').getHours(),
+            time: s.formatSeoulTime('2026-11-20T18:38:00+09:00'), day: s.formatSeoulMonthDay('2026-11-20T23:50:00+09:00'),
+            hour: s.seoulHour('2026-11-20T08:10:00+09:00'), trip: s.formatTripTimes('2026-11-20T23:50:00+09:00', '2026-11-21T00:20:00+09:00', '2026-11-21T00:30:00+09:00'),
+        }));`;
+    const results = ['America/New_York', 'UTC', 'Asia/Seoul'].map(TZ => JSON.parse(execFileSync(process.execPath, ['-e', code], { cwd: root, env: { ...process.env, TZ } }).toString()));
+    assert.notEqual(results[0].local, results[2].local); // 시간대 흉내가 실제로 기기 시각을 바꿨어요
+    for (const result of results) {
+        assert.deepEqual({ ...result, local: undefined }, { local: undefined, time: '18:38', day: '11.20', hour: 8, trip: { departure: '11.20 23:50', arrival: '다음 날 00:20', nextDay: true } });
+    }
+});
+
+test('153 파서: TIMETABLE·ESTIMATE·이전 실행·일부 잘못된 모양 모두 결과 전체는 표시, 잘못된 필드만 null·[]', async () => {
+    const parse = async mine => {
+        const r = recoRuntime(); r.recoRespond(async () => ok(reco153Run(mine)));
+        const run = plain(await r.load('src/services/recommendation.ts').fetchLatestRecommendation(ROOM_QUERY_ID));
+        return run.results[0].participantTimes[0];
+    };
+    const timetable = await parse(reco153Timetable());
+    assert.deepEqual(timetable.boardingTrain, reco153Timetable().boardingTrain); assert.deepEqual(timetable.legs, reco153Timetable().legs);
+    assert.deepEqual([timetable.source, timetable.arriveAt, timetable.slackSeconds], ['TIMETABLE', '2026-11-20T18:52:00+09:00', 480]);
+    const estimate = await parse({ ...reco153Estimate(), boardingTrain: reco153Timetable().boardingTrain, legs: reco153Timetable().legs });
+    assert.deepEqual([estimate.source, estimate.boardingTrain, estimate.legs, estimate.slackSeconds], ['ESTIMATE', null, [], 0]); // ESTIMATE 는 열차 정보 없음(명세)
+    const past = await parse(reco153Past);
+    assert.deepEqual([past.source, past.arriveAt, past.slackSeconds, past.boardingTrain, past.legs], [null, null, null, null, []]);
+    const missing = await parse({ source: undefined, arriveAt: undefined, slackSeconds: undefined, boardingTrain: undefined, legs: undefined });
+    assert.deepEqual([missing.source, missing.arriveAt, missing.slackSeconds, missing.boardingTrain, missing.legs], [null, null, null, null, []]);
+    // 일부 모양이 틀려도 결과는 그대로, 그 필드만 낮춰요.
+    const broken = await parse(reco153Timetable({ arriveAt: 'not-a-date', slackSeconds: '480', source: 'TIMETABLE',
+        boardingTrain: { lineName: '2호선', departureAt: '2026-11-20T18:38:00+09:00' }, legs: [reco153Timetable().legs[0], { ...reco153Timetable().legs[1], walkSec: -5 }] }));
+    assert.deepEqual([broken.arriveAt, broken.slackSeconds, broken.boardingTrain, broken.legs], [null, null, null, []]);
+    assert.equal(broken.travelMinutes, recoParticipant().travelMinutes); assert.equal(broken.nickname, '서버 나');
+    const oddSource = await parse(reco153Timetable({ source: 'FUTURE' }));
+    assert.deepEqual([oddSource.source, oddSource.boardingTrain, oddSource.legs], [null, null, []]);
+    const optional = await parse(reco153Timetable({ boardingTrain: { ...reco153Timetable().boardingTrain, direction: 'SIDEWAYS', terminal: 7, trainCode: null, lineId: 'x' } }));
+    assert.deepEqual([optional.boardingTrain.direction, optional.boardingTrain.terminal, optional.boardingTrain.trainCode, optional.boardingTrain.lineId], [null, null, null, null]);
+});
+
+test('153 화면 TIMETABLE: 내 출발→도착·여유·탑승 열차(번호는 상세만)·legs 승하차·환승 도보·대기', async () => {
+    const { r, box, detail } = await reco153Screen(reco153Run(reco153Timetable()));
+    assert.deepEqual(box, ['내 이동', '18:33 출발 → 18:52 도착', '약속 8분 전 도착', '강남역 18:38 · 2호선 성수행(내선)', '열차 시각표 기준이에요']);
+    assert.ok(!box.some(text => text.includes('2314')));
+    for (const text of ['18:33 출발 → 18:52 도착, 약속 8분 전 도착', '탑승 강남역 18:38 · 2호선 성수행(내선) · 열차 2314', '강남역 18:38 → 교대역 18:42 (2개 역)',
+        '2호선 성수행(내선) · 열차 2314', '환승 도보 3분 · 열차 대기 2분', '교대역 18:47 → 고속터미널역 18:52 (1개 역)', '3호선 대화행(하행) · 열차 S3101']) {
+        assert.ok(detail.includes(text), text);
+    }
+    assert.ok(detail.some(text => text.includes('열차 시각표 기준이에요')));
+    assert.ok(!detail.some(text => text.includes('다익스트라')));
+    r.unmount();
+    // 여유 0 은 "딱 맞춰", 음수는 늦게 도착
+    const exact = await reco153Screen(reco153Run(reco153Timetable({ slackSeconds: 0 })));
+    assert.ok(exact.box.includes('약속 시각에 딱 맞춰 도착')); exact.r.unmount();
+    const late = await reco153Screen(reco153Run(reco153Timetable({ slackSeconds: -300 })));
+    assert.ok(late.box.includes('약속보다 5분 늦게 도착')); late.r.unmount();
+});
+
+test('153 화면 ESTIMATE·이전 실행: 오류 없이 탑승 열차 없음, 도착·여유를 만들지 않음, 문구 구분', async () => {
+    const estimate = await reco153Screen(reco153Run(reco153Estimate()));
+    assert.deepEqual(estimate.box, ['내 이동', '18:38 출발 → 19:00 도착', '약속 시각에 딱 맞춰 도착', '고정 소요시간으로 계산한 예상값이에요']);
+    assert.ok(estimate.detail.some(text => text.includes('서버 역 88001 → 서버 추천역'))); // legs 가 없으면 기존 segments
+    estimate.r.unmount();
+    const past = await reco153Screen(reco153Run(reco153Past));
+    assert.deepEqual(past.box, ['내 이동', '18:38 출발', '이전 계산 결과라 열차 정보가 없어요']);
+    assert.ok(!past.box.some(text => /도착|0분/.test(text)));
+    assert.ok(past.detail.includes('18:38 출발'), JSON.stringify(past.detail));
+    assert.ok(findElement(past.view, element => element.props?.label === '평균 예상 시간')); // "예상" 라벨 유지
+    past.r.unmount();
+    // 약속 시각이 없으면(slack null) 여유를 표시하지 않아요.
+    const noAppointment = await reco153Screen(reco153Run(reco153Timetable({ slackSeconds: null })));
+    assert.ok(!noAppointment.box.some(text => text.includes('약속') && text.includes('도착') && !text.includes('출발')));
+    noAppointment.r.unmount();
+});
+
+test('153 stale 이면 출발·도착 근처에 바뀌기 전 계획 안내(배너와 같은 이유 문구)', async () => {
+    const { r, box, detail, view } = await reco153Screen(reco153Run(reco153Timetable(), { isStale: true, staleReasons: ['APPOINTMENT_CHANGED'] }));
+    assert.ok(box.includes('약속·멤버가 바뀌기 전 계획이에요 (약속 시각이 바뀌었어요)'));
+    assert.ok(detail.includes('약속·멤버가 바뀌기 전 계획이에요 (약속 시각이 바뀌었어요)'));
+    assert.ok(findText(view, '약속 시각이 바뀌었어요')); // 기존 배너도 그대로
+    r.unmount();
+    const fresh = await reco153Screen(reco153Run(reco153Timetable()));
+    assert.ok(!fresh.box.some(text => text.includes('바뀌기 전 계획'))); fresh.r.unmount();
+});
+
+/* ---------- 방 경로 검색의 권한·삭제 오류 구분 (#142) ---------- */
+const roomRoute142Cases = [
+    ['NOT_ROOM_MEMBER', 403, '이 약속방에 접근할 수 없어요', '참여 중인 약속방이 아니에요. 약속방 목록에서 확인해 주세요.'],
+    ['ROOM_NOT_FOUND', 404, '약속방을 찾을 수 없어요', '삭제됐거나 존재하지 않는 약속방이에요. 약속방 목록에서 확인해 주세요.'],
+];
+
+function route142Message(r) {
+    const error = findElement(r.render(), element => element.props?.code);
+    assert.ok(error);
+    return error.type(error.props);
+}
+
+test('142 방 경로의 403·404 코드를 보존하고 동일 역도 서버의 방 권한 검사를 거쳐요', async () => {
+    for (const [code, status] of roomRoute142Cases) for (const same of [false, true]) {
+        const r = createRuntime(serverEnv); const calls = [];
+        const service = r.load('src/services/route.ts'); const { RouteSearchError } = r.load('src/types/route.ts');
+        r.context.fetch = async (url, options) => { calls.push({ url, options }); return jsonResponse({ success: false, error: { code } }, status); };
+        const destination = same ? routeOrigin : routeDestination;
+        await assert.rejects(service.searchRoute(routeOrigin, destination, { roomId: 'room-142' }), error => error instanceof RouteSearchError && error.code === code);
+        assert.equal(calls.length, 1); assert.equal(calls[0].url, 'https://example.test/api/v1/routes/search');
+        assert.deepEqual(JSON.parse(calls[0].options.body), { originStationId: routeOrigin.id, destinationStationId: destination.id, roomId: 'room-142' });
+    }
+});
+
+test('142 비멤버·없는 방은 서로 다른 안내와 방 목록 버튼만 표시하고 경로를 재시도하지 않아요', async () => {
+    for (const [code, status, title, description] of roomRoute142Cases) for (const same of [false, true]) {
+        const r = await screen141({ departure: '강남', destination: same ? '강남역' : '사당', roomId: 'room-142' },
+            () => jsonResponse({ success: false, error: { code } }, status));
+        const moves = []; r.external['expo-router'].router.replace = href => moves.push(['replace', href]);
+        r.external['expo-router'].router.push = href => moves.push(['push', href]);
+        const message = route142Message(r);
+        assert.equal(message.props.title, title); assert.equal(message.props.description, description);
+        assert.equal(message.props.actionLabel, '약속방 목록으로');
+        const content = message.type(message.props);
+        assert.equal(findElement(content, element => element.type === 'Text' && element.props.children === '다시 시도'), null);
+        const button = findElement(content, element => element.type === 'Pressable'); assert.ok(button);
+        button.props.onPress(); assert.deepEqual(moves, [['replace', '/rooms']]);
+        r.advance(60000); await settle();
+        assert.equal(r.calls141.filter(call => call.options.method === 'POST').length, 1);
+        assert.equal(sameMessage141(r.render()), null); r.unmount();
+    }
+});
+
+test('142 네트워크·외부 경로 장애는 방·개인 경로 모두 기존 다시 시도로 정상 경로를 불러와요', async () => {
+    for (const roomId of [undefined, 'room-142']) for (const code of ['NETWORK_ERROR', 'EXTERNAL_API_ERROR']) {
+        let count = 0;
+        const r = await screen141({ departure: '강남', destination: '사당', ...(roomId ? { roomId } : {}) }, () => {
+            if (++count > 1) return jsonResponse({ success: true, data: routeData() });
+            if (code === 'NETWORK_ERROR') throw new TypeError('연결 실패');
+            return jsonResponse({ success: false, error: { code } }, 502);
+        });
+        const message = route142Message(r);
+        assert.equal(message.props.title, '경로를 불러오지 못했어요'); assert.equal(message.props.actionLabel, '다시 시도');
+        assert.equal(findElement(message.type(message.props), element => element.props?.children === '약속방 목록으로'), null);
+        await message.props.onAction(); await settle();
+        assert.equal(count, 2); assert.ok(findElement(r.render(), element => element.props?.route?.routeId === 'server-route-1'));
+        const body = JSON.parse(r.calls141.filter(call => call.options.method === 'POST')[0].options.body);
+        assert.equal(Object.hasOwn(body, 'roomId'), roomId !== undefined); r.unmount();
+    }
+});
+
+test('142 방 검색의 TOKEN 계열·인증 오류는 원본을 보존하고 방 접근 오류 안내나 목록 이동을 추가하지 않아요', async () => {
+    for (const code of ['TOKEN_EXPIRED', 'TOKEN_INVALID', 'TOKEN_FUTURE', 'AUTH_REQUIRED']) {
+        const r = createRuntime(serverEnv); const { ApiError } = r.load('src/services/api/errors.ts');
+        r.context.fetch = async () => jsonResponse({ success: false, error: { code, message: '인증 오류' } }, 401);
+        await assert.rejects(r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination, { roomId: 'room-142' }),
+            error => error instanceof ApiError && error.code === code && error.status === 401);
+        const screen = await screen141({ departure: '강남', destination: '사당', roomId: 'room-142' },
+            () => jsonResponse({ success: false, error: { code } }, 401));
+        const view = screen.render(); assert.equal(findElement(view, element => element.props?.code), null);
+        assert.equal(findElement(view, element => element.props?.actionLabel === '약속방 목록으로'), null);
+        assert.equal(screen.calls141.filter(call => call.options.method === 'POST').length, 1); screen.unmount();
+    }
+});
+
+test('142 이전 방의 늦은 권한 오류는 새 방의 정상 경로를 덮지 않아요', async () => {
+    for (const [code, status] of roomRoute142Cases) {
+        let resolveOld;
+        const params = { departure: '강남', destination: '사당', roomId: 'old-room-142' };
+        const r = await screen141(params, body => body.roomId === 'old-room-142'
+            ? new Promise(resolve => { resolveOld = resolve; }) : jsonResponse({ success: true, data: routeData() }));
+        assert.ok(resolveOld); params.roomId = 'new-room-142';
+        for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+        assert.ok(findElement(r.render(), element => element.props?.route?.routeId === 'server-route-1'));
+        resolveOld(jsonResponse({ success: false, error: { code } }, status)); await settle();
+        const view = r.render(); assert.equal(findElement(view, element => element.props?.code), null);
+        assert.ok(findElement(view, element => element.props?.route?.routeId === 'server-route-1')); r.unmount();
+    }
+});
+
+test('142 방에서 개인 검색으로 바꾸면 이전 방 오류를 지우고 roomId 없는 요청으로 정상 경로를 표시해요', async () => {
+    for (const [code, status] of roomRoute142Cases) {
+        const params = { departure: '강남', destination: '사당', roomId: 'room-142' };
+        const r = await screen141(params, body => Object.hasOwn(body, 'roomId')
+            ? jsonResponse({ success: false, error: { code } }, status) : jsonResponse({ success: true, data: routeData() }));
+        assert.equal(findElement(r.render(), element => element.props?.code)?.props.code, code);
+        delete params.roomId;
+        for (let i = 0; i < 5; i++) { r.render(); await settle(); }
+        const view = r.render(); assert.equal(findElement(view, element => element.props?.code), null);
+        assert.ok(findElement(view, element => element.props?.route?.routeId === 'server-route-1'));
+        const calls = r.calls141.filter(call => call.options.method === 'POST'); assert.equal(calls.length, 2);
+        assert.equal(Object.hasOwn(JSON.parse(calls[1].options.body), 'roomId'), false); r.unmount();
+    }
+});
+
+/* ---------- 개인 경로 시각 선택·시각표 계약 (#152, BE #130) ---------- */
+const NOW152 = Date.parse('2026-11-14T12:34:56.900+09:00');
+const DEPART152 = '2026-11-14T23:50:00+09:00';
+const ARRIVE152 = '2026-11-15T00:08:00+09:00';
+function clock152(r) {
+    r.context.Date = class extends Date {
+        constructor(...args) { super(...(args.length ? args : [NOW152])); }
+        static now() { return NOW152; }
+    };
+    return r;
+}
+function data152() {
+    const data = routeData(); data.routeSource = 'INTERNAL';
+    Object.assign(data.routes[0].summary, { departureAt: '2026-11-14T23:35:00+09:00', arrivalAt: '2026-11-15T00:05:00+09:00',
+        totalTimeSec: 1800, waitSec: null, waitKind: null, totalWithWaitSec: null, slackSeconds: 180,
+        noService: false, serviceNotice: null, arrivesAfterAppointment: false });
+    return data;
+}
+async function pump152(r) { for (let i = 0; i < 5; i++) { r.render(); await settle(); } return r.render(); }
+async function screen152(response = () => jsonResponse({ success: true, data: data152() }), params = { departure: '강남', destination: '사당' }) {
+    const r = clock152(routeScreenRuntime(params)); r.calls152 = []; r.params152 = params;
+    r.context.fetch = async (url, options) => {
+        if (url.endsWith('/routes/search')) { const body = JSON.parse(options.body); r.calls152.push(body); return response(body); }
+        return jsonResponse({ success: true, data: stationSearchData([url.includes(encodeURIComponent('사당')) ? serverRouteStation(99002, '사당') : serverRouteStation(88001, '강남')]) });
+    };
+    r.selector152 = () => findElement(r.render(), element => element.type === r.load('src/components/route/RouteTimeSelector.tsx').default);
+    r.card152 = () => findElement(r.render(), element => element.type === r.load('src/components/route/RouteCard.tsx').default);
+    await pump152(r); return r;
+}
+
+test('152 지금 출발은 두 시각을 생략하고 출발·도착 지정은 선택한 필드 하나와 서버 역 ID를 그대로 보내요', async () => {
+    for (const options of [{}, { departAt: DEPART152 }, { arriveAt: ARRIVE152 }, { departAt: '2026-11-13T10:00:00+09:00' }, { roomId: 'room-152', arriveAt: ARRIVE152 }]) {
+        const r = clock152(createRuntime(serverEnv)); const calls = [];
+        r.context.fetch = async (url, request) => { calls.push({ url, request }); return jsonResponse({ success: true, data: data152() }); };
+        await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination, options);
+        assert.equal(calls.length, 1); assert.equal(calls[0].url, 'https://example.test/api/v1/routes/search');
+        assert.deepEqual(JSON.parse(calls[0].request.body), { originStationId: routeOrigin.id, destinationStationId: routeDestination.id, ...options });
+    }
+});
+
+test('152 동시 입력·오프셋 누락·과거 도착·서울 날짜 상한 초과는 서버·mock 모두 요청 전에 거절해요', async () => {
+    for (const mock of [false, true]) {
+        const r = clock152(createRuntime(mock ? {} : serverEnv)); let calls = 0;
+        r.context.fetch = async () => { calls++; return jsonResponse({ success: true, data: data152() }); };
+        for (const options of [{ departAt: DEPART152, arriveAt: ARRIVE152 }, { departAt: '2026-11-14T23:50:00' }, { arriveAt: '' },
+            { arriveAt: '2026-11-14T12:34:55+09:00' }, { arriveAt: '2027-11-15T00:00:00+09:00' },
+            { departAt: '2026-02-30T12:00:00+09:00' }, { departAt: '2026-11-14T24:00:00+09:00' }, { departAt: '2026-11-14T12:00:00+18:30' }]) {
+            await assert.rejects(r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination, options), { code: 'VALIDATION_ERROR' });
+        }
+        assert.equal(calls, 0);
+    }
+});
+
+test('152 서울 시간 변환은 자정·연말·윤일을 보정 없이 처리하고 도착 범위는 초 단위 현재부터 365일의 날짜 끝까지예요', () => {
+    const r = clock152(createRuntime()); const time = r.load('src/utils/route-time.ts');
+    assert.deepEqual(plain(time.seoulDateTime('2026-11-13T16:05:00Z')), { date: '2026-11-14', time: '01:05' });
+    assert.equal(time.formatRouteDateTime('2026-12-31T15:01:00Z'), '2027.01.01 00:01');
+    assert.equal(time.toRouteTimeInstant('2028-02-29', '00:01'), '2028-02-29T00:01:00+09:00');
+    for (const [date, value] of [['2026-02-29', '12:00'], ['2026-11-31', '12:00'], ['2026-11-14', '24:00'], ['2026-11-14', '12:60']]) assert.equal(time.toRouteTimeInstant(date, value), null);
+    assert.equal(time.validateRouteTimeOptions({ arriveAt: '2026-11-14T12:34:56+09:00' }), null);
+    assert.equal(time.validateRouteTimeOptions({ arriveAt: '2027-11-14T23:59:59+09:00' }), null);
+    assert.ok(time.validateRouteTimeOptions({ arriveAt: '2027-11-15T00:00:00+09:00' }));
+    assert.equal(time.validateRouteTimeOptions({ departAt: '2020-01-01T00:00:00Z' }), null);
+    assert.equal(time.arrivalLastDate(Date.parse('2026-11-13T23:30:00Z')), '2027-11-14');
+});
+
+test('152 시각 오류 400·운행 없음·도착 불가 422를 구분하고 설정된 범위 안내와 인증 원본을 유지해요', async () => {
+    const r = clock152(createRuntime(serverEnv)); const service = r.load('src/services/route.ts');
+    for (const [code, status] of [['VALIDATION_ERROR', 400], ['NO_SERVICE_TIME', 422], ['ARRIVAL_UNREACHABLE', 422]]) {
+        r.context.fetch = async () => jsonResponse({ success: false, error: { code, details: { arriveAt: '도착 날짜는 오늘부터 30일 이내여야 해요.' } } }, status);
+        await assert.rejects(service.searchRoute(routeOrigin, routeDestination, { arriveAt: ARRIVE152 }), error => error.code === code
+            && (code !== 'VALIDATION_ERROR' || error.message === '도착 날짜는 오늘부터 30일 이내여야 해요.'));
+    }
+    for (const code of ['TOKEN_EXPIRED', 'TOKEN_INVALID', 'TOKEN_FUTURE', 'AUTH_REQUIRED']) {
+        r.context.fetch = async () => jsonResponse({ success: false, error: { code } }, 401);
+        await assert.rejects(service.searchRoute(routeOrigin, routeDestination, { departAt: DEPART152 }), error => error instanceof r.load('src/services/api/errors.ts').ApiError && error.code === code);
+    }
+});
+
+test('152 여유 시간은 null·생략·0·양의 정수를 보존하고 잘못된 값은 거절하며 서버 출발·도착·총시간을 재계산하지 않아요', async () => {
+    const r = clock152(createRuntime(serverEnv)); const parse = r.load('src/services/route.ts').__parseRouteSearch;
+    for (const value of [undefined, null, 0, 180]) {
+        const data = data152(); if (value === undefined) delete data.routes[0].summary.slackSeconds; else data.routes[0].summary.slackSeconds = value;
+        r.context.fetch = async () => jsonResponse({ success: true, data });
+        const summary = (await r.load('src/services/route.ts').searchRoute(routeOrigin, routeDestination, { arriveAt: ARRIVE152 })).routes[0].summary;
+        assert.equal(Object.hasOwn(summary, 'slackSeconds'), value !== undefined); assert.equal(summary.slackSeconds, value);
+        for (const key of ['departureAt', 'arrivalAt', 'totalTimeSec', 'totalWithWaitSec']) assert.equal(summary[key], data.routes[0].summary[key]);
+    }
+    for (const invalid of [-1, 1.5, '180', false, {}, Number.NaN]) {
+        const data = data152(); data.routes[0].summary.slackSeconds = invalid; assert.throws(() => parse(data), { code: 'UNKNOWN_ERROR' });
+    }
+});
+
+function selector152(value = { mode: 'now' }) {
+    const r = clock152(createScreenRuntime(serverEnv, 'src/components/route/RouteTimeSelector.tsx', runtime => { runtime.native.ScrollView = 'ScrollView'; }));
+    const Selector = r.screen.default; const changes = [];
+    const props = { value, open: false, onOpen() { props.open = true; }, onClose() { props.open = false; }, onChange(next) { changes.push(next); props.value = next; } };
+    r.screen.default = () => Selector(props);
+    r.pump152 = () => { r.render(); return r.render(); };
+    r.button152 = label => findElement(r.pump152(), element => element.type === 'Pressable' && (element.props.accessibilityLabel === label || textOf(element) === label));
+    r.child152 = name => findElement(r.pump152(), element => element.type?.name === name);
+    return Object.assign(r, { props152: props, changes152: changes });
+}
+
+test('152 시각 선택은 적용 전에 검색하지 않고 날짜·시각 취소와 모달 닫기는 이전 조건을 유지해요', () => {
+    const r = selector152(); r.button152('검색 시각 선택').props.onPress(); r.pump152();
+    findElement(r.pump152(), element => element.type === 'Pressable' && element.props.accessibilityRole === 'switch' && element.props.accessibilityLabel === '도착 시각 설정').props.onPress();
+    const wheel = r.child152('DateTimeWheel'); assert.ok(wheel);
+    assert.equal(wheel.props.minDate, '2026-11-14'); assert.equal(wheel.props.maxDate, '2027-11-14');
+    wheel.props.onChange('2026-11-15', wheel.props.time); r.child152('DateTimeWheel').props.onChange('2026-11-15', '00:08'); assert.equal(r.changes152.length, 0);
+    const modal = findElement(r.pump152(), element => element.type === 'Modal' && element.props.visible);
+    modal.props.onRequestClose(); r.pump152(); assert.equal(r.changes152.length, 0); assert.deepEqual(r.props152.value, { mode: 'now' });
+    r.button152('검색 시각 선택').props.onPress(); const view = r.pump152();
+    for (const label of ['출발 시각 설정', '도착 시각 설정']) assert.equal(findElement(view, element => element.props?.accessibilityRole === 'switch' && element.props.accessibilityLabel === label).props.accessibilityState.checked, false);
+    r.unmount();
+});
+
+test('152 날짜·시각을 고르고 적용하면 한 모드만 전달하고 과거 도착은 모달에서 수정하도록 안내해요', () => {
+    for (const mode of ['departure', 'arrival']) {
+        const r = selector152(); r.button152('검색 시각 선택').props.onPress(); r.pump152();
+        findElement(r.pump152(), element => element.type === 'Pressable' && element.props.accessibilityRole === 'switch' && element.props.accessibilityLabel === (mode === 'departure' ? '출발 시각 설정' : '도착 시각 설정')).props.onPress();
+        let wheel = r.child152('DateTimeWheel'); wheel.props.onChange('2026-11-15', wheel.props.time);
+        wheel = r.child152('DateTimeWheel'); wheel.props.onChange(wheel.props.date, '00:08');
+        assert.equal(r.changes152.length, 0); r.button152('확인').props.onPress();
+        assert.deepEqual(plain(r.changes152), [{ mode, at: ARRIVE152 }]); assert.equal(r.props152.open, false); r.unmount();
+    }
+    const r = selector152({ mode: 'arrival', at: '2026-11-14T12:00:00+09:00' });
+    r.button152('검색 시각 선택').props.onPress(); r.pump152(); r.button152('확인').props.onPress();
+    assert.equal(r.changes152.length, 0); assert.ok(findText(r.pump152(), '도착 시각은 현재 이후로 선택해 주세요.')); r.unmount();
+});
+
+test('152 공용 달력의 기본 약속 문구를 유지하고 개인 경로의 제목·최소·최대 날짜를 적용해요', () => {
+    const r = selector152(); const Calendar = r.load('src/components/rooms/appointment-picker.tsx').CalendarModal;
+    let view = r.renderComponent({ type: Calendar, props: { visible: true, value: '2026-11-14', onConfirm() {}, onClose() {} } });
+    assert.ok(findText(view, '약속 날짜 선택'));
+    const props = { visible: true, value: '2026-11-14', title: '도착 날짜 선택', minDate: '2026-11-14', maxDate: '2026-11-20', onConfirm() {}, onClose() {} };
+    view = r.renderComponent({ type: Calendar, props }); view = r.renderComponent({ type: Calendar, props });
+    assert.ok(findText(view, '도착 날짜 선택'));
+    const day = n => findElement(view, element => element.type === 'Pressable' && textOf(element) === String(n));
+    assert.equal(day(13).props.disabled, true); assert.equal(day(14).props.disabled, false); assert.equal(day(21).props.disabled, true); r.unmount();
+});
+
+test('152 개인 화면의 지금·출발·도착 모드는 요청을 구분하고 약속방에서는 선택 UI와 개인 조건을 제거해요', async () => {
+    const r = await screen152(); assert.deepEqual(r.calls152, [{ originStationId: 88001, destinationStationId: 99002 }]);
+    r.selector152().props.onOpen(); await pump152(r); r.selector152().props.onClose(); await pump152(r); assert.equal(r.calls152.length, 1);
+    for (const value of [{ mode: 'departure', at: DEPART152 }, { mode: 'arrival', at: ARRIVE152 }, { mode: 'now' }]) {
+        r.selector152().props.onChange(value); await pump152(r);
+        const expected = value.mode === 'departure' ? { departAt: value.at } : value.mode === 'arrival' ? { arriveAt: value.at } : {};
+        assert.deepEqual(r.calls152.at(-1), { originStationId: 88001, destinationStationId: 99002, ...expected });
+    }
+    r.selector152().props.onChange({ mode: 'arrival', at: ARRIVE152 }); await pump152(r);
+    r.params152.roomId = 'room-152'; await pump152(r);
+    assert.equal(r.selector152(), null); assert.deepEqual(r.calls152.at(-1), { originStationId: 88001, destinationStationId: 99002, roomId: 'room-152' });
+    r.card152().props.onStart(); assert.equal(r.load('src/stores/route-store.ts').getSelectedRoute().searchTime, undefined); r.unmount();
+});
+
+test('152 시각 변경 전의 늦은 성공·실패는 새 검색 조건과 결과를 덮지 않아요', async () => {
+    for (const rejected of [false, true]) {
+        let resolveOld;
+        const r = await screen152(body => !body.departAt ? new Promise(resolve => { resolveOld = resolve; }) : jsonResponse({ success: true, data: data152() }));
+        assert.ok(resolveOld); r.selector152().props.onChange({ mode: 'departure', at: DEPART152 });
+        resolveOld(rejected ? jsonResponse({ success: false, error: { code: 'NO_SERVICE_TIME' } }, 422) : jsonResponse({ success: true, data: route141Data(true) }));
+        await pump152(r); assert.ok(r.card152()); assert.equal(findElement(r.render(), element => element.props?.code), null);
+        r.card152().props.onStart(); assert.deepEqual(plain(r.load('src/stores/route-store.ts').getSelectedRoute().searchTime), { mode: 'departure', at: DEPART152 }); r.unmount();
+    }
+});
+
+test('152 결과·안내는 검색한 조건과 자정 다음 날의 서버 날짜·여유 시간을 그대로 표시해요', async () => {
+    const r = await screen152(); r.selector152().props.onChange({ mode: 'arrival', at: ARRIVE152 }); await pump152(r);
+    const card = r.card152(); const view = card.type(card.props);
+    assert.ok(findText(view, '2026.11.14 23:35 출발')); assert.ok(findText(view, '2026.11.15 00:05 도착'));
+    assert.ok(findText(view, '지정한 도착 시각보다 3분 일찍 도착해요.'));
+    const notice = findElement(r.render(), element => element.type === r.load('src/components/route/RouteTimeNotice.tsx').default);
+    assert.ok(findText(notice.type(notice.props), '검색 조건 · 2026.11.15 00:08까지 도착'));
+    card.props.onStart(); const selected = r.load('src/stores/route-store.ts').getSelectedRoute(); const guide = route147Guide(selected);
+    const relative = guide.load('src/utils/route-time.ts').formatRouteRelativeDateTime;
+    const guideView = guide.render(); assert.ok(findTextIncluding(guideView, `${relative(selected.route.summary.departureAt)} → ${relative(selected.route.summary.arrivalAt)} 도착`));
+    const guideNotice = findElement(guideView, element => element.type === guide.load('src/components/route/RouteTimeNotice.tsx').default);
+    assert.equal(guideNotice.props.selection.at, ARRIVE152);
+    const timeline = findElement(guideView, element => element.type === guide.Timeline); assert.equal(Object.hasOwn(timeline.props, 'showDates'), false);
+    assert.equal(timeline.props.nextTrains, false, '시각 지정 경로에 현재의 실시간 도착정보를 섞지 않아요');
+    assert.ok(findText(guide.renderComponent(timeline), `${relative(selected.route.summary.arrivalAt)} 도착 예정`));
+    assert.equal(r.load('src/utils/route-time.ts').formatArrivalSlack(0), '지정한 도착 시각에 도착해요.'); r.unmount(); guide.unmount();
+});
+
+test('152 첫차 전·막차 후 응답의 출발 날짜·대기 포함 시간·첫차 및 지각 안내를 서버 값 그대로 유지해요', async () => {
+    for (const at of ['2026-11-14T03:00:00+09:00', '2026-11-15T00:50:00+09:00']) {
+        const data = data152(); Object.assign(data.routes[0].summary, { departureAt: '2026-11-15T05:36:00+09:00', arrivalAt: '2026-11-15T05:51:13+09:00',
+            noService: true, serviceNotice: '서버가 안내한 다음 운행일 첫차예요.', arrivesAfterAppointment: true, waitKind: 'TIMETABLE', waitSec: 17160, totalWithWaitSec: 18073, slackSeconds: null });
+        const r = await screen152(() => jsonResponse({ success: true, data })); r.selector152().props.onChange({ mode: 'departure', at }); await pump152(r);
+        const card = r.card152(); assert.deepEqual(plain(card.props.route.summary), plain(data.routes[0].summary));
+        const view = card.type(card.props); assert.ok(findText(view, '2026.11.15 05:36 출발')); assert.ok(findText(view, '대기 포함 301분'));
+        const notices = findElement(view, element => element.type === r.load('src/components/route/RouteNotices.tsx').default);
+        const shown = notices.type(notices.props); assert.ok(findText(shown, '서버가 안내한 다음 운행일 첫차예요.')); assert.ok(findText(shown, '약속 시각보다 늦게 도착해요')); r.unmount();
+    }
+});
+
+test('152 도착 불가·운행 없음·시각 검증 오류는 재시도 대신 시각 선택을 열고 입력 조건을 유지해요', async () => {
+    for (const [code, status] of [['NO_SERVICE_TIME', 422], ['ARRIVAL_UNREACHABLE', 422], ['VALIDATION_ERROR', 400]]) {
+        const r = await screen152(() => jsonResponse({ success: false, error: { code, details: { arriveAt: '설정된 날짜 범위를 확인해 주세요.' } } }, status));
+        r.selector152().props.onChange({ mode: 'arrival', at: ARRIVE152 }); await pump152(r);
+        const error = findElement(r.render(), element => element.props?.code === code); assert.ok(error);
+        const message = error.type(error.props); assert.equal(message.props.actionLabel, '시각 바꾸기');
+        assert.equal(findText(message.type(message.props), '다시 시도'), null);
+        const count = r.calls152.length; message.props.onAction(); await pump152(r);
+        assert.equal(r.calls152.length, count); assert.equal(r.selector152().props.open, true); assert.equal(r.selector152().props.value.at, ARRIVE152); r.unmount();
+    }
+});
+
+test('152 도착 적용 여부 없는 대체 결과는 미확인으로 안내하고 mock은 시각표 결과로 표현하지 않아요', () => {
+    const r = createRuntime(serverEnv); const Notice = r.load('src/components/route/RouteTimeNotice.tsx').default;
+    const selection = { mode: 'arrival', at: ARRIVE152 };
+    for (const value of [undefined, null, 0, 180]) {
+        const data = data152(); data.routes[0].summary.slackSeconds = value;
+        const view = Notice({ selection, routes: data.routes, mock: false });
+        assert.equal(!!findText(view, '지정한 도착 시각의 적용 여부를 확인할 수 없어요. 표시된 실제 출발·도착 시각을 확인해 주세요.'), value == null);
+    }
+    assert.ok(findText(Notice({ selection, routes: data152().routes, mock: true }), '예시 경로예요. 실제 열차 시각표로 계산한 결과가 아니에요.'));
+    assert.equal(findText(Notice({ selection, routes: [], mock: false }), '지정한 도착 시각의 적용 여부를 확인할 수 없어요. 표시된 실제 출발·도착 시각을 확인해 주세요.'), null);
+});
+
+test('152 mock 시간 선택은 서버 호출 없이 예시 날짜로 표시하고 기존 지금 출발과 동일 역 동작을 유지해요', async () => {
+    const r = clock152(createRuntime()); let calls = 0; r.context.fetch = async () => { calls++; throw Error(); };
+    const service = r.load('src/services/route.ts'); const stations = r.load('src/mocks/routes.ts').MOCK_STATIONS;
+    const from = stations.find(station => station.name === '건대입구'); const to = stations.find(station => station.name === '사당');
+    for (const options of [{}, { departAt: DEPART152 }, { arriveAt: ARRIVE152 }]) {
+        const pending = service.searchRoute(from, to, options); r.advance(800); const result = await pending;
+        for (const route of result.routes) {
+            if (options.departAt) assert.equal(Date.parse(route.summary.departureAt), Date.parse(DEPART152));
+            else if (options.arriveAt) { assert.equal(Date.parse(route.summary.arrivalAt), Date.parse(ARRIVE152)); assert.equal(route.summary.slackSeconds, 0); }
+            else assert.equal(route.summary.departureAt, undefined);
+        }
+    }
+    const same = service.searchRoute(from, from, { arriveAt: ARRIVE152 }); r.advance(800); assert.equal((await same).routes.length, 0); assert.equal(calls, 0);
+});
+
+/* ---------- #139 응답 유실 뒤 재시도의 중복 저장 방지 ---------- */
+
+/** 명세 10.1·10.2 를 흉내 내는 가짜 서버. post: 'ok' | 'saveLose'(저장 후 응답 유실) | 'lose'(저장 안 됨, 응답 실패) */
+function chat139Server(r, initial = 10) {
+    const server = { messages: [], seq: 0, post: 'ok', posts: 0, gets: 0, hold: null };
+    server.make = (senderId, content) => {
+        const n = ++server.seq;
+        return chat118Message({ id: `01900000-0000-7000-8000-${String(500000 + n).padStart(12, '0')}`, senderId,
+            nickname: senderId === ROOM_QUERY_ME ? '서버 나' : '상대', content, createdAt: new Date(Date.UTC(2026, 10, 12, 9, 0, 0) + n * 1000).toISOString() });
+    };
+    server.addOthers = count => { for (let i = 0; i < count; i++) server.messages.push(server.make(ROOM_QUERY_OTHER, `상대 ${server.seq + 1}`)); };
+    server.mine = content => server.messages.filter(message => message.senderId === ROOM_QUERY_ME && message.content === content);
+    server.addOthers(initial);
+    r.context.fetch = async (url, options) => {
+        if (options.method === 'POST') {
+            server.posts++;
+            const mode = server.post; const message = server.make(ROOM_QUERY_ME, JSON.parse(options.body).content);
+            if (mode !== 'lose') server.messages.push(message);
+            if (mode !== 'ok') throw new TypeError('응답 유실');
+            return ok({ message, aiPending: false });
+        }
+        server.gets++;
+        if (server.hold) await server.hold(server.gets);
+        const cursor = new URL(url).searchParams.get('cursor'); const size = 30;
+        const all = [...server.messages].reverse();
+        const start = cursor ? all.findIndex(message => message.id === cursor) + 1 : 0;
+        const items = all.slice(start, start + size); const hasMore = start + size < all.length;
+        return ok({ items, hasMore, nextCursor: hasMore ? items.at(-1).id : null });
+    };
+    return server;
+}
+async function chat139Hook(initial = 10, realtime = 'open') {
+    const r = chat118Hook(realtime); const server = chat139Server(r, initial);
+    r.render(); await drain137();
+    r.sendText = async (content, mode) => { server.post = mode; r.render().setDraft(content); r.render().send(); await drain137(); return r.render().pending.at(-1); };
+    r.retry = async entry => { r.render().retrySend(r.render().pending.find(item => item.clientId === entry.clientId)); await drain137(); };
+    return { r, server };
+}
+const mineIn139 = (view, content) => view.messages.filter(message => message.senderId === ROOM_QUERY_ME && message.content === content);
+
+test('139 저장됐는데 응답 유실 → 이후 40개 추가(최신 30개 밖) → 재시도: 원본을 찾아 저장 처리, POST 추가 없음', async () => {
+    const { r, server } = await chat139Hook();
+    const entry = await r.sendText('안녕하세요', 'saveLose');
+    assert.equal(entry.status, 'failed'); assert.equal(server.posts, 1);
+    server.addOthers(40); server.post = 'ok';
+    await r.retry(entry);
+    assert.equal(server.posts, 1); assert.equal(server.mine('안녕하세요').length, 1);
+    assert.equal(r.render().pending.length, 0);
+    assert.deepEqual(plain(mineIn139(r.render(), '안녕하세요')).map(message => message.id), server.mine('안녕하세요').map(message => message.id));
+    r.unmount();
+});
+
+test('139 응답 유실이지만 실제로 저장 안 됨 → 재시도: 기준점까지 확인 후 POST 1번', async () => {
+    const { r, server } = await chat139Hook();
+    const entry = await r.sendText('저장 안 된 메시지', 'lose');
+    server.addOthers(40); server.post = 'ok'; server.gets = 0;
+    await r.retry(entry);
+    assert.equal(server.posts, 2); assert.ok(server.gets >= 2); // 최신 30개를 넘어 기준점까지 확인했어요
+    assert.equal(server.mine('저장 안 된 메시지').length, 1); assert.equal(r.render().pending.length, 0);
+    r.unmount();
+});
+
+test('139 같은 본문 두 번 전송·둘 다 저장 후 응답 유실 → 각각 다른 메시지로 확인, POST 추가 없음', async () => {
+    const { r, server } = await chat139Hook();
+    const first = await r.sendText('같은 본문', 'saveLose'); const second = await r.sendText('같은 본문', 'saveLose');
+    server.addOthers(35); server.post = 'ok';
+    await r.retry(first); await r.retry(second);
+    assert.equal(server.posts, 2); assert.equal(r.render().pending.length, 0);
+    const shown = plain(mineIn139(r.render(), '같은 본문')).map(message => message.id);
+    assert.equal(shown.length, 2); assert.equal(new Set(shown).size, 2);
+    r.unmount();
+});
+
+test('139 같은 본문 두 번 전송·하나만 저장 → 하나는 확인, 하나는 다시 보내요', async () => {
+    const { r, server } = await chat139Hook();
+    const first = await r.sendText('하나만 저장', 'saveLose'); const second = await r.sendText('하나만 저장', 'lose');
+    server.addOthers(35); server.post = 'ok';
+    await r.retry(first); assert.equal(server.posts, 2);
+    await r.retry(second); assert.equal(server.posts, 3);
+    assert.equal(server.mine('하나만 저장').length, 2); assert.equal(r.render().pending.length, 0);
+    assert.equal(mineIn139(r.render(), '하나만 저장').length, 2);
+    r.unmount();
+});
+
+test('139 상한까지 기준점을 못 만나면 자동 전송 없이 불명 안내, 한 번 더 누르면 POST 1번', async () => {
+    const { r, server } = await chat139Hook(5);
+    const entry = await r.sendText('너무 오래전 메시지', 'lose');
+    server.addOthers(400); server.post = 'ok';
+    await r.retry(entry);
+    let pending = r.render().pending[0];
+    assert.equal(server.posts, 1);
+    assert.equal(pending.status, 'failed'); assert.equal(pending.unconfirmed, true);
+    assert.equal(pending.errorMessage, '저장됐는지 확인하지 못했어요. 다시 보내면 같은 메시지가 두 번 저장될 수 있어요.');
+    assert.equal(pending.clientId, entry.clientId); // 재시도에도 같은 clientId(나중의 멱등 키)
+    // 화면 버튼은 "그래도 다시 보내기"
+    const panel = createScreenRuntime(serverEnv, 'src/components/rooms/chat-panel.tsx', runtime => {
+        Object.assign(runtime.native, { ScrollView: 'ScrollView', Platform: { OS: 'ios', select: value => value.ios }, Keyboard: { dismiss() {}, addListener: () => ({ remove() {} }) } });
+    });
+    const panelView = panel.renderComponent({ type: panel.screen.default, props: { controller: r.render(), myUserId: ROOM_QUERY_ME, members: [] } });
+    assert.ok(findElement(panelView, element => element.props?.label === '그래도 다시 보내기'));
+    server.gets = 0;
+    await r.retry(pending);
+    assert.equal(server.posts, 2); assert.equal(server.gets, 0); // 확인 없이 보내요
+    assert.equal(r.render().pending.length, 0);
+    r.unmount();
+});
+
+test('139 기준점을 알 수 없으면(유실) 확인하지 않고 불명이에요', async () => {
+    const hook = createRuntime(serverEnv).load('src/hooks/use-room-chat.ts'); let fetched = 0;
+    const result = await hook.checkChatSend(async () => { fetched++; return { items: [], hasMore: false, nextCursor: null }; }, undefined, () => true, () => true);
+    assert.equal(result.status, 'unknown'); assert.equal(fetched, 0);
+    // 빈 방에서 처음까지 다 봤으면 확실히 저장 안 됨이에요.
+    const empty = await hook.checkChatSend(async () => ({ items: [], hasMore: false, nextCursor: null }), new Set(), () => true, () => true);
+    assert.equal(empty.status, 'notSaved');
+});
+
+test('139 WS 로 내 메시지가 늦게 도착: 오래된 전송부터 하나씩 확인, 이후 재시도에 중복 POST 없음', async () => {
+    const { r, server } = await chat139Hook();
+    const first = await r.sendText('늦게 온 메시지', 'saveLose'); const second = await r.sendText('늦게 온 메시지', 'saveLose');
+    const [savedFirst] = server.mine('늦게 온 메시지');
+    r.event(savedFirst); r.event(savedFirst); // 같은 WS 를 두 번 받아도 한 전송만 확인돼요
+    assert.deepEqual(plain(r.render().pending.map(item => item.clientId)), [second.clientId]);
+    server.addOthers(35); server.post = 'ok';
+    await r.retry(second);
+    assert.equal(server.posts, 2); assert.equal(r.render().pending.length, 0);
+    assert.equal(new Set(plain(mineIn139(r.render(), '늦게 온 메시지')).map(message => message.id)).size, 2);
+    assert.equal(first.content, '늦게 온 메시지');
+    r.unmount();
+});
+
+test('139 확인 중 화면 이탈·권한 상실이면 결과를 버리고 POST 하지 않아요', async () => {
+    for (const cause of ['blur', 'reject']) {
+        const { r, server } = await chat139Hook();
+        const entry = await r.sendText('확인 중 이탈', 'lose');
+        server.addOthers(40); server.post = 'ok';
+        let release; const gate = new Promise(resolve => { release = resolve; });
+        const start = server.gets; server.hold = count => count === start + 2 ? gate : undefined;
+        r.render().retrySend(r.render().pending[0]); await settle(); await settle();
+        if (cause === 'blur') r.blur(); else r.reject('NOT_ROOM_MEMBER');
+        release(); await drain137();
+        assert.equal(server.posts, 1, cause);
+        if (cause === 'reject') { assert.equal(r.render().blocked, true); assert.equal(r.render().pending.length, 0); }
+        else assert.equal(r.render().pending[0].clientId, entry.clientId);
+        r.unmount();
+    }
+});
+
+/* ---------- #140 확정 약속역 "내 경로 보기" ---------- */
+
+/** 확정 약속역이 있는 방 상세. members 는 순서를 섞을 수 있어요. */
+function room140Detail({ role = 'OWNER', selected = roomQueryStation(77005), members } = {}) {
+    const detail = roomQueryDetail(role);
+    detail.selectedStation = selected; detail.confirmedAt = selected ? '2026-11-12T10:00:00Z' : null; detail.status = selected ? 'CONFIRMED' : 'OPEN';
+    if (members) detail.members = members;
+    return detail;
+}
+async function room140Screen(detail) {
+    const r = roomQueryScreen('src/app/rooms/[roomId].tsx', { roomId: ROOM_QUERY_ID }); r.pushes = [];
+    r.external['expo-router'].router.push = value => r.pushes.push(value);
+    r.context.fetch = async url => {
+        if (url.includes('/recommendations')) return ok(null);
+        if (url.includes('station-proposals')) return ok({ items: [], maxProposals: 9, selectedStation: detail.selectedStation });
+        return ok(detail);
+    };
+    r.render(); await settle(); await settle();
+    r.button = () => findElement(r.render(), element => element.type === 'Pressable' && element.props.accessibilityLabel === '확정 약속역까지 내 경로 보기');
+    return r;
+}
+/** 넘겨받은 params 로 경로 화면을 열고 실제 6.1 요청 본문과 역 검색 요청을 기록해요. */
+async function route140(params, stations = {}) {
+    const r = routeScreenRuntime(params); r.bodies = []; r.keywordSearches = []; r.stationLookups = [];
+    r.context.fetch = async (url, options) => {
+        if (url.endsWith('/routes/search')) { r.bodies.push(JSON.parse(options.body)); return ok(routeData()); }
+        const parsed = new URL(url);
+        const match = /\/stations\/(\d+)$/.exec(parsed.pathname);
+        if (match) { r.stationLookups.push(Number(match[1])); const id = Number(match[1]); return ok(serverRouteStation(id, stations[id] ?? `역 ${id}`)); }
+        if (parsed.pathname.endsWith('/stations')) {
+            r.keywordSearches.push(parsed.searchParams.get('keyword'));
+            return ok(stationSearchData(Object.entries(stations).map(([id, name]) => serverRouteStation(Number(id), name))));
+        }
+        throw Error(`예상하지 못한 요청 ${url}`);
+    };
+    r.render(); await settle(); r.render(); await settle(); r.render(); await settle();
+    return r;
+}
+
+test('140 추천 기록 없이 확정한 약속역 → 내 경로 보기 → 6.1 요청의 출발(내 출발역)·도착(확정역) ID·roomId 정확', async () => {
+    for (const role of ['OWNER', 'MEMBER']) {
+        // 다른 멤버를 먼저 두고 그 멤버도 출발역이 있어요. 내 것만 써야 해요.
+        const members = [
+            { userId: ROOM_QUERY_OTHER, nickname: '서버 동료', role: role === 'OWNER' ? 'MEMBER' : 'OWNER', joinedAt: '2026-11-09T09:00:00Z', departureStation: roomQueryStation(99002) },
+            { userId: ROOM_QUERY_ME, nickname: '서버 나', role, joinedAt: '2026-11-10T09:00:00Z', departureStation: roomQueryStation(88001) },
+        ];
+        const r = await room140Screen(room140Detail({ role, members }));
+        const button = r.button(); assert.ok(button, role);
+        assert.ok(findTextIncluding(button.props.children, '내 경로 보기'));
+        button.props.onPress();
+        assert.equal(r.pushes.length, 1);
+        const push = plain(r.pushes[0]);
+        assert.equal(push.pathname, '/route-search');
+        assert.deepEqual(push.params, { departureId: '88001', departure: '서버 역 88001', destinationId: '77005', destination: '서버 역 77005', roomId: ROOM_QUERY_ID }, role);
+        r.unmount();
+        const route = await route140(push.params);
+        assert.deepEqual(route.bodies, [{ originStationId: 88001, destinationStationId: 77005, roomId: ROOM_QUERY_ID }], role);
+        assert.deepEqual(route.keywordSearches, []); assert.deepEqual(route.stationLookups.sort(), [77005, 88001]);
+        route.unmount();
+    }
+});
+
+test('140 내 출발역이 없으면 경로 화면으로 가지 않고 안내와 함께 출발역 설정을 열어요', async () => {
+    const members = [
+        { userId: ROOM_QUERY_OTHER, nickname: '서버 동료', role: 'OWNER', joinedAt: '2026-11-09T09:00:00Z', departureStation: roomQueryStation(99002) },
+        { userId: ROOM_QUERY_ME, nickname: '서버 나', role: 'MEMBER', joinedAt: '2026-11-10T09:00:00Z', departureStation: null },
+    ];
+    const r = await room140Screen(room140Detail({ role: 'MEMBER', members }));
+    r.button().props.onPress();
+    const view = r.render();
+    assert.ok(!r.pushes.some(push => (push.pathname ?? push) === '/route-search'));
+    assert.ok(r.pushes.some(push => push.pathname === '/station-search' && push.params?.purpose === 'departure'), JSON.stringify(plain(r.pushes)));
+    assert.ok(findText(view, '내 출발역을 먼저 설정해 주세요.'));
+    r.unmount();
+});
+
+test('140 확정 약속역이 없으면 버튼이 없어요', async () => {
+    const r = await room140Screen(room140Detail({ selected: null }));
+    assert.equal(r.button(), null); assert.ok(findText(r.render(), '약속역 미정')); r.unmount();
+});
+
+test('140 같은 이름의 역이 둘이어도 ID 로 넘기면 그 역으로 요청하고, 이름만 넘기면 기존처럼 이름으로 찾아요', async () => {
+    const stations = { 1001: '시청', 2002: '시청', 3003: '강남' };
+    const byId = await route140({ departureId: '2002', departure: '시청', destinationId: '3003', destination: '강남', roomId: ROOM_QUERY_ID }, stations);
+    assert.deepEqual(byId.bodies, [{ originStationId: 2002, destinationStationId: 3003, roomId: ROOM_QUERY_ID }]);
+    assert.deepEqual(byId.keywordSearches, []);
+    byId.unmount();
+    // 이름만 넘기는 기존 진입점: 이름 검색으로 찾고(같은 이름이면 첫 결과) roomId 없이 보내요.
+    const byName = await route140({ departure: '시청', destination: '강남' }, stations);
+    assert.deepEqual(byName.keywordSearches.sort(), ['강남', '시청']);
+    assert.deepEqual(byName.bodies, [{ originStationId: 1001, destinationStationId: 3003 }]);
+    byName.unmount();
+    // 숫자가 아닌 ID 는 무시하고 그 칸만 이름으로 찾아요(ID 조회 실패는 다음 검사).
+    const mixed = await route140({ departureId: '2002', departure: '시청', destinationId: 'abc', destination: '강남' }, stations);
+    assert.deepEqual(mixed.bodies, [{ originStationId: 2002, destinationStationId: 3003 }]);
+    assert.deepEqual(mixed.keywordSearches, ['강남']);
+    mixed.unmount();
+});
+
+test('140 ID 역 상세 조회 실패: 넘겨받은 이름·ID 로 그대로 요청', async () => {
+    const r = routeScreenRuntime({ departureId: '2002', departure: '시청', destinationId: '3003', destination: '강남' }); const bodies = [];
+    r.context.fetch = async (url, options) => {
+        if (url.endsWith('/routes/search')) { bodies.push(JSON.parse(options.body)); return ok(routeData()); }
+        if (/\/stations\/\d+$/.test(new URL(url).pathname)) return jsonResponse({ success: false, error: { code: 'NETWORK_ERROR' } }, 503);
+        throw Error(`이름 재검색을 하면 안 돼요 ${url}`);
+    };
+    r.render(); await settle(); r.render(); await settle(); r.render(); await settle();
+    assert.deepEqual(bodies, [{ originStationId: 2002, destinationStationId: 3003 }]);
+    const view = r.render();
+    assert.equal(findElement(view, element => element.props?.label === '출발').props.station.name, '시청');
+    r.unmount();
+});
+
+test('140 추천 카드 "경로 자세히 보기"도 역 ID 로 넘겨요', async () => {
+    const r = recoScreen(); const pushes = [];
+    r.external['expo-router'].router.push = value => pushes.push(value);
+    r.recoRespond(async () => ok(recoRun()));
+    const view = await pumpScreen(r);
+    findElement(view, e => e.type === 'Pressable' && findTextIncluding(e.props.children, '경로 자세히')).props.onPress();
+    assert.deepEqual(plain(pushes[0].params), { departure: '서버 역 88001', departureId: '88001', destination: '서버 추천역 77001', destinationId: '77001', roomId: ROOM_QUERY_ID });
+    r.unmount();
+});
+
+test('140 mock 방(room-1, 확정 건대입구·내 출발 홍대입구)에서도 내 출발역·확정역 ID 로 경로 화면을 열어요', async () => {
+    const r = createScreenRuntime({}, 'src/app/rooms/[roomId].tsx', runtime => {
+        runtime.external['expo-clipboard'] = { setStringAsync: async () => {} }; runtime.native.ScrollView = 'ScrollView';
+        runtime.external['expo-router'].useLocalSearchParams = () => ({ roomId: 'room-1' });
+        runtime.external['expo-router'].useFocusEffect = callback => runtime.external.react.useEffect(callback, [callback]);
+        runtime.external.react.useCallback = (callback, dependencies) => {
+            const ref = runtime.external.react.useRef(null);
+            if (!ref.current || dependencies.some((value, index) => value !== ref.current.dependencies[index])) ref.current = { callback, dependencies };
+            return ref.current.callback;
+        };
+    });
+    const pushes = []; r.external['expo-router'].router.push = value => pushes.push(value);
+    for (let i = 0; i < 6; i++) { r.render(); await settle(); r.advance(1000); await settle(); }
+    const button = findElement(r.render(), element => element.type === 'Pressable' && element.props.accessibilityLabel === '확정 약속역까지 내 경로 보기');
+    assert.ok(button); button.props.onPress();
+    const { MOCK_STATIONS } = r.load('src/mocks/stations.ts');
+    const id = name => String(MOCK_STATIONS.find(station => station.name === name).id);
+    assert.deepEqual(plain(pushes.at(-1).params), { departureId: id('홍대입구'), departure: '홍대입구', destinationId: id('건대입구'), destination: '건대입구', roomId: 'room-1' });
+    r.unmount();
+});
+
+/* ---------- #173 다음 열차 남은 시간: 앱 수신 시각 기준 ---------- */
+// BE 가 secondsUntil 을 요청 시점 기준으로 보정해서 내려줘요. receivedAt(서버 캐시 시각)만큼 또 빼면 안 돼요.
+
+/** 화면 이탈·복귀를 흉내 내요. focus() 를 부르면 다음 렌더에서 이전 효과를 정리하고 다시 실행해요(useFocusEffect). */
+function nextTrains173Runtime(env = serverEnv) {
+    const r = nextTrainsRuntime(env);
+    let focusKey = 0;
+    r.external['expo-router'].useFocusEffect = callback => r.external.react.useEffect(callback, [callback, focusKey]);
+    const ago = seconds => new Date(ARRIVALS_BASE_MS + r.now() - seconds * 1000).toISOString();
+    return { ...r, ago, refocus: () => { focusKey++; } };
+}
+
+test('173 기준 시각 함수: 응답을 받은 순간의 앱 시각이고, 지난 초는 1초 단위·0 이상', () => {
+    const r = createRuntime();
+    const format = r.load('src/components/route/format.ts');
+    vm.runInContext('Date', r.context).now = () => 1234567;
+    assert.equal(format.arrivalsCountdownBase(), 1234567);
+    assert.equal(format.arrivalsElapsedSec(1000, 1000), 0);
+    assert.equal(format.arrivalsElapsedSec(1000, 1999), 0);
+    assert.equal(format.arrivalsElapsedSec(1000, 2000), 1);
+    assert.equal(format.arrivalsElapsedSec(1000, 31500), 30);
+    assert.equal(format.arrivalsElapsedSec(5000, 1000), 0, '시계가 뒤로 가도 0 아래로 내려가지 않아요');
+    // 표시 계산 자리에서 receivedAt 을 쓰지 않아요.
+    const source = fs.readFileSync(path.join(root, 'src/components/route/NextTrains.tsx'), 'utf8');
+    assert.doesNotMatch(source, /Date\.parse\(|receivedAt\)/);
+});
+
+test('173 응답 직후: receivedAt 이 30초 전이어도 secondsUntil 그대로 보이고 1초 단위로 줄어요', async () => {
+    const r = nextTrains173Runtime();
+    r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(30), trains: [arrivalTrain({ secondsUntil: 125 }), arrivalTrain({ secondsUntil: 365 })] })));
+    r.text(); await flush();
+    assert.equal(r.text(), '다음 열차 성수행 2분 5초, 성수행 6분 5초', '30초가 빠지면 안 돼요');
+    r.advance(999); assert.equal(r.text(), '다음 열차 성수행 2분 5초, 성수행 6분 5초');
+    r.advance(1); assert.equal(r.text(), '다음 열차 성수행 2분 4초, 성수행 6분 4초');
+    r.advance(1000); assert.equal(r.text(), '다음 열차 성수행 2분 3초, 성수행 6분 3초');
+    r.advance(5000); assert.equal(r.text(), '다음 열차 성수행 1분 58초, 성수행 5분 58초');
+    // 더 오래된 receivedAt(5분 전)도 마찬가지예요. 줄을 숨기지도 않아요.
+    r.unmount();
+    const old = nextTrains173Runtime();
+    old.respond(async () => ok(arrivalsData({ receivedAt: old.ago(300), trains: [arrivalTrain({ secondsUntil: 200 })] })));
+    old.text(); await flush();
+    assert.equal(old.text(), '다음 열차 성수행 3분 20초');
+    old.unmount();
+});
+
+test('173 폴링 재조회: 새 secondsUntil 과 새 기준 시각으로 갱신하고, 응답이 늦게 와도 받은 순간부터 세요', async () => {
+    const r = nextTrains173Runtime();
+    r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(15), trains: [arrivalTrain({ secondsUntil: 300 })] })));
+    r.text(); await flush();
+    r.advance(19000); assert.equal(r.text(), '다음 열차 성수행 4분 41초');
+    // 20초 폴링: 서버가 요청 시점으로 보정한 새 값 290초, receivedAt 은 캐시라 20초 전
+    const slow = deferred();
+    r.respond(() => slow.promise);
+    r.advance(1000); await flush();
+    assert.equal(r.calls.length, 2);
+    assert.equal(r.text(), '다음 열차 성수행 4분 40초', '응답 전에는 이전 값으로 계속 세요');
+    r.advance(3000); await flush();
+    assert.equal(r.text(), '다음 열차 성수행 4분 37초');
+    slow.resolve(ok(arrivalsData({ receivedAt: r.ago(20), trains: [arrivalTrain({ secondsUntil: 290 }), arrivalTrain({ secondsUntil: 61 })] })));
+    await flush();
+    assert.equal(r.text(), '다음 열차 성수행 4분 50초, 성수행 1분 1초', '새 값 그대로, receivedAt·요청 지연만큼 빼지 않아요');
+    r.advance(1000); assert.equal(r.text(), '다음 열차 성수행 4분 49초, 성수행 1분 0초');
+    r.advance(1000); assert.equal(r.text(), '다음 열차 성수행 4분 48초, 성수행 곧 도착');
+    r.unmount();
+    assert.equal(r.timers.size, 0);
+});
+
+test('173 화면 복귀: 재조회 결과와 새 기준 시각으로 갱신하고 이전 기준을 이어 쓰지 않아요', async () => {
+    const r = nextTrains173Runtime();
+    r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(10), trains: [arrivalTrain({ secondsUntil: 400 })] })));
+    r.text(); await flush();
+    r.advance(15000); assert.equal(r.text(), '다음 열차 성수행 6분 25초');
+    r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(18), trains: [arrivalTrain({ secondsUntil: 380 })] })));
+    r.refocus();
+    r.text(); // 이 렌더 뒤에 이전 효과 정리 + 다시 조회가 돌아요.
+    assert.equal(r.text(), '다음 열차 확인 중', '복귀하면 이전 값을 지우고 다시 불러요');
+    await flush();
+    assert.equal(r.calls.length, 2);
+    assert.equal(r.text(), '다음 열차 성수행 6분 20초');
+    r.advance(2000); assert.equal(r.text(), '다음 열차 성수행 6분 18초');
+    // 복귀 후 폴링도 복귀 시점부터 20초예요(이전 타이머는 정리됨).
+    r.advance(17999); await flush(); assert.equal(r.calls.length, 2);
+    r.advance(1); await flush(); assert.equal(r.calls.length, 3);
+    r.unmount();
+    assert.equal(r.timers.size, 0);
+});
+
+test('173 조회 실패: 인증 오류는 이전 값·이전 기준 시각으로 이어 세고, 그 밖의 실패는 숨긴 뒤 다음 성공에서 새 기준', async () => {
+    const r = nextTrains173Runtime();
+    r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(30), trains: [arrivalTrain({ secondsUntil: 600 })] })));
+    r.text(); await flush();
+    r.respond(async () => fail('TOKEN_INVALID'));
+    r.advance(20000); await flush();
+    assert.equal(r.text(), '다음 열차 성수행 9분 40초', '실패 시 기준 시각을 지금으로 바꾸지 않아요');
+    r.advance(5000); assert.equal(r.text(), '다음 열차 성수행 9분 35초');
+    r.respond(async () => jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR' } }, 500));
+    r.advance(15000); await flush();
+    assert.equal(r.text(), null);
+    r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(25), trains: [arrivalTrain({ secondsUntil: 500 })] })));
+    r.advance(20000); await flush();
+    assert.equal(r.text(), '다음 열차 성수행 8분 20초');
+    r.unmount();
+});
+
+test('173 표시 규칙 유지: null 은 message, 0초·60초 미만은 곧 도착, 0 아래로 내려가지 않아요', async () => {
+    const r = nextTrains173Runtime();
+    r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(40), trains: [
+            arrivalTrain({ secondsUntil: null, stopsAway: 3, message: '[3]번째 전역 (남영)' }),
+            arrivalTrain({ secondsUntil: 0, message: '전역 도착' }),
+        ] })));
+    r.text(); await flush();
+    assert.equal(r.text(), '다음 열차 성수행 · 3번째 전역 (남영), 성수행 곧 도착');
+    r.advance(10000);
+    assert.equal(r.text(), '다음 열차 성수행 · 3번째 전역 (남영), 성수행 곧 도착');
+    r.unmount();
+    for (const [seconds, shown] of [[60, '성수행 1분 0초'], [59, '성수행 곧 도착'], [1, '성수행 곧 도착']]) {
+        const one = nextTrains173Runtime();
+        one.respond(async () => ok(arrivalsData({ receivedAt: one.ago(50), trains: [arrivalTrain({ secondsUntil: seconds })] })));
+        one.text(); await flush();
+        assert.equal(one.text(), `다음 열차 ${shown}`, String(seconds));
+        one.advance(19000);
+        assert.equal(one.text(), '다음 열차 성수행 곧 도착', `${seconds} 0 아래로 내려가지 않아요`);
+        one.unmount();
+    }
+});
+
+test('173 mock 모드: receivedAt 이 지금이라 결과가 그대로이고 폴링 후에도 같은 열차 시각을 세요', async () => {
+    const r = nextTrains173Runtime({});
+    r.text(); r.advance(400); await flush();
+    assert.equal(r.text(), '다음 열차 성수행 3분 2초, 성수행 7분 2초');
+    // 표시는 1초 틱(0·1000·…ms)에 바뀌어요. 400ms 에 받은 값이라 5400ms 에는 5000ms 틱 기준 4초가 지난 값이에요(기존과 같음).
+    r.advance(5000); assert.equal(r.text(), '다음 열차 성수행 2분 58초, 성수행 6분 58초');
+    r.advance(600); assert.equal(r.text(), '다음 열차 성수행 2분 57초, 성수행 6분 57초');
+    // 20초 폴링(mock 400ms 지연) 뒤: 열차 도착 시각은 그대로라 182 − 20.4 → 162초
+    r.advance(14400); r.advance(400); await flush();
+    assert.equal(r.text(), '다음 열차 성수행 2분 42초, 성수행 6분 42초');
+    assert.equal(r.calls.length, 0);
+    r.unmount();
+});
+
+/* ---------- #172 약속방 경로의 시간 기준과 실시간 열차 표시 ---------- */
+
+const APPOINTMENT172 = '2099-11-20T19:00:00+09:00';
+const PASSED_NOTICE172 = '이미 지난 약속이에요. 지금 출발 기준 경로를 보여줘요.';
+
+/** 안내 화면을 펼쳐 NextTrains 가 있으면 실제로 구동하고, 60초 동안 도착정보 요청·폴링을 세요. */
+async function liveTrains172(selected, mock = false) {
+    const g = mock ? guide129({ mock: true, route: selected.route }) : route147Guide(selected);
+    if (mock) g.load('src/stores/route-store.ts').setSelectedRoute(selected);
+    g.external['expo-router'].useFocusEffect = callback => g.external.react.useEffect(callback, [callback]);
+    const arrivals = g.load('src/services/arrivals.ts'); const original = arrivals.fetchArrivals; const calls = [];
+    arrivals.fetchArrivals = (...args) => { calls.push(args[0]); return original(...args); };
+    const fetched = [];
+    g.context.fetch = async url => { fetched.push(url); return ok(arrivalsData()); };
+    const view = g.render();
+    const timeline = findElement(view, element => element.type === g.Timeline);
+    assert.ok(timeline, '경로 목록은 그대로 보여요');
+    g.renderComponent(timeline);
+    const next = timeline.props.nextTrains;
+    if (next && typeof next === 'object') { g.renderComponent(next); await settle(); }
+    g.advance(60000); await settle();
+    if (next && typeof next === 'object') { g.renderComponent(next); await settle(); }
+    const polling = [...g.timers.values()].some(timer => timer.repeat && timer.ms === 20000);
+    const notice = ['약속 시각 기준 경로라 현재 실시간 열차는 표시하지 않아요.', '약속 정보를 확인하지 못해 현재 실시간 열차는 표시하지 않아요.']
+        .find(text => findText(view, text)) ?? null;
+    g.unmount();
+    return { shown: !!next, calls: calls.length, arrivalsFetches: fetched.filter(url => url.includes('/arrivals')).length, polling, notice };
+}
+
+/** 서버 모드 약속방 경로 검색. cache: 방 캐시에 미리 넣을지, detail: 캐시에 없을 때 7.4 방 상세 응답이에요. */
+async function roomSearch172({ appointmentAt = APPOINTMENT172, passed = false, cache = true, detail = 'ok' } = {}) {
+    const room = { ...roomQueryDetail(), appointmentAt };
+    const r = routeScreenRuntime({ departure: '강남', destination: '사당', roomId: room.id });
+    r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_ME, nickname: '서버 나' });
+    const roomCache = r.load('src/services/room-cache.ts');
+    if (cache) roomCache.cacheRoomDetail({ ...room, memberCount: room.members.length }, roomCache.getRoomCacheScope());
+    r.calls172 = [];
+    r.context.fetch = async (url, options) => {
+        r.calls172.push(url);
+        if (url.endsWith('/routes/search')) {
+            const body = JSON.parse(options.body); assert.equal(body.roomId, room.id); assert.equal('departAt' in body || 'arriveAt' in body, false);
+            const data = routeData(); data.appointmentPassed = passed; data.notice = passed ? PASSED_NOTICE172 : null; return ok(data);
+        }
+        if (url.endsWith(`/rooms/${room.id}`)) {
+            if (detail === 'network') throw new TypeError('Network request failed');
+            if (detail === 'fail') return jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR' } }, 500);
+            return ok(room);
+        }
+        return ok(stationSearchData([url.includes(encodeURIComponent('강남')) ? serverRouteStation(88001, '강남') : serverRouteStation(99002, '사당')]));
+    };
+    for (let i = 0; i < 6; i++) { r.render(); await settle(); }
+    const card = findElement(r.render(), element => element.type === r.load('src/components/route/RouteCard.tsx').default);
+    assert.ok(card, '약속방 경로 결과가 보여요');
+    const before = plain(card.props.route);
+    card.props.onStart();
+    const selected = r.load('src/stores/route-store.ts').getSelectedRoute();
+    assert.deepEqual(plain(selected.route), before, '서버가 계산한 경로·시각을 그대로 넘겨요');
+    r.unmount();
+    return { r, selected, roomRequests: r.calls172.filter(url => url.endsWith(`/rooms/${room.id}`)).length };
+}
+
+test('172 시간 기준 정의: 개인은 검색 조건, 약속방은 약속 시각·appointmentPassed 로 정하고 now 일 때만 실시간을 보여요', () => {
+    const r = createRuntime(); const time = r.load('src/utils/route-time.ts');
+    assert.equal(time.personalRouteTimeBasis(undefined), 'now');
+    assert.equal(time.personalRouteTimeBasis({ mode: 'now' }), 'now');
+    assert.equal(time.personalRouteTimeBasis({ mode: 'departure', at: APPOINTMENT172 }), 'departure');
+    assert.equal(time.personalRouteTimeBasis({ mode: 'arrival', at: APPOINTMENT172 }), 'arrival');
+    assert.equal(time.roomRouteTimeBasis(APPOINTMENT172, false), 'appointment');
+    assert.equal(time.roomRouteTimeBasis(APPOINTMENT172, true), 'now');
+    assert.equal(time.roomRouteTimeBasis(null, false), 'now');
+    assert.equal(time.roomRouteTimeBasis(null, true), 'now');
+    assert.equal(time.roomRouteTimeBasis(undefined, false), 'unknown');
+    assert.equal(time.roomRouteTimeBasis(undefined, true), 'now', '서버가 지난 약속이라고 하면 지금 출발 기준이에요');
+    assert.equal(time.roomRouteTimeBasis('잘못된 시각', false), 'unknown');
+    for (const [basis, shown] of [['now', true], ['departure', false], ['arrival', false], ['appointment', false], ['unknown', false]]) {
+        assert.equal(time.shouldShowLiveTrains({ timeBasis: basis }), shown, basis);
+    }
+    // 시간 기준이 없는 이전 형태의 값은 개인 검색 조건으로 판단해요(기존 동작).
+    assert.equal(time.shouldShowLiveTrains({}), true);
+    assert.equal(time.shouldShowLiveTrains({ searchTime: { mode: 'arrival', at: APPOINTMENT172 } }), false);
+});
+
+test('172 미래 약속이 있는 방 경로: 안내 화면에 실시간 열차가 없고 도착정보 요청·20초 폴링이 0번, 안내 한 줄을 보여요', async () => {
+    const { selected, roomRequests } = await roomSearch172();
+    assert.equal(selected.timeBasis, 'appointment'); assert.equal(selected.searchTime, undefined);
+    assert.equal(roomRequests, 0, '방 캐시에 약속 시각이 있으면 방 상세를 다시 부르지 않아요');
+    const live = await liveTrains172(selected);
+    assert.deepEqual(live, { shown: false, calls: 0, arrivalsFetches: 0, polling: false, notice: '약속 시각 기준 경로라 현재 실시간 열차는 표시하지 않아요.' });
+});
+
+test('172 약속 없는 방·약속이 지난 방(appointmentPassed true)은 지금 출발 기준이라 실시간 열차를 보여요', async () => {
+    for (const [label, options] of [['약속 없는 방', { appointmentAt: null }], ['지난 약속방', { appointmentAt: '2026-01-01T19:00:00+09:00', passed: true }]]) {
+        const { selected } = await roomSearch172(options);
+        assert.equal(selected.timeBasis, 'now', label);
+        assert.equal(selected.appointmentPassed, !!options.passed, label);
+        const live = await liveTrains172(selected);
+        assert.equal(live.shown, true, label); assert.ok(live.calls >= 2, `${label}: 처음 조회 + 20초 폴링`);
+        assert.ok(live.arrivalsFetches >= 2, label); assert.equal(live.polling, true, label); assert.equal(live.notice, null, label);
+        if (options.passed) {
+            const g = route147Guide(selected); assert.ok(findText(g.render(), PASSED_NOTICE172), '지난 약속 안내는 그대로예요'); g.unmount();
+        }
+    }
+});
+
+test('172 방 캐시에 없으면 방 상세로 약속 시각을 확인하고, 확인하지 못하면 실시간을 숨기고 이유를 한 줄 보여요', async () => {
+    const future = await roomSearch172({ cache: false });
+    assert.equal(future.roomRequests, 1); assert.equal(future.selected.timeBasis, 'appointment');
+    const none = await roomSearch172({ cache: false, appointmentAt: null });
+    assert.equal(none.roomRequests, 1); assert.equal(none.selected.timeBasis, 'now');
+    for (const detail of ['fail', 'network']) {
+        const unknown = await roomSearch172({ cache: false, detail });
+        assert.equal(unknown.selected.timeBasis, 'unknown', detail);
+        const live = await liveTrains172(unknown.selected);
+        assert.deepEqual(live, { shown: false, calls: 0, arrivalsFetches: 0, polling: false, notice: '약속 정보를 확인하지 못해 현재 실시간 열차는 표시하지 않아요.' }, detail);
+        // 지난 약속이라고 서버가 알려 주면 약속 정보를 몰라도 지금 출발 기준이에요.
+        const passed = await roomSearch172({ cache: false, detail, passed: true });
+        assert.equal(passed.selected.timeBasis, 'now', detail);
+    }
+});
+
+test('172 개인 지금 출발은 실시간을 보여 주고, 개인 출발·도착 시각 지정은 기존처럼 숨기며 기준이 안내 화면까지 유지돼요', async () => {
+    const r = await screen152();
+    for (const [value, basis, shown] of [[{ mode: 'now' }, 'now', true], [{ mode: 'departure', at: DEPART152 }, 'departure', false], [{ mode: 'arrival', at: ARRIVE152 }, 'arrival', false]]) {
+        if (value.mode !== 'now') { r.selector152().props.onChange(value); await pump152(r); }
+        r.card152().props.onStart();
+        const selected = r.load('src/stores/route-store.ts').getSelectedRoute();
+        assert.equal(selected.timeBasis, basis);
+        // 안내 화면은 저장소에서 같은 선택 값을 다시 읽어요.
+        const g = route147Guide(selected);
+        assert.equal(g.load('src/stores/route-store.ts').getSelectedRoute(selected.route.routeId).timeBasis, basis); g.unmount();
+        const live = await liveTrains172(selected);
+        assert.equal(live.shown, shown, basis); assert.equal(live.calls > 0, shown, basis); assert.equal(live.polling, shown, basis);
+        assert.equal(live.notice, null, '개인 시각 지정은 검색 조건 안내가 따로 있어 추가 문구를 넣지 않아요');
+    }
+    r.unmount();
+});
+
+test('172 경로 검색 결과 카드에는 실시간 열차 표시가 없어요(같은 규칙을 적용할 곳 없음)', () => {
+    for (const file of ['src/app/route-search.tsx', 'src/components/route/RouteCard.tsx']) {
+        const source = fs.readFileSync(path.join(root, file), 'utf8');
+        assert.doesNotMatch(source, /NextTrains|fetchArrivals/, file);
+    }
+});
+
+test('172 mock 모드: 약속 있는 mock 방은 실시간을 숨기고 약속 없는 mock 방은 보여요(서버 미호출)', async () => {
+    for (const [roomId, basis, shown] of [['room-1', 'appointment', false], ['room-3', 'now', true]]) {
+        const r = routeScreenRuntime({ departure: '건대입구', destination: '사당', roomId }, true);
+        let calls = 0; r.context.fetch = async () => { calls++; throw Error('mock 모드는 서버를 부르지 않아요'); };
+        for (let i = 0; i < 5; i++) { r.render(); await settle(); r.advance(800); await settle(); }
+        const card = findElement(r.render(), element => element.type === r.load('src/components/route/RouteCard.tsx').default);
+        assert.ok(card, roomId); card.props.onStart();
+        const selected = r.load('src/stores/route-store.ts').getSelectedRoute();
+        assert.equal(selected.timeBasis, basis, roomId); assert.equal(calls, 0); r.unmount();
+        const live = await liveTrains172(selected, true);
+        assert.equal(live.shown, shown, roomId); assert.equal(live.calls > 0, shown, roomId);
+        assert.equal(live.arrivalsFetches, 0, 'mock 도착정보도 서버를 부르지 않아요');
+        assert.equal(live.notice, shown ? null : '약속 시각 기준 경로라 현재 실시간 열차는 표시하지 않아요.', roomId);
+    }
+    // mock 목록에 없는 방은 mock 방 상세도 실패해서 기준을 알 수 없어요.
+    const r = routeScreenRuntime({ departure: '건대입구', destination: '사당', roomId: 'room-none' }, true);
+    for (let i = 0; i < 5; i++) { r.render(); await settle(); r.advance(800); await settle(); }
+    findElement(r.render(), element => element.type === r.load('src/components/route/RouteCard.tsx').default).props.onStart();
+    assert.equal(r.load('src/stores/route-store.ts').getSelectedRoute().timeBasis, 'unknown'); r.unmount();
+});
+
+/* ---------- 표지판 방향 단독 계약·실제 경로 진입 (#151) ---------- */
+const directionCases151 = [
+    ['UP', 1, '상행', 'DOWN'], ['DOWN', 1, '하행', 'UP'], ['INNER', 2, '내선', 'OUTER'],
+    ['OUTER', 2, '외선', 'INNER'], ['LOOP', 6, '순환', null],
+];
+function response151(result = 'CORRECT', reason = null, read = '내선순환') {
+    return { result, reason, recognized: { stationName: '승차역', lineName: '2호선', headsign: read },
+        expected: { stationName: '승차역', lineName: '2호선', headsign: null }, message: `서버 판독 결과 ${result}` };
+}
+function step151(code = 'INNER', lineId = 2) {
+    const step = routeData().routes[0].steps.find(item => item.type === 'SUBWAY');
+    return { ...step, stations: (step.stations ?? []).map(station => ({ ...station, congestion: station.congestion ?? missingRouteCongestion() })),
+        line: { id: lineId, name: `${lineId}호선`, color: '#00a84d' }, direction: null, directionCode: code,
+        stops: [{ id: 88001, name: '승차역', order: 0 }, { id: 99002, name: '도착역', order: 1 }] };
+}
+function guide151(steps, mock = false) {
+    const route = route129(); route.steps = steps;
+    const r = guide129({ route, mock }); const pushes = [];
+    r.external['expo-router'].router.push = href => pushes.push(href);
+    r.timeline151 = () => findElement(r.render(), element => element.type === r.Timeline);
+    return Object.assign(r, { pushes151: pushes });
+}
+
+test('151 expected.headsign null은 정상 판독 결과이며 누락·잘못된 타입과 다른 필드 오류는 계속 거절해요', () => {
+    const parse = createRuntime(serverEnv).load('src/services/direction.ts').parseDirectionResponse;
+    for (const [result, reason] of [['CORRECT', null], ['WRONG', 'DIRECTION_MISMATCH'], ['RETAKE', 'MISSING_INFO']]) {
+        const data = response151(result, reason); assert.deepEqual(plain(parse(data)), data);
+    }
+    for (const value of [undefined, 3, {}, false]) {
+        const data = response151(); if (value === undefined) delete data.expected.headsign; else data.expected.headsign = value;
+        assert.throws(() => parse(data), { code: 'UNKNOWN_ERROR' });
+    }
+    for (const key of ['stationName', 'lineName']) {
+        const data = response151(); data.expected[key] = null; assert.throws(() => parse(data), { code: 'UNKNOWN_ERROR' });
+    }
+});
+
+test('151 방향 코드 5종은 headsign 생략·null·공백 모두 multipart에서 방면을 만들지 않고 그대로 전달해요', async () => {
+    for (const [direction, lineId] of directionCases151) for (const headsign of [undefined, null, '  ']) {
+        const r = createRuntime(serverEnv); let request;
+        r.context.fetch = async (url, options) => { request = { url, options }; return jsonResponse({ success: true, data: response151() }); };
+        const route = { stationId: 88001, lineId, direction, ...(headsign === undefined ? {} : { headsign }) };
+        const data = await r.load('src/services/direction.ts').checkDirection(directionPhoto114, route);
+        assert.equal(data.expected.headsign, null); assert.equal(request.url, 'https://example.test/api/v1/ai/direction-check');
+        assert.deepEqual(JSON.parse(request.options.body.get('route')), { stationId: 88001, lineId, direction });
+        assert.equal(request.options.body.get('image').name, 'direction.jpg'); assert.equal(request.options.headers['Content-Type'], undefined);
+    }
+});
+
+test('151 방향·방면 모두 없음, 잘못된 코드와 ID는 사진 업로드 없이 차단하고 기존 headsign 단독 요청은 유지해요', async () => {
+    const r = createRuntime(serverEnv); let calls = 0; let body;
+    r.context.fetch = async (_url, options) => { calls++; body = options.body; return jsonResponse({ success: true, data: directionData114() }); };
+    const service = r.load('src/services/direction.ts');
+    for (const route of [{ stationId: 88001, lineId: 2 }, { stationId: 88001, lineId: 2, headsign: ' ' },
+        { stationId: 88001, lineId: 2, direction: 'SIDEWAYS', headsign: '사당 방면' }, { stationId: 88001, lineId: 2, direction: 'inner' },
+        { stationId: 0, lineId: 2, direction: 'INNER' }, { stationId: 88001, lineId: null, direction: 'INNER' },
+        { stationId: 88001, lineId: 2, direction: ['INNER'] }, { stationId: 88001, lineId: 2, direction: 'INNER', headsign: 5 }]) {
+        await assert.rejects(service.checkDirection(directionPhoto114, route), { code: 'VALIDATION_ERROR' });
+    }
+    assert.equal(calls, 0);
+    await service.checkDirection(directionPhoto114, { stationId: 88001, lineId: 2, headsign: ' 사당 방면 ' });
+    assert.deepEqual(JSON.parse(body.get('route')), { stationId: 88001, lineId: 2, headsign: '사당 방면' }); assert.equal(calls, 1);
+});
+
+test('151 서버 방향 코드 경로는 안내 버튼에서 승차역·노선·코드를 넘기고 촬영·선택 후 동일한 route로 분석해요', async () => {
+    for (const [direction, lineId, label] of directionCases151) {
+        const data = routeData(); data.routes[0].steps = [step151(direction, lineId)];
+        const search = await route147Search(data); const card = search.card147(); assert.ok(card); card.props.onStart();
+        const guide = route147Guide(search.load('src/stores/route-store.ts').getSelectedRoute()); guide.pushes151 = [];
+        guide.external['expo-router'].router.push = href => guide.pushes151.push(href);
+        const timeline = findElement(guide.render(), element => element.type === guide.Timeline);
+        const content = guide.renderComponent(timeline);
+        const button = findElement(content, element => element.type === 'Pressable' && textOf(element) === '표지판으로 방향 확인');
+        assert.ok(button); button.props.onPress();
+        const href = guide.pushes151[0]; assert.equal(href.pathname, '/ai-direction');
+        assert.deepEqual(plain(href.params), { stationId: '88001', stationName: '승차역', lineId: String(lineId), lineName: `${lineId}호선`, direction });
+        const screen = await directionScreen125(plain(href.params)); assert.ok(screen.button('표지판 촬영')); assert.ok(screen.button('갤러리 선택'));
+        assert.ok(texts125(screen.render()).includes(`승차역 / ${lineId}호선 ${label}`));
+        await screen.press(direction === 'UP' || direction === 'INNER' ? '표지판 촬영' : '갤러리 선택');
+        screen.respond(async () => jsonResponse({ success: true, data: response151() })); const result = await screen.press('AI로 확인하기');
+        assert.deepEqual(screen.sent[0].route, { stationId: 88001, lineId, direction });
+        assert.ok(texts125(result).includes('맞는 방향이에요')); assert.equal(screen.calls, 1); screen.unmount(); guide.unmount(); search.unmount();
+    }
+});
+
+test('151 승차역·노선·방향 정보 없는 구간은 버튼 대신 이유를 보여주고 직접 호출도 이동하지 않아요', () => {
+    const base = step151();
+    const missing = [{ ...base, directionCode: null }, { ...base, stops: [] }, { ...base, line: { ...base.line, id: null } }, { ...base, directionCode: 'BAD' }];
+    for (const step of missing) {
+        const r = guide151([step]); const timeline = r.timeline151(); const view = r.renderComponent(timeline);
+        assert.equal(findElement(view, element => element.type === 'Pressable' && textOf(element) === '표지판으로 방향 확인'), null);
+        const issue = r.load('src/utils/direction-route.ts').directionStepIssue(step); assert.ok(issue); assert.ok(findText(view, issue));
+        timeline.props.onSignCheck(step); assert.equal(r.pushes151.length, 0); r.unmount();
+    }
+    const legacy = guide151([{ ...base, directionCode: null, direction: '사당 방면' }]);
+    legacy.timeline151().props.onSignCheck({ ...base, directionCode: null, direction: '사당 방면' });
+    assert.equal(legacy.pushes151[0].params.headsign, '사당 방면'); assert.equal(Object.hasOwn(legacy.pushes151[0].params, 'direction'), false); legacy.unmount();
+});
+
+test('151 여러 승차·환승 구간은 각각의 역·호선·방향으로 진입하며 도보 구간에는 버튼이 없어요', () => {
+    const first = step151('UP', 1); const second = step151('OUTER', 2); second.stops[0] = { id: 88002, name: '환승역', order: 0 };
+    const walking = { ...first, type: 'WALKING', line: null, directionCode: null, stops: [] };
+    const r = guide151([first, walking, second]); const timeline = r.timeline151(); const view = r.renderComponent(timeline);
+    const buttons = findAll125(view, element => element.type === 'Pressable' && textOf(element) === '표지판으로 방향 확인'); assert.equal(buttons.length, 1);
+    for (const [station, line] of [['승차역', '1호선'], ['환승역', '2호선']]) {
+        buttons[0].props.onPress();
+        const sheet = r.renderComponent(timeline);
+        const choice = findElement(sheet, element => element.type === 'Pressable' && !!findText(element, `${station}에서 ${line}`));
+        assert.ok(choice); choice.props.onPress();
+    }
+    assert.deepEqual(r.pushes151.map(href => [href.params.stationId, href.params.lineId, href.params.direction]), [['88001', '1', 'UP'], ['88002', '2', 'OUTER']]); r.unmount();
+});
+
+test('151 직접 진입에서 방향·방면·ID가 부족하면 촬영·갤러리를 막고 이유와 경로 검색을 보여줘요', async () => {
+    for (const params of [{}, { stationId: '88001', lineId: '2' }, { stationId: '88001', lineId: '2', direction: 'BAD' },
+        { stationId: '88001', lineId: '2', direction: ['INNER'] }, { stationId: '-1', lineId: '2', direction: 'INNER' }]) {
+        const r = await directionScreen125(params); const issue = r.load('src/utils/direction-route.ts').directionRouteIssue(params);
+        assert.ok(findText(r.render(), issue)); assert.equal(r.button('표지판 촬영'), null); assert.equal(r.button('갤러리 선택'), null);
+        assert.equal(r.calls, 0); await r.press('경로 검색'); assert.deepEqual(r.routes, ['/route-search']); r.unmount();
+    }
+});
+
+test('151 CORRECT·WRONG·MISSING_INFO는 null 방면을 유지하고 서버 결과와 명시적 방향 표시를 구분해 그려요', async () => {
+    for (const [result, reason, read] of [['CORRECT', null, '내선순환'], ['WRONG', 'DIRECTION_MISMATCH', '외선순환'], ['RETAKE', 'MISSING_INFO', '성수 방면']]) {
+        const r = await directionScreen125({ stationId: '88001', stationName: '승차역', lineId: '2', lineName: '2호선', direction: 'INNER' });
+        await r.press('표지판 촬영'); const data = response151(result, reason, read);
+        r.respond(async () => jsonResponse({ success: true, data })); const view = await r.press('AI로 확인하기');
+        const text = texts125(view); assert.ok(text.includes(data.message)); assert.ok(findElement(deep125(view), e => e.props?.accessibilityLabel === '읽은 방향 표시')); assert.ok(findElement(deep125(view), e => e.props?.accessibilityLabel === '내 경로 방향')); assert.match(textOf(findElement(deep125(view), e => e.props?.accessibilityLabel === '내 경로 방향')), /내선$/);
+        assert.equal(text.includes('내 경로 방면'), false); assert.equal(r.button('다시 시도'), null);
+        if (result === 'RETAKE') assert.ok(text.includes('행선지 이름만으로는 방향을 확정할 수 없어요'));
+        assert.equal(data.expected.headsign, null); assert.deepEqual(r.sent[0].route, { stationId: 88001, lineId: 2, direction: 'INNER' }); r.unmount();
+    }
+});
+
+test('151 인식 정보가 모두 null인 RETAKE도 실패 화면 없이 재촬영 안내와 경로 복귀를 제공해요', async () => {
+    const r = await directionScreen125({ stationId: '88001', lineId: '6', direction: 'LOOP' }); await r.press('갤러리 선택');
+    const data = response151('RETAKE', 'MISSING_INFO', null); data.recognized = { stationName: null, lineName: null, headsign: null };
+    r.respond(async () => jsonResponse({ success: true, data })); const text = texts125(await r.press('AI로 확인하기'));
+    assert.ok(text.includes('다시 촬영해 주세요')); assert.ok(text.includes('읽지 못했어요')); assert.ok(text.includes('순환'));
+    assert.ok(r.button('표지판 촬영')); assert.ok(r.button('경로 안내로 돌아가기')); assert.equal(r.alerts.length, 0); r.unmount();
+});
+
+test('151 방향 단독 요청의 인증 갱신은 같은 multipart를 재전송하고 400·404·네트워크 오류는 기존 코드로 유지돼요', async () => {
+    const r = createRuntime(serverEnv); const client = r.load('src/services/api/client.ts'); const calls = []; let token = 'old';
+    client.setAccessTokenProvider(() => token); client.setTokenRefresher(async () => { token = 'new'; });
+    r.context.fetch = async (_url, request) => { calls.push(request); return calls.length === 1 ? jsonResponse({ success: false, error: { code: 'TOKEN_EXPIRED' } }, 401) : jsonResponse({ success: true, data: response151() }); };
+    const route = { stationId: 88001, lineId: 2, direction: 'INNER' };
+    await r.load('src/services/direction.ts').checkDirection(directionPhoto114, route);
+    assert.equal(calls.length, 2); assert.equal(calls[0].body, calls[1].body); assert.equal(calls[1].headers.Authorization, 'Bearer new');
+    assert.deepEqual(JSON.parse(calls[1].body.get('route')), route);
+    for (const [code, status] of [['VALIDATION_ERROR', 400], ['STATION_NOT_FOUND', 404], ['NETWORK_ERROR', 0]]) {
+        const api = createRuntime(serverEnv); api.context.fetch = async () => { if (!status) throw Error(); return jsonResponse({ success: false, error: { code } }, status); };
+        await assert.rejects(api.load('src/services/direction.ts').checkDirection(directionPhoto114, route), { code });
+    }
+});
+
+test('151 방향 단독 요청도 30초 제한·중복 제출 방지·같은 사진 재시도를 유지해요', async () => {
+    const r = await directionScreen125({ stationId: '88001', lineId: '1', direction: 'UP' }); await r.press('표지판 촬영');
+    r.respond(failure125('AI_UNAVAILABLE')); await r.press('AI로 확인하기'); assert.ok(r.button('다시 시도'));
+    const finish = r.hold(); const button = r.button('다시 시도'); button.props.onPress(); button.props.onPress(); await r.pump(); assert.equal(r.calls, 2);
+    finish(jsonResponse({ success: true, data: response151() })); await r.pump();
+    assert.deepEqual(r.sent[0], r.sent[1]); r.unmount();
+    const api = createRuntime(serverEnv); api.context.fetch = (_url, request) => new Promise((_, reject) => request.signal.addEventListener('abort', () => reject(Error())));
+    const request = api.load('src/services/direction.ts').checkDirection(directionPhoto114, { stationId: 88001, lineId: 1, direction: 'UP' });
+    const rejected = assert.rejects(request, { code: 'NETWORK_ERROR' }); await settle(); assert.equal([...api.timers.values()][0].ms, 30000); api.advance(30000); await rejected;
+});
+
+test('151 분석 중 경로가 바뀌면 이전 결과와 사진을 버리고 새 방향으로 촬영·전송해요', async () => {
+    const params = { stationId: '88001', lineId: '1', direction: 'UP' }; const r = await directionScreen125(params);
+    await r.press('표지판 촬영'); const finish = r.hold(); r.button('AI로 확인하기').props.onPress(); await r.pump();
+    params.direction = 'DOWN'; r.render(); let view = r.render(); assert.equal(r.button('AI로 확인하기'), null);
+    finish(jsonResponse({ success: true, data: response151() })); view = await r.pump();
+    assert.equal(texts125(view).includes('서버 판독 결과 CORRECT'), false); assert.ok(deletedCount125(r));
+    await r.press('표지판 촬영'); r.respond(async () => jsonResponse({ success: true, data: response151() })); await r.press('AI로 확인하기');
+    assert.equal(r.sent.at(-1).route.direction, 'DOWN'); r.unmount();
+});
+
+test('184 3D 아이콘: Passenger·TrainBlock·CongestionBlocks가 넣은 색으로 SVG를 그려요', () => {
+    const r = createScreenRuntime({}, 'src/components/passenger.tsx');
+    const svgOf = image => decodeURIComponent(image.props.source.uri.replace('data:image/svg+xml;utf8,', ''));
+    const Passenger = r.load('src/components/passenger.tsx').default;
+    const Train = r.load('src/components/train-block.tsx').default;
+    const Congestion = r.load('src/components/congestion-blocks.tsx').default;
+
+    const passenger = r.renderComponent({ type: Passenger, props: { tone: 'pink', size: 40 } });
+    assert.equal(passenger.type, 'Image'); assert.ok(svgOf(passenger).includes('#F8D7DA'));
+    assert.deepEqual(plain(passenger.props.style), { width: 40, height: 44 });
+
+    const train = props => r.renderComponent({ type: Train, props });
+    const line3 = train({ line: 3 }); assert.equal(line3.type, 'Image'); assert.equal(line3.props.accessible, false);
+    assert.equal(line3.props.contentFit, 'contain'); assert.ok(svgOf(line3).includes('#EF7C1C'));
+    assert.ok(svgOf(train({ line: '8' })).includes('#E6186C'));
+    assert.ok(svgOf(train({})).includes('#00A84D'));
+    assert.deepEqual(plain(train({}).props.style), { width: 48, height: 40 });
+    for (const line of [9, '공항', 0]) { const svg = svgOf(train({ line })); assert.ok(svg.includes('#B89BC7')); assert.equal(svg.includes('#00A84D'), false); }
+    assert.deepEqual(plain(train({ line: 1, size: 24 }).props.style), { width: 24, height: 20 });
+
+    const tops = view => findAll125(view, e => e.type === 'Image').map(image => svgOf(image).match(/points="20,2 34,9 20,16 6,9" fill="(#[0-9A-F]{6})"/)[1]);
+    const congestion = level => r.renderComponent({ type: Congestion, props: { level } });
+    const GREEN = '#E1EEC2'; const OFF = '#F3F1F5'; const RED = '#F6C3C6'; const MINT = '#D2EEE2';
+    let view = congestion(2);
+    assert.equal(view.type, 'View'); assert.equal(view.props.accessibilityLabel, '혼잡도 여유');
+    assert.deepEqual(tops(view), [GREEN, GREEN, OFF, OFF, OFF]);
+    view = congestion(0); assert.equal(view.props.accessibilityLabel, '혼잡도 미제공'); assert.deepEqual(tops(view), Array(5).fill(OFF));
+    view = congestion(9); assert.equal(view.props.accessibilityLabel, '혼잡도 매우 혼잡'); assert.deepEqual(tops(view), Array(5).fill(RED));
+    view = congestion(-3); assert.equal(view.props.accessibilityLabel, '혼잡도 미제공'); assert.deepEqual(tops(view), Array(5).fill(OFF));
+    view = congestion(1); assert.equal(view.props.accessibilityLabel, '혼잡도 쾌적'); assert.deepEqual(tops(view), [MINT, OFF, OFF, OFF, OFF]);
+    const block = findAll125(view, e => e.type === 'Image')[0];
+    assert.deepEqual(plain(block.props.style), { width: 14, height: 14 * 1.1 });
+    r.unmount();
+});
+
+test('187 공용 글자 컴포넌트는 원래 style 순서·위치를 지키고 글꼴을 맨 뒤에 붙이며 fontFamily 가 있으면 그대로 둬요', () => {
+    // 화면 검사에서는 가짜 요소로 연결하므로, 여기서는 app-text.tsx 를 직접 불러와 style 합치기 규칙만 확인해요.
+    const { Text, TextInput } = createRuntime().load('src/components/app-text.tsx');
+    for (const [Component, type] of [[Text, 'Text'], [TextInput, 'TextInput']]) {
+        // style 없음: 글꼴 스타일 하나만(검사 환경은 web 이라 Pretendard 뒤에 fallback 이 붙어요)
+        let element = Component({});
+        const font = plain(element.props.style);
+        assert.equal(element.type, type); assert.deepEqual(Object.keys(font), ['fontFamily']); assert.match(font.fontFamily, /^Pretendard\b/);
+        // 객체 하나
+        const single = { color: '#111', fontWeight: '800' };
+        element = Component({ style: single });
+        assert.equal(element.props.style.length, 2); assert.equal(element.props.style[0], single); assert.deepEqual(plain(element.props.style[1]), font);
+        // 배열: 원래 위치 유지(false·null 자리 포함), 글꼴은 맨 뒤
+        const a = { color: 'red' }; const b = { fontSize: 14 }; const original = [a, false, b, null];
+        element = Component({ style: original });
+        assert.equal(element.props.style.length, 5);
+        original.forEach((value, index) => assert.equal(element.props.style[index], value));
+        assert.deepEqual(plain(element.props.style[4]), font); assert.equal(original.length, 4);
+        // 중첩 배열: 바깥 배열 위치 유지, 안쪽 배열은 같은 참조
+        const inner = [a, b]; element = Component({ style: [inner, single] });
+        assert.equal(element.props.style[0], inner); assert.equal(element.props.style[1], single); assert.deepEqual(plain(element.props.style[2]), font);
+        // fontFamily 가 이미 있으면 그대로(객체·배열·중첩 배열 모두 같은 참조)
+        const mono = { fontFamily: 'monospace' };
+        for (const style of [mono, [a, mono], [a, [b, mono]]]) assert.equal(Component({ style }).props.style, style);
+        // 나머지 props 그대로 전달
+        const ref = { current: null }; const onPress = () => {}; const onChangeText = () => {};
+        element = Component({ style: a, ref, numberOfLines: 2, onPress, onChangeText, accessibilityLabel: '라벨', testID: 'id', children: '글자' });
+        assert.equal(element.props.ref ?? element.ref, ref);
+        assert.equal(element.props.numberOfLines, 2); assert.equal(element.props.onPress, onPress); assert.equal(element.props.onChangeText, onChangeText);
+        assert.equal(element.props.accessibilityLabel, '라벨'); assert.equal(element.props.testID, 'id'); assert.equal(element.props.children, '글자');
+    }
+});
+
+test('198 서버 화면은 블록 승객과 실제 판정·재촬영·갤러리·경로 복귀를 함께 제공하고 시연 컨트롤을 넣지 않아요', async () => {
+    const r = await directionScreen125();
+    const shutter = r.button('표지판 촬영');
+    assert.ok(shutter);
+    assert.equal(shutter.props.disabled, false);
+    assert.ok(r.button('갤러리 선택'));
+    await r.press('표지판 촬영');
+    r.respond(async () => jsonResponse({ success: true, data: directionData114('WRONG') }));
+    let view = await r.press('AI로 확인하기');
+    assert.ok(findElement(deep125(view), e => e.type === 'Image' && e.props.source?.uri.startsWith('data:image/svg+xml')));
+    assert.ok(r.button('표지판 촬영')); assert.ok(r.button('갤러리 선택')); assert.ok(r.button('경로 안내로 돌아가기'));
+    assert.equal(photoUri125(view), null, '결과 후 원본 사진 정리 정책은 그대로예요');
+    assert.equal(texts125(view).some(text => /시연용|시연 결과|AI OCR 미연결/.test(text)), false);
+    await r.press('표지판 촬영');
+    view = r.render();
+    assert.equal(findElement(deep125(view), e => e.props?.accessibilityRole === 'header'), null, '재촬영 시 이전 판정은 사라져요');
+    assert.ok(r.button('AI로 확인하기')); r.unmount();
 });

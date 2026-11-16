@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { Text } from '@/components/app-text';
 import { WebView } from 'react-native-webview';
 import type { Coordinate, MapBounds } from '@/utils/home-map';
 import { buildMapHtml, isAllowedMapNavigation, parseMapMessage } from '@/components/map/map-html';

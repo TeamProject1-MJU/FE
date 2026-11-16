@@ -8,9 +8,9 @@ import {
     Pressable,
     ScrollView,
     StyleSheet,
-    Text,
     View,
 } from 'react-native';
+import { Text } from '@/components/app-text';
 
 import { ApiError, isAuthError } from '@/services/api/errors';
 import { getSessionGeneration } from '@/services/auth';
@@ -22,7 +22,7 @@ import {
     type RoomDetail,
 } from '@/types/room';
 
-const NAVY = '#0f1c3f';
+const NAVY = '#5C3F78';
 const RED = '#c43c50';
 
 type LeaveError = {

@@ -3,7 +3,7 @@
  *
  * 서버 모드: POST /ai/direction-check (multipart/form-data), 인증은 공통 API 클라이언트가 처리합니다.
  * - image: 촬영·선택한 사진 (JPG/PNG, 서버는 저장하지 않음)
- * - route: JSON 문자열 { stationId, lineId, direction?, headsign }
+ * - route: JSON 문자열 { stationId, lineId, direction?, headsign? }. 방향 또는 알려진 방면 이름이 필요해요.
  * - 서버 분석 대기와 업로드 시간을 포함해 요청당 30초를 기다립니다.
  *
  * mock 모드에서는 기존 예시 사진 5종을 사용합니다.
@@ -12,6 +12,7 @@
 import { post } from '@/services/api/client';
 import { useMock as isMockMode } from '@/services/api/config';
 import { ApiError, isAuthError } from '@/services/api/errors';
+import { directionRouteIssue, normalizeDirectionRoute } from '@/utils/direction-route';
 import {
     DirectionCheckError,
     type DirectionCheckResponse,
@@ -68,7 +69,7 @@ export const LINE_COLORS: Record<number, string> = {
     8: '#E6186C',
 };
 
-type Expected = DirectionCheckRoute & { stationName: string; lineName: string };
+type Expected = Omit<DirectionCheckRoute, 'headsign'> & { stationName: string; lineName: string; headsign: string };
 
 /** 사용자 경로에 맞춰 예시 사진 5장을 만듭니다. */
 export function buildSamples(expected: Expected): Sample[] {
@@ -178,7 +179,7 @@ export function parseDirectionResponse(value: unknown): DirectionCheckResponse {
     const sign = (input: unknown, nullable: boolean): SignInfo => {
         if (!record(input)) throw invalid();
         for (const key of ['stationName', 'lineName', 'headsign']) {
-            if (typeof input[key] !== 'string' && !(nullable && input[key] === null)) throw invalid();
+            if (typeof input[key] !== 'string' && !((nullable || key === 'headsign') && input[key] === null)) throw invalid();
         }
         return { stationName: input.stationName as string | null, lineName: input.lineName as string | null, headsign: input.headsign as string | null };
     };
@@ -195,11 +196,14 @@ export function checkDirection(photo: DirectionPhoto, route: DirectionCheckRoute
 export function checkDirection(sample: Sample, expected: Expected): Promise<DirectionCheckResponse>;
 export async function checkDirection(input: DirectionPhoto | Sample, route: DirectionCheckRoute | Expected): Promise<DirectionCheckResponse> {
     if (isMockMode()) return checkMockDirection(input as Sample, route as Expected);
+    const issue = directionRouteIssue(route);
+    if (issue) throw new DirectionCheckError('VALIDATION_ERROR', issue);
+    const normalized = normalizeDirectionRoute(route)!;
     const photo = input as DirectionPhoto;
     const form = new FormData();
     if (photo.file) form.append('image', photo.file, photo.fileName);
     else form.append('image', { uri: photo.uri, type: photo.mimeType, name: photo.fileName } as unknown as Blob);
-    form.append('route', JSON.stringify({ stationId: route.stationId, lineId: route.lineId, headsign: route.headsign, ...(route.direction ? { direction: route.direction } : {}) }));
+    form.append('route', JSON.stringify(normalized));
     try {
         return parseDirectionResponse(await post<unknown>('/ai/direction-check', form, { timeoutMs: DIRECTION_CHECK_TIMEOUT_MS }));
     } catch (error) {

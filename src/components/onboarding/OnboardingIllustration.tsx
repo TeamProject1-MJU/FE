@@ -1,70 +1,43 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { Text } from '@/components/app-text';
+import Passenger, { type PassengerTone } from '@/components/passenger';
+import TrainBlock from '@/components/train-block';
+import CongestionBlocks from '@/components/congestion-blocks';
 
-const NAVY = '#0f1c3f';
-const people = ['민', '준', '서', '지'];
-const colors = ['#ffd7c2', '#cfe3ff', '#d9f2e4', '#eadfff'];
+const PURPLE = '#5C3F78';
+const TONES: PassengerTone[] = ['me', 'other', 'pink', 'sky'];
 
 function Line({ number }: { number: 2 | 4 | 7 }) {
     return (
-        <Text
-            style={[
-                styles.line,
-                {
-                    backgroundColor:
-                        number === 4
-                            ? '#00a5de'
-                            : number === 7
-                                ? '#747f00'
-                                : '#00a84d',
-                },
-            ]}
-        >
+        <Text maxFontSizeMultiplier={1} style={[
+            styles.line,
+            { backgroundColor: number === 4 ? '#00A5DE' : number === 7 ? '#747F00' : '#00A84D' },
+        ]}>
             {number}
         </Text>
     );
 }
 
-export default function OnboardingIllustration({
-                                                   page,
-                                               }: {
-    page: number;
-}) {
+// 소개용 예시 그림이며 실제 검색 결과나 약속방 데이터를 읽지 않아요.
+export default function OnboardingIllustration({ page }: { page: number }) {
     if (page === 0) {
         return (
-            <View style={styles.art}>
-
-
-                <View style={styles.card}>
-                    <View style={styles.row}>
-                        <Text style={styles.tag}>추천</Text>
-                        <Text style={styles.secondary}>● 보통</Text>
-                    </View>
-
+            <View style={styles.art} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                <View style={styles.routePassenger}><Passenger size={86} /></View>
+                <View style={styles.train}><TrainBlock line={2} size={112} /></View>
+                <View style={[styles.card, styles.routeCard]}>
+                    <Text style={styles.tag}>추천 경로</Text>
                     <Text style={styles.duration}>28분</Text>
-
                     <View style={styles.row}>
                         <Line number={4} />
-                        <View
-                            style={[
-                                styles.track,
-                                { backgroundColor: '#00a5de' },
-                            ]}
-                        />
+                        <View style={[styles.track, { backgroundColor: '#00A5DE' }]} />
                         <Line number={2} />
-                        <View
-                            style={[
-                                styles.track,
-                                {
-                                    flex: 1.7,
-                                    backgroundColor: '#00a84d',
-                                },
-                            ]}
-                        />
                     </View>
-
-                    <Text style={styles.detail}>
-                        환승 1회  |  도보 4분
-                    </Text>
+                    <Text style={styles.detail}>환승 1회 / 도보 4분</Text>
+                    <View style={styles.congestion}>
+                        <CongestionBlocks level={3} size={20} />
+                        <Text style={styles.secondary}>보통</Text>
+                    </View>
                 </View>
             </View>
         );
@@ -72,40 +45,26 @@ export default function OnboardingIllustration({
 
     if (page === 1) {
         return (
-            <View style={styles.art}>
+            <View style={styles.art} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                <View style={styles.hangers}>
+                    <View style={styles.hanger} /><View style={styles.hanger} />
+                </View>
                 <View style={styles.camera}>
-                    <View style={styles.corners}>
-                        <Text style={styles.corner}>⌜</Text>
-                        <Text style={styles.corner}>⌝</Text>
-                    </View>
-
+                    <View style={[styles.corner, styles.topLeft]} />
+                    <View style={[styles.corner, styles.topRight]} />
+                    <View style={[styles.corner, styles.bottomLeft]} />
+                    <View style={[styles.corner, styles.bottomRight]} />
                     <View style={styles.sign}>
-                        <Line number={2} />
-
-                        <View style={styles.grow}>
-                            <Text style={styles.signTitle}>
-                                성수 · 잠실 방면
-                            </Text>
-                            <Text style={styles.secondary}>
-                                Seongsu · Jamsil
-                            </Text>
-                        </View>
-
-                        <Text style={styles.arrow}>→</Text>
+                        <Text maxFontSizeMultiplier={1} style={styles.signLine}>2</Text>
+                        <Text maxFontSizeMultiplier={1} style={styles.signTitle}>내선순환</Text>
+                        <Text maxFontSizeMultiplier={1} style={styles.signArrow}>→</Text>
                     </View>
                 </View>
-
+                <View style={styles.directionPassenger}><Passenger size={82} /></View>
                 <View style={[styles.card, styles.direction]}>
-                    <Text style={styles.directionArrow}>→</Text>
-
-                    <View style={styles.grow}>
-                        <Text style={styles.ai}>
-                            ✦ AI 분석 완료
-                        </Text>
-                        <Text style={styles.signTitle}>
-                            선택한 경로와 같은 방면이에요
-                        </Text>
-                    </View>
+                    <Passenger size={32} />
+                    <View style={styles.check}><Text style={styles.checkText}>✓</Text></View>
+                    <Text style={styles.directionText}>맞는 방향이에요</Text>
                 </View>
             </View>
         );
@@ -113,304 +72,97 @@ export default function OnboardingIllustration({
 
     if (page === 2) {
         return (
-            <View style={[styles.art, styles.card]}>
-                <View style={styles.row}>
-                    <Text style={styles.tag}>최적 중간역</Text>
-                    <Text style={styles.green}>최대 차이 6분</Text>
+            <View style={styles.art} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+                <View style={[styles.connector, { transform: [{ rotate: '32deg' }] }]} />
+                <View style={[styles.connector, { transform: [{ rotate: '-32deg' }] }]} />
+                <View style={styles.personTopLeft}><Passenger size={68} /></View>
+                <View style={styles.personTopRight}><Passenger tone="other" size={68} /></View>
+                <View style={styles.personBottomLeft}><Passenger tone="pink" size={68} /></View>
+                <View style={styles.personBottomRight}><Passenger tone="sky" size={68} /></View>
+                <View style={[styles.card, styles.midpoint]}>
+                    <Text style={styles.tag}>추천 중간역</Text>
+                    <Text style={styles.stationName}>건대입구역</Text>
+                    <View style={styles.row}><Line number={2} /><Line number={7} /></View>
                 </View>
-
-                <View style={[styles.row, styles.station]}>
-                    <Text style={[styles.stationName, styles.grow]}>
-                        건대입구역
-                    </Text>
-                    <Line number={2} />
-                    <Line number={7} />
-                </View>
-
-                {[31, 27, 33, 29].map((time, index) => (
-                    <View
-                        key={time}
-                        style={[styles.row, styles.personRow]}
-                    >
-                        <Text
-                            style={[
-                                styles.avatar,
-                                { backgroundColor: colors[index] },
-                            ]}
-                        >
-                            {people[index]}
-                        </Text>
-
-                        <View style={styles.bar}>
-                            <View
-                                style={[
-                                    styles.fill,
-                                    { width: `${(time / 33) * 100}%` },
-                                ]}
-                            />
-                        </View>
-
-                        <Text style={styles.time}>{time}분</Text>
-                    </View>
-                ))}
             </View>
         );
     }
 
     return (
-        <View style={styles.art}>
-            <View style={styles.room}>
-                <View style={styles.row}>
-                    <Text style={styles.roomTitle}>
-                        기말 끝 파티
-                    </Text>
+        <View style={styles.art} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+            <View style={[styles.card, styles.room]}>
+                <View style={[styles.row, styles.roomHeading]}>
+                    <Text style={styles.roomTitle}>주말 저녁 모임</Text>
                     <Text style={styles.tag}>D-3</Text>
                 </View>
-
-                <View style={[styles.row, styles.station]}>
-                    <Text style={[styles.roomStation, styles.grow]}>
-                        건대입구역
-                    </Text>
-                    <Line number={2} />
-                    <Line number={7} />
+                <View style={styles.roomStation}>
+                    <Line number={2} /><Text style={styles.stationText}>건대입구역</Text>
                 </View>
-
                 <View style={styles.avatars}>
-                    {people.map((person, index) => (
-                        <Text
-                            key={person}
-                            style={[
-                                styles.avatar,
-                                { backgroundColor: colors[index] },
-                            ]}
-                        >
-                            {person}
-                        </Text>
-                    ))}
+                    {TONES.map(tone => <Passenger key={tone} tone={tone} size={48} />)}
                 </View>
             </View>
-
-            <View style={styles.bubble}>
-                <Text style={styles.ai}>✦</Text>
-
-                <Text style={styles.bubbleText}>
-                    <Text style={styles.bold}>
-                        @링크로
-                    </Text>
-                    {'\n'}이동과 약속에 대해 물어보세요
-                </Text>
+            <View style={[styles.card, styles.bubble]}>
+                <Text style={styles.bubbleText}>@링크로, 어디서 만날까?</Text>
+                <Text style={styles.sparkle}>✦</Text>
+                <View style={styles.bubbleTail} />
             </View>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
-    art: {
-        width: '100%',
-        maxWidth: 360,
-        height: 324,
-        alignSelf: 'center',
-        justifyContent: 'center',
-    },
+    art: { width: '100%', maxWidth: 340, height: 300, alignSelf: 'center', justifyContent: 'center' },
     card: {
-        padding: 24,
-        borderWidth: 1,
-        borderColor: '#e4e8ef',
-        borderRadius: 26,
-        backgroundColor: '#fff',
+        backgroundColor: '#FFF', borderWidth: 1, borderColor: '#E4DCEB', borderRadius: 22,
+        shadowColor: '#5C3F78', shadowOffset: { width: 0, height: 5 }, shadowOpacity: 0.08, shadowRadius: 10,
     },
-    row: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        justifyContent: 'space-between',
-    },
-    grow: {
-        flex: 1,
-    },
-    departure: {
-        alignSelf: 'flex-start',
-        padding: 12,
-        marginBottom: 16,
-        borderRadius: 8,
-        backgroundColor: NAVY,
-        color: '#fff',
-        fontSize: 13,
-        fontWeight: '700',
-    },
+    row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
     tag: {
-        padding: 8,
-        borderRadius: 8,
-        color: '#168767',
-        backgroundColor: '#e6f8f1',
-        fontSize: 13,
-        fontWeight: '800',
+        alignSelf: 'flex-start', color: PURPLE, backgroundColor: '#EDE8F3',
+        paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, fontSize: 12, lineHeight: 17, fontWeight: '700',
     },
-    secondary: {
-        color: '#697386',
-        fontSize: 12,
-    },
-    duration: {
-        marginVertical: 20,
-        color: NAVY,
-        fontSize: 40,
-        fontWeight: '800',
-    },
-    line: {
-        width: 28,
-        height: 28,
-        borderRadius: 14,
-        textAlign: 'center',
-        lineHeight: 28,
-        color: '#fff',
-        fontWeight: '700',
-    },
-    track: {
-        flex: 1,
-        height: 8,
-        borderRadius: 8,
-    },
-    detail: {
-        marginTop: 20,
-        color: '#697386',
-        fontSize: 13,
-    },
-    camera: {
-        backgroundColor: '#152442',
-        padding: 20,
-        borderRadius: 26,
-        paddingBottom: 60,
-    },
-    corners: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginBottom: 20,
-    },
-    corner: {
-        color: '#fff',
-        fontSize: 40,
-    },
-    sign: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        backgroundColor: '#fff',
-        borderColor: '#2bcf9a',
-        borderWidth: 6,
-        borderRadius: 8,
-        padding: 10,
-    },
-    signTitle: {
-        color: NAVY,
-        fontSize: 15,
-        fontWeight: '800',
-        marginVertical: 4,
-    },
-    arrow: {
-        fontSize: 26,
-        color: NAVY,
-    },
-    direction: {
-        marginTop: -30,
-        marginHorizontal: 12,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-        padding: 16,
-    },
-    directionArrow: {
-        fontSize: 32,
-        color: '#2bcf9a',
-        backgroundColor: NAVY,
-        padding: 10,
-        borderRadius: 12,
-    },
-    ai: {
-        color: '#7955c7',
-        fontSize: 13,
-        fontWeight: '700',
-    },
-    green: {
-        color: '#168767',
-        fontSize: 12,
-        fontWeight: '700',
-    },
-    station: {
-        marginVertical: 24,
-    },
-    stationName: {
-        fontSize: 22,
-        fontWeight: '800',
-        color: NAVY,
-    },
-    personRow: {
-        marginTop: 12,
-    },
-    avatar: {
-        width: 28,
-        height: 28,
-        borderRadius: 14,
-        textAlign: 'center',
-        lineHeight: 28,
-        color: NAVY,
-        fontSize: 12,
-        fontWeight: '800',
-    },
-    bar: {
-        flex: 1,
-        height: 8,
-        borderRadius: 8,
-        backgroundColor: '#e4e8ef',
-        overflow: 'hidden',
-    },
-    fill: {
-        height: '100%',
-        backgroundColor: NAVY,
-        borderRadius: 8,
-    },
-    time: {
-        width: 36,
-        color: NAVY,
-        fontSize: 13,
-        textAlign: 'right',
-    },
-    room: {
-        padding: 24,
-        borderRadius: 26,
-        borderWidth: 1,
-        borderColor: '#ffffff20',
-        backgroundColor: '#ffffff14',
-    },
-    roomTitle: {
-        color: '#fff',
-        fontSize: 17,
-        fontWeight: '800',
-    },
-    roomStation: {
-        color: '#fff',
-        fontSize: 15,
-        fontWeight: '700',
-    },
-    avatars: {
-        flexDirection: 'row',
-        gap: 4,
-    },
-    bubble: {
-        flexDirection: 'row',
-        gap: 8,
-        marginTop: -8,
-        marginHorizontal: 16,
-        padding: 16,
-        borderRadius: 18,
-        backgroundColor: '#f0eaff',
-    },
-    bubbleText: {
-        flex: 1,
-        color: NAVY,
-        fontSize: 15,
-        lineHeight: 23,
-    },
-    bold: {
-        fontWeight: '800',
-    },
+    line: { width: 26, height: 26, borderRadius: 13, textAlign: 'center', lineHeight: 26, color: '#FFF', fontSize: 16, fontWeight: '800' },
+    routePassenger: { position: 'absolute', left: 0, bottom: 66 },
+    train: { position: 'absolute', left: 16, bottom: 12 },
+    routeCard: { width: '62%', alignSelf: 'flex-end', padding: 16 },
+    duration: { color: '#25212D', fontSize: 36, lineHeight: 44, fontWeight: '800', marginVertical: 12 },
+    track: { height: 7, flex: 1, borderRadius: 4 },
+    detail: { color: '#51485C', fontSize: 11, lineHeight: 18, marginTop: 14 },
+    congestion: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#EDE8F3', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 4 },
+    secondary: { color: '#746B7F', fontSize: 11 },
+    hangers: { position: 'absolute', top: 0, left: '28%', right: '28%', height: 64, flexDirection: 'row', justifyContent: 'space-between' },
+    hanger: { width: 8, backgroundColor: '#C9BFD5' },
+    camera: { position: 'absolute', top: 40, left: '5%', right: '5%', height: 144, padding: 16, justifyContent: 'center' },
+    corner: { position: 'absolute', width: 22, height: 22, borderColor: '#9873B1' },
+    topLeft: { left: 0, top: 0, borderTopWidth: 4, borderLeftWidth: 4, borderTopLeftRadius: 10 },
+    topRight: { right: 0, top: 0, borderTopWidth: 4, borderRightWidth: 4, borderTopRightRadius: 10 },
+    bottomLeft: { left: 0, bottom: 0, borderBottomWidth: 4, borderLeftWidth: 4, borderBottomLeftRadius: 10 },
+    bottomRight: { right: 0, bottom: 0, borderBottomWidth: 4, borderRightWidth: 4, borderBottomRightRadius: 10 },
+    sign: { backgroundColor: '#00A84D', borderWidth: 6, borderColor: '#FFF', borderRadius: 12, padding: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6 },
+    signLine: { width: 34, height: 34, borderRadius: 17, lineHeight: 34, textAlign: 'center', backgroundColor: '#FFF', color: '#009B48', fontSize: 25, fontWeight: '800' },
+    signTitle: { color: '#FFF', fontSize: 20, fontWeight: '800' },
+    signArrow: { color: '#FFF', fontSize: 26, fontWeight: '700' },
+    directionPassenger: { position: 'absolute', left: 0, bottom: 8 },
+    direction: { position: 'absolute', right: 0, bottom: 20, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 6 },
+    check: { width: 20, height: 20, borderRadius: 10, backgroundColor: '#2AA358', alignItems: 'center', justifyContent: 'center' },
+    checkText: { color: '#FFF', fontSize: 14, fontWeight: '800' },
+    directionText: { color: '#25212D', fontSize: 14, fontWeight: '800' },
+    connector: { position: 'absolute', width: '80%', left: '10%', top: 148, height: 4, backgroundColor: '#B89BC7' },
+    personTopLeft: { position: 'absolute', left: 0, top: 10 },
+    personTopRight: { position: 'absolute', right: 0, top: 10 },
+    personBottomLeft: { position: 'absolute', left: 0, bottom: 10 },
+    personBottomRight: { position: 'absolute', right: 0, bottom: 10 },
+    midpoint: { width: 146, alignSelf: 'center', alignItems: 'center', padding: 14, gap: 12 },
+    stationName: { color: '#25212D', fontSize: 20, fontWeight: '800' },
+    room: { padding: 18, marginHorizontal: 4, marginBottom: 66 },
+    roomHeading: { justifyContent: 'space-between', gap: 4 },
+    roomTitle: { color: '#25212D', fontSize: 19, fontWeight: '800', flexShrink: 1 },
+    roomStation: { flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 16 },
+    stationText: { color: '#51485C', fontSize: 16 },
+    avatars: { borderTopWidth: 1, borderTopColor: '#EDE8F3', paddingTop: 14, flexDirection: 'row', justifyContent: 'space-between' },
+    bubble: { position: 'absolute', right: 0, bottom: 16, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 18 },
+    bubbleText: { color: '#25212D', fontSize: 16, fontWeight: '600' },
+    sparkle: { color: '#A17BBB', fontSize: 24 },
+    bubbleTail: { position: 'absolute', right: 28, bottom: -10, width: 18, height: 18, backgroundColor: '#FFF', borderRightWidth: 1, borderBottomWidth: 1, borderColor: '#E4DCEB', transform: [{ skewY: '-40deg' }] },
 });

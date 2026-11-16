@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { Text } from '@/components/app-text';
 import { StatusBar } from 'expo-status-bar';
 
 export function PrototypeShell({ children, dark = false }: { children: ReactNode; dark?: boolean }) {

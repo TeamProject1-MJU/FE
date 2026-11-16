@@ -1,3 +1,4 @@
+import MemberAvatar, { memberTone } from '@/components/rooms/member-avatar';
 import { formatStationName } from '@/utils/station-name';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
@@ -8,9 +9,9 @@ import {
     Pressable,
     ScrollView,
     StyleSheet,
-    Text,
     View,
 } from 'react-native';
+import { Text } from '@/components/app-text';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -44,17 +45,16 @@ import { ApiError, isAuthError } from '@/services/api/errors';
 import { useRoomEvents, roomEventsScope } from '@/hooks/use-room-events';
 import { mergeRoomUpdated, parseSelectedStationEvent } from '@/services/room-events';
 import { cacheRoomDetail, clearCachedRoomCode, getRoomCacheScope, removeCachedRoom } from '@/services/room-cache';
+import { ROOM_CARD_PADDING } from '@/constants/layout';
 
-const NAVY = '#0f1c3f';
-const MINT = '#2bcf9a';
-const MINT_DEEP = '#12a77a';
+const NAVY = '#25212D';
+const MINT = '#5C3F78';
+const MINT_DEEP = '#5C3F78';
 const WHITE = '#ffffff';
-const BG = '#f3f5f8';
-const SECONDARY = '#6b7488';
-const BORDER = '#e6e9ef';
+const BG = '#F7F5FA';
+const SECONDARY = '#83808B';
+const BORDER = '#EEEAF2';
 const RED = '#d6455d';
-const ORANGE = '#c77a00';
-const GOLD = '#f2b705';
 
 type Tab = 'chat' | 'vote';
 type Sheet = 'leave' | 'invite' | null;
@@ -140,6 +140,8 @@ export default function RoomDetailScreen() {
     const [tab, setTab] = useState<Tab>(params.tab === 'vote' ? 'vote' : 'chat');
     const [sheet, setSheet] = useState<Sheet>(null);
     const [notice, setNotice] = useState('');
+    /** 확정 약속역 "내 경로 보기"에서 내 출발역이 없을 때 안내 (#140) */
+    const [routeHint, setRouteHint] = useState('');
     const accountScope = roomEventsScope();
     const stationEvent = useRef({ roomId, at: -Infinity, revision: 0 });
     const summaryEvent = useRef<{ revision: number; payload: unknown }>({ revision: 0, payload: null });
@@ -350,6 +352,15 @@ export default function RoomDetailScreen() {
 
     const chat = useRoomChat(roomId, params.mock);
     const roomScroll = useRef<ScrollView>(null);
+    const [scrollHeight, setScrollHeight] = useState(0);
+    const [tabsHeight, setTabsHeight] = useState(0);
+    const [noticeHeight, setNoticeHeight] = useState(0);
+    const scrollBottomPadding = insets.bottom + (tab === 'chat' ? 12 : 32);
+    // Keep the existing gap above the tabs and between the tabs and panel.
+    const chatPanelHeight = scrollHeight > 0 && tabsHeight > 0
+        ? Math.max(360, scrollHeight - tabsHeight - styles.content.gap * 2 - scrollBottomPadding
+            - (notice ? noticeHeight + styles.content.gap : 0))
+        : undefined;
 
     /** 추천받기·내 출발역 설정: 출발역·조건 입력 화면 (그림 30) */
     const openRecommendations = () => {
@@ -421,6 +432,33 @@ export default function RoomDetailScreen() {
 
     const at = detail.appointmentAt ? new Date(detail.appointmentAt) : null;
     const station = detail.selectedStation;
+
+    /**
+     * 확정 약속역까지 내 경로 (#140). OWNER·MEMBER 모두 써요.
+     * 출발 = 로그인한 나의 이 방 출발역(내 userId 로 찾아요), 도착 = 확정 약속역, roomId = 이 방(약속방 모드, 방 약속 시각 반영).
+     * 역은 ID 로 넘겨 이름 재검색 없이 정확한 역으로 요청해요. 출발역과 약속역이 같으면 경로 화면의 같은 역 안내(#141)에 맡겨요.
+     * 내 출발역이 없으면 경로 화면으로 가지 않고 안내와 함께 기존 출발역 설정(역 검색)을 바로 열어요.
+     */
+    const openMyRoute = () => {
+        if (!detail.selectedStation) return;
+        const myDeparture = detail.members.find(item => item.userId === myUserId)?.departureStation;
+        if (!myDeparture) {
+            setRouteHint('내 출발역을 먼저 설정해 주세요.');
+            pickDeparture();
+            return;
+        }
+        setRouteHint('');
+        router.push({
+            pathname: '/route-search',
+            params: {
+                departureId: String(myDeparture.id),
+                departure: myDeparture.name,
+                destinationId: String(detail.selectedStation.id),
+                destination: detail.selectedStation.name,
+                roomId: detail.id,
+            },
+        });
+    };
     const setCount = detail.members.filter(item => item.departureStation).length;
     const proposalItems = proposals.status === 'ready' ? proposals.list.items : [];
     // 방 카드 요약: 최다 득표 후보 (동점이면 개수만). 투표는 참고용이라 확정과는 무관해요
@@ -461,45 +499,38 @@ export default function RoomDetailScreen() {
 
             <ScrollView
                 ref={roomScroll}
+                onLayout={({ nativeEvent }) => setScrollHeight(nativeEvent.layout.height)}
                 keyboardShouldPersistTaps="handled"
                 keyboardDismissMode="interactive"
                 contentContainerStyle={[
                     styles.content,
-                    { paddingBottom: insets.bottom + 32 },
+                    { paddingBottom: scrollBottomPadding },
                 ]}
             >
-                {/* 방 정보 카드 */}
-                <View style={styles.roomCard}>
+                <View style={styles.titleBlock}>
                     <View style={styles.rowBetween}>
-                        <View style={styles.chips}>
-                            <View style={[styles.statusChip, station && styles.statusChipDone]}>
-                                <Text style={[styles.statusText, station && styles.statusTextDone]}>
-                                    {station ? '약속역 확정' : '약속역 정하는 중'}
-                                </Text>
-                            </View>
-                            <View style={styles.roleChip}>
-                                <Text style={styles.roleText}>{isOwner ? '내 역할 · 방장' : '내 역할 · 멤버'}</Text>
-                            </View>
-                        </View>
-                        {/* 그림 28 ❾ 방 정보 수정: 방장만 */}
+                        <Text style={styles.roomName}>{detail.name}</Text>
                         {isOwner && (
                             <Pressable style={styles.editButton} onPress={() => router.push(`/rooms/${detail.id}/edit`)} accessibilityRole="button">
-                                <Ionicons name="create-outline" size={14} color={WHITE} />
+                                <Ionicons name="create-outline" size={14} color={MINT} />
                                 <Text style={styles.editText}>수정</Text>
                             </Pressable>
                         )}
                     </View>
-
-                    <Text style={styles.roomName}>{detail.name}</Text>
                     <View style={styles.infoRow}>
-                        <Ionicons name="calendar-outline" size={15} color="#c7cfdf" />
+                        <Ionicons name="calendar-outline" size={15} color="#6F6B78" />
                         <Text style={styles.infoText}>
                             {at ? `${formatMonthDay(at)} ${formatTime(at)} · ${formatDday(at)}` : '약속 시각 미정'}
                         </Text>
-                        <Ionicons name="people-outline" size={15} color="#c7cfdf" style={{ marginLeft: 10 }} />
+                        <Ionicons name="people-outline" size={15} color="#6F6B78" style={{ marginLeft: 10 }} />
                         <Text style={styles.infoText}>{detail.memberCount}/{detail.maxMembers}명</Text>
                     </View>
 
+                </View>
+                <View style={styles.roomCard}>
+                    <View style={[styles.statusChip, station && styles.statusChipDone]}>
+                        <Text style={[styles.statusText, station && styles.statusTextDone]}>{station ? '약속역 확정' : '약속역 정하는 중'}</Text>
+                    </View>
                     {/* 약속역: 확정 / 미확정 */}
                     <View style={styles.stationStrip}>
                         {station ? (
@@ -507,14 +538,17 @@ export default function RoomDetailScreen() {
                                 <View style={styles.flex}>
                                     <Text style={styles.stripLabel}>약속역</Text>
                                     <View style={styles.stationRow}>
+                                        <Text style={styles.stationName}>{formatStationName(station.name)}</Text>
                                         {station.lines?.map(line => (
                                             <View key={line.lineId} style={[styles.lineBadge, { backgroundColor: line.color }]}>
                                                 <Text style={styles.lineText}>{line.lineName.replace('호선', '')}</Text>
                                             </View>
                                         ))}
-                                        <Text style={styles.stationName}>{formatStationName(station.name)}</Text>
                                     </View>
                                 </View>
+                                <Pressable style={[styles.stripButton, styles.stripPrimary]} onPress={openMyRoute} accessibilityRole="button" accessibilityLabel="확정 약속역까지 내 경로 보기">
+                                    <Text style={[styles.stripButtonText, styles.stripPrimaryText]}>내 경로 보기</Text>
+                                </Pressable>
                             </>
                         ) : (
                             <>
@@ -534,12 +568,20 @@ export default function RoomDetailScreen() {
                             </>
                         )}
                     </View>
+                    <SelectedStationControls
+                        detail={detail}
+                        controller={stationManager}
+                        bottomInset={insets.bottom}
+                        embedded
+                    />
                 </View>
-                <SelectedStationControls
-                    detail={detail}
-                    controller={stationManager}
-                    bottomInset={insets.bottom}
-                />
+                {/* 출발역을 설정하면 안내는 저절로 사라져요. */}
+                {!!station && !!routeHint && !detail.members.find(item => item.userId === myUserId)?.departureStation && (
+                    <View style={styles.routeHint} accessibilityRole="alert">
+                        <Ionicons name="information-circle-outline" size={16} color={MINT} />
+                        <Text style={styles.routeHintText}>{routeHint}</Text>
+                    </View>
+                )}
 
                 {/* 멤버 · 출발역 (그림 28 ❼) */}
                 <View style={styles.panel}>
@@ -551,18 +593,10 @@ export default function RoomDetailScreen() {
                         const mine = member.userId === myUserId;
                         return (
                             <View key={member.userId} style={styles.memberRow}>
-                                <View style={[styles.avatar, mine && styles.avatarMine]}>
-                                    <Text style={styles.avatarText}>{Array.from(member.nickname)[0]}</Text>
-                                    {member.userId === detail.ownerId && (
-                                        <View style={styles.crown}>
-                                            <Ionicons name="star" size={9} color={WHITE} />
-                                        </View>
-                                    )}
-                                </View>
+                                <MemberAvatar tone={memberTone(member.userId, myUserId)} size={32} isOwner={member.userId === detail.ownerId} />
                                 <View style={styles.flex}>
                                     <View style={styles.nameRow}>
                                         <Text style={styles.memberName}>{member.nickname}</Text>
-                                        {member.userId === detail.ownerId && <Text style={styles.ownerTag}>방장</Text>}
                                         {mine && <Text style={styles.meTag}>나</Text>}
                                     </View>
                                     {mine && departureSaving ? (
@@ -609,13 +643,13 @@ export default function RoomDetailScreen() {
                 </View>
 
                 {/* 채팅 · 후보/투표 */}
-                <View style={styles.tabs}>
+                <View style={styles.tabs} onLayout={({ nativeEvent }) => setTabsHeight(nativeEvent.layout.height)}>
                     {([
                         ['chat', '채팅', 'chatbubble-ellipses-outline'],
                         ['vote', proposals.status === 'ready' ? `약속역 후보 ${proposalItems.length}` : '약속역 후보', 'checkbox-outline'],
                     ] as const).map(([key, title, icon]) => (
                         <Pressable key={key} style={[styles.tab, tab === key && styles.tabActive]} onPress={() => { setTab(key); setNotice(''); }}>
-                            <Ionicons name={icon} size={17} color={tab === key ? NAVY : SECONDARY} />
+                            <Ionicons name={icon} size={17} color={tab === key ? MINT : SECONDARY} />
                             <Text style={[styles.tabText, tab === key && styles.tabTextActive]}>{title}</Text>
                         </Pressable>
                     ))}
@@ -627,6 +661,8 @@ export default function RoomDetailScreen() {
                         controller={chat}
                         myUserId={myUserId}
                         members={detail.members}
+                        ownerId={detail.ownerId}
+                        panelHeight={chatPanelHeight}
                         onInputFocus={() => {
                             roomScroll.current?.scrollToEnd({
                                 animated: true,
@@ -659,7 +695,7 @@ export default function RoomDetailScreen() {
                 )}
 
                 {!!notice && (
-                    <View style={styles.notice}>
+                    <View style={styles.notice} onLayout={({ nativeEvent }) => setNoticeHeight(nativeEvent.layout.height)}>
                         <Ionicons name="information-circle-outline" size={18} color={NAVY} />
                         <Text style={styles.noticeText}>{notice}</Text>
                     </View>
@@ -774,60 +810,57 @@ function ErrorState({ error, onRetry }: { error: LoadError; onRetry: () => void 
 const styles = StyleSheet.create({
     root: { flex: 1, backgroundColor: BG },
     flex: { flex: 1 },
-    header: { backgroundColor: WHITE, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingBottom: 12, borderBottomWidth: 1, borderColor: BORDER },
-    headerTitle: { position: 'absolute', left: 0, right: 0, bottom: 20, textAlign: 'center', fontSize: 18, fontWeight: '800', color: NAVY },
+    header: { backgroundColor: BG, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingBottom: 8 },
+    headerTitle: { position: 'absolute', left: 0, right: 0, bottom: 18, textAlign: 'center', fontSize: 15, fontWeight: '600', color: NAVY },
     headerSide: { minWidth: 36, alignItems: 'flex-end' },
     headerRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
     iconButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
-    codeChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, height: 30, borderRadius: 15, backgroundColor: '#eafbf5', borderWidth: 1, borderColor: '#bfeedd' },
-    codeText: { color: NAVY, fontSize: 13, fontWeight: '800', letterSpacing: 1 },
-    content: { padding: 16, gap: 12 },
-    center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 28 },
+    codeChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, height: 30, borderRadius: 15, backgroundColor: '#EDE8F3' },
+    codeText: { color: MINT, fontSize: 12, fontWeight: '700', letterSpacing: 1 },
+    content: { paddingHorizontal: 16, paddingTop: 8, gap: 10 },
+    center: { flex: 1, margin: 16, alignItems: 'center', justifyContent: 'center', gap: 10, paddingHorizontal: 24, borderRadius: 24, borderWidth: 1, borderColor: BORDER, backgroundColor: WHITE },
     stateTitle: { color: NAVY, fontSize: 17, fontWeight: '800', marginTop: 6 },
     caption: { color: SECONDARY, fontSize: 12.5, lineHeight: 19, textAlign: 'center' },
-    primaryButton: { marginTop: 10, paddingHorizontal: 22, height: 46, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: NAVY },
+    primaryButton: { marginTop: 10, paddingHorizontal: 22, height: 46, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: MINT },
     primaryText: { color: WHITE, fontSize: 14.5, fontWeight: '800' },
     linkButton: { padding: 10 },
     linkText: { color: SECONDARY, fontSize: 13, fontWeight: '700' },
 
-    roomCard: { padding: 18, backgroundColor: NAVY, borderRadius: 20 },
+    // #224 글자 줄 맞춤: 카드 밖 제목·날짜 줄을 카드 안 글자 시작선에 맞춰요.
+    titleBlock: { paddingHorizontal: ROOM_CARD_PADDING },
+    roomCard: { padding: 14, backgroundColor: WHITE, borderRadius: 24, borderWidth: 1, borderColor: BORDER },
     rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
     chips: { flexDirection: 'row', gap: 6, flexShrink: 1, flexWrap: 'wrap' },
-    statusChip: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 9, backgroundColor: '#2a3a63' },
-    statusChipDone: { backgroundColor: '#1d4a4a' },
-    statusText: { color: '#c7cfdf', fontSize: 11, fontWeight: '800' },
+    statusChip: { alignSelf: 'flex-start', paddingHorizontal: 9, paddingVertical: 4, borderRadius: 9, backgroundColor: '#EDE8F3' },
+    statusChipDone: { backgroundColor: '#EDE8F3' },
+    statusText: { color: MINT, fontSize: 11, fontWeight: '700' },
     statusTextDone: { color: MINT },
-    roleChip: { paddingHorizontal: 9, paddingVertical: 4, borderRadius: 9, borderWidth: 1, borderColor: '#3a4a73' },
-    roleText: { color: '#dfe5f1', fontSize: 11, fontWeight: '700' },
-    editButton: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 10, height: 28, borderRadius: 9, backgroundColor: '#2a3a63' },
-    editText: { color: WHITE, fontSize: 12, fontWeight: '800' },
-    roomName: { marginTop: 14, color: WHITE, fontSize: 22, fontWeight: '900' },
-    infoRow: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 5 },
-    infoText: { color: '#dfe5f1', fontSize: 13, fontWeight: '600' },
-    stationStrip: { marginTop: 16, padding: 12, borderRadius: 14, backgroundColor: '#1b2b55', flexDirection: 'row', alignItems: 'center', gap: 10 },
-    stripLabel: { color: '#aeb8cf', fontSize: 11.5, fontWeight: '700' },
-    stripCaption: { marginTop: 3, color: WHITE, fontSize: 14, fontWeight: '700' },
-    stationRow: { marginTop: 4, flexDirection: 'row', alignItems: 'center', gap: 5 },
+    editButton: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 10, height: 28, borderRadius: 14, backgroundColor: '#EDE8F3' },
+    editText: { color: MINT, fontSize: 12, fontWeight: '700' },
+    roomName: { flex: 1, color: NAVY, fontSize: 26, fontWeight: '800' },
+    infoRow: { marginTop: 5, flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' },
+    infoText: { color: '#6F6B78', fontSize: 12, fontWeight: '600' },
+    stationStrip: { marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 8 },
+    stripLabel: { color: SECONDARY, fontSize: 11.5, fontWeight: '700' },
+    stripCaption: { marginTop: 3, color: NAVY, fontSize: 14, fontWeight: '700' },
+    stationRow: { marginTop: 2, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 5 },
     lineBadge: { minWidth: 20, height: 20, paddingHorizontal: 5, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-    lineText: { color: WHITE, fontSize: 11, fontWeight: '900' },
-    stationName: { marginLeft: 2, color: WHITE, fontSize: 17, fontWeight: '900' },
-    stripButton: { paddingHorizontal: 13, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#4a5a83' },
+    lineText: { color: WHITE, fontSize: 11, fontWeight: '800' },
+    stationName: { color: NAVY, fontSize: 32, fontWeight: '800' },
+    routeHint: { marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#F4F1F7' },
+    routeHintText: { flex: 1, color: '#6F6B78', fontSize: 12, fontWeight: '600' },
+    stripButton: { paddingHorizontal: 13, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: MINT },
     stripButtonText: { color: WHITE, fontSize: 13, fontWeight: '800' },
     stripPrimary: { backgroundColor: MINT, borderColor: MINT },
-    stripPrimaryText: { color: NAVY },
+    stripPrimaryText: { color: WHITE },
 
-    panel: { backgroundColor: WHITE, borderWidth: 1, borderColor: BORDER, borderRadius: 18, padding: 16 },
-    cardTitle: { color: NAVY, fontSize: 16, fontWeight: '800', marginBottom: 6 },
+    panel: { paddingHorizontal: ROOM_CARD_PADDING, paddingVertical: 4 },
+    cardTitle: { color: NAVY, fontSize: 14, fontWeight: '800', marginBottom: 2 },
     counter: { color: SECONDARY, fontSize: 12, fontWeight: '700' },
-    memberRow: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 11, borderTopWidth: 1, borderTopColor: '#f0f2f6' },
-    avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#eef1f6', alignItems: 'center', justifyContent: 'center' },
-    avatarMine: { backgroundColor: '#e3f8f0' },
-    avatarText: { color: NAVY, fontSize: 15, fontWeight: '800' },
-    crown: { position: 'absolute', right: -2, top: -2, width: 16, height: 16, borderRadius: 8, backgroundColor: GOLD, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: WHITE },
+    memberRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#ECE8F0' },
     nameRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
     memberName: { color: NAVY, fontSize: 14.5, fontWeight: '800' },
-    ownerTag: { overflow: 'hidden', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, backgroundColor: '#fff4cf', color: '#9a6a00', fontSize: 10.5, fontWeight: '800' },
-    meTag: { overflow: 'hidden', paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, backgroundColor: '#e3f8f0', color: MINT_DEEP, fontSize: 10.5, fontWeight: '800' },
+    meTag: { color: MINT, fontSize: 10.5, fontWeight: '700' },
     departureRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 3, flexWrap: 'wrap' },
     departure: { color: SECONDARY, fontSize: 12.5, fontWeight: '600' },
     departureSaving: { marginTop: 3, color: SECONDARY, fontSize: 12.5, fontWeight: '600' },
@@ -837,15 +870,15 @@ const styles = StyleSheet.create({
     lineDotText: { color: WHITE, fontSize: 10, fontWeight: '800' },
     smallButtonBusy: { width: 76, borderColor: BORDER },
     smallButtonRetry: { backgroundColor: RED, borderColor: RED },
-    departureEmpty: { marginTop: 3, color: ORANGE, fontSize: 12.5, fontWeight: '700' },
-    smallButton: { paddingHorizontal: 10, height: 32, borderRadius: 9, borderWidth: 1, borderColor: NAVY, alignItems: 'center', justifyContent: 'center' },
-    smallButtonText: { color: NAVY, fontSize: 12, fontWeight: '800' },
+    departureEmpty: { marginTop: 3, color: '#A8A3B0', fontSize: 12.5 },
+    smallButton: { paddingHorizontal: 10, height: 30, borderRadius: 15, borderWidth: 1, borderColor: '#D9CCE4', backgroundColor: WHITE, alignItems: 'center', justifyContent: 'center' },
+    smallButtonText: { color: MINT, fontSize: 12, fontWeight: '700' },
 
-    tabs: { flexDirection: 'row', gap: 8 },
-    tab: { flex: 1, flexDirection: 'row', gap: 5, alignItems: 'center', justifyContent: 'center', backgroundColor: WHITE, height: 42, borderRadius: 12, borderWidth: 1, borderColor: BORDER },
-    tabActive: { backgroundColor: '#eafbf5', borderColor: MINT },
+    tabs: { flexDirection: 'row', gap: 4, padding: 4, borderRadius: 22, backgroundColor: '#EDE8F3' },
+    tab: { flex: 1, flexDirection: 'row', gap: 5, alignItems: 'center', justifyContent: 'center', height: 36, borderRadius: 18 },
+    tabActive: { backgroundColor: WHITE },
     tabText: { color: SECONDARY, fontSize: 13, fontWeight: '700' },
-    tabTextActive: { color: NAVY, fontWeight: '800' },
+    tabTextActive: { color: MINT, fontWeight: '800' },
 
     chatEmpty: { alignItems: 'center', paddingVertical: 22, gap: 6 },
     chatEmptyTitle: { color: NAVY, fontSize: 15, fontWeight: '800' },
@@ -863,12 +896,12 @@ const styles = StyleSheet.create({
 
     disabled: { opacity: 0.45 },
 
-    notice: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 12, backgroundColor: '#e9edf5' },
+    notice: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 14, backgroundColor: '#EDE8F3' },
     noticeText: { flex: 1, color: NAVY, fontSize: 12.5, lineHeight: 19 },
 
     backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,28,63,0.45)' },
     sheet: { paddingHorizontal: 20, paddingTop: 22, borderTopLeftRadius: 24, borderTopRightRadius: 24, backgroundColor: WHITE },
-    sheetTitle: { color: NAVY, fontSize: 19, fontWeight: '900', marginBottom: 12 },
+    sheetTitle: { color: NAVY, fontSize: 19, fontWeight: '800', marginBottom: 12 },
     sheetBody: { color: '#3c4559', fontSize: 14.5, lineHeight: 22, fontWeight: '600' },
     sheetHint: { marginTop: 8, color: SECONDARY, fontSize: 12.5, lineHeight: 19 },
     sheetButtons: { marginTop: 20, flexDirection: 'row', gap: 10 },

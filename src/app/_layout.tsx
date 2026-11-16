@@ -1,4 +1,6 @@
 import AuthGate from '@/components/auth-gate';
+import SplashOverlay from '@/components/splash/splash-overlay';
+import { WEB_APP_WIDTH as DESIGN_WIDTH, WEB_APP_HEIGHT as DESIGN_HEIGHT, webAppScale } from '@/constants/web-app-frame';
 import type { ReactNode } from 'react';
 import { Stack } from 'expo-router';
 import {
@@ -8,8 +10,6 @@ import {
     View,
 } from 'react-native';
 
-const DESIGN_WIDTH = 393;
-const DESIGN_HEIGHT = 852;
 const screenLayout = ({ children }: { children: ReactNode }) => <AuthGate>{children}</AuthGate>;
 
 export default function RootLayout() {
@@ -21,17 +21,12 @@ export default function RootLayout() {
         return (
             <View style={styles.nativePage}>
                 <Stack screenOptions={{ headerShown: false }} screenLayout={screenLayout} />
+                <SplashOverlay />
             </View>
         );
     }
 
-    const maxScale = 0.9;
-
-    const webScale = Math.min(
-        maxScale,
-        width / DESIGN_WIDTH,
-        height / DESIGN_HEIGHT,
-    );
+    const webScale = webAppScale(width, height);
 
     const scaledWidth = DESIGN_WIDTH * webScale;
     const scaledHeight = DESIGN_HEIGHT * webScale;
@@ -54,6 +49,7 @@ export default function RootLayout() {
                     ]}
                 >
                     <Stack screenOptions={{ headerShown: false }} screenLayout={screenLayout} />
+                    <SplashOverlay />
                 </View>
             </View>
         </View>

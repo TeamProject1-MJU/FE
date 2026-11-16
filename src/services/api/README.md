@@ -132,27 +132,36 @@ import { searchRoute } from '@/services/route';
 
 await searchRoute(origin, destination);
 await searchRoute(origin, destination, { roomId });
-// POST /routes/search: { originStationId, destinationStationId, roomId? }
+await searchRoute(origin, destination, { departAt: '2026-11-20T23:50:00+09:00' });
+await searchRoute(origin, destination, { arriveAt: '2026-11-21T10:00:00+09:00' });
+// POST /routes/search: { originStationId, destinationStationId, roomId?, departAt? | arriveAt? }
 ```
 
 - 서버 모드는 서버 역 ID를 보내요. 홈에서 이름으로 넘어온 초기값도 `searchStations`로 이름 끝의 "역"을 제외한 값이 같은 지원 역을 찾아요. 못 찾거나 조회에 실패하면 비워 두고, 늦은 응답은 새로 선택한 역을 덮지 않아요.
-- `roomId`는 전달됐을 때만 본문에 넣고 `departAt`은 보내지 않아요. 공통 클라이언트의 10초 제한과 기존 A-1 인증 처리를 사용하며 경로 서비스의 재시도는 추가하지 않아요.
+- 시간 선택 기본값은 지금 출발이며 `departAt`·`arriveAt`을 모두 생략해요. 출발 지정은 `departAt`, 도착 지정은 `arriveAt`만 보내고 두 필드는 동시에 보내지 않아요. 시각은 오프셋을 포함한 ISO-8601이며 날짜·시각 선택과 결과 날짜는 기기 시간대와 관계없이 한국 시각으로 표시해요.
+- 지난 `departAt`은 BE와 같이 허용해요. `arriveAt`은 초 단위 현재 이후, 서울 날짜 기준 오늘 + 기본 365일 이하예요. 설정에 따른 더 짧은 범위는 서버의 `VALIDATION_ERROR` 상세 안내를 표시해요. 약속방 UI에서는 개인 시간 선택을 숨기고 `roomId`만 보내 기존 약속 시각 우선 규칙을 유지해요. 서비스는 명시적인 `roomId` + `arriveAt` 요청도 계약대로 전달해요.
+- `roomId`와 시간 필드는 값이 있을 때만 본문에 넣어요. 공통 클라이언트의 10초 제한과 기존 A-1 인증 처리를 사용하며 경로 서비스의 재시도는 추가하지 않아요.
 - `routeSource`, 경로·요약·단계·정차역의 화면 사용 필드를 검사해요. 빠지거나 타입이 다르면 `ApiError('UNKNOWN_ERROR')`가 발생하고 서비스 경계에서 `RouteSearchError('EXTERNAL_API_ERROR')`로 바뀌어요.
 - 6.1 혼잡도의 출처는 `kind`예요(6.2만 `source`). `toCongestion`으로 정리하고 혼잡도가 `null`이면 미제공, `stations: null`이면 빈 배열로 처리해요. 도보의 `line: null`, `path: null`, `routeType: null`, 정차역의 `slotDate: null`을 허용해요.
 - 도착 시각·요금·소요시간·방향·혼잡도 단계와 라벨은 서버 값을 사용하며 재계산하거나 방면 문구를 만들지 않아요. 대기 필드는 없어도 정상이고 `totalWithWaitSec ?? totalTimeSec`로 표시해요. 미제공 혼잡도는 회색, 추정 요금은 "예상", `direction: null`인 방향은 `directionCode`로 표시해요.
-- `STATION_UNSUPPORTED`(422), `ROUTE_NOT_FOUND`·`STATION_NOT_FOUND`(404)는 같은 `RouteSearchError` 코드, 네트워크·시간 초과는 `NETWORK_ERROR`, 나머지는 `EXTERNAL_API_ERROR`로 전달해요. `TOKEN_*`과 공통 인증 오류는 `ApiError` 그대로 전달하고 화면에서 중복 안내하지 않아요.
-- mock 모드의 기존 경로·대기·도착 시각 생성은 유지해요. 방 화면 호출 연결, 출발 시각 선택, 지도와 추천 API는 이번 범위 밖이에요. 실시간 도착정보는 아래 항목에서 다뤄요.
+- `STATION_UNSUPPORTED`(422), `ROUTE_NOT_FOUND`·`STATION_NOT_FOUND`·`ROOM_NOT_FOUND`(404), `NOT_ROOM_MEMBER`(403)는 같은 `RouteSearchError` 코드, 네트워크·시간 초과는 `NETWORK_ERROR`, 나머지는 `EXTERNAL_API_ERROR`로 전달해요. `TOKEN_*`과 공통 인증 오류는 `ApiError` 그대로 전달하고 화면에서 중복 안내하지 않아요.
+- `NOT_ROOM_MEMBER`는 방 접근 불가, `ROOM_NOT_FOUND`는 삭제됐거나 존재하지 않는 방으로 구분해 안내해요. 두 오류에서는 경로 재시도 대신 약속방 목록으로 이동하며, 방 목록은 화면에 돌아올 때 서버에서 다시 조회해요.
+- `VALIDATION_ERROR`(400), `NO_SERVICE_TIME`·`ARRIVAL_UNREACHABLE`(422)는 시각을 바꾸도록 안내하며 같은 조건을 자동 재시도하지 않아요. `slackSeconds`는 null·생략 또는 0 이상의 정수만 허용하고 서버 값으로 여유 시간을 표시해요. 도착 지정인데 이 값이 없는 대체 결과는 적용 여부 미확인 안내를 표시해요.
+- `TIMETABLE`은 시각표 출처로 그대로 보존하고 `ESTIMATED`로 변환하거나 시간에 "약"을 붙이지 않아요. 대기 포함 총시간은 서버의 `totalWithWaitSec`을 우선 사용하며 `waitSec`을 다시 합산하지 않아요. `null`·필드 생략은 유지하고, 알 수 없는 대기 출처는 거절해요.
+- 검색 조건은 결과가 성공한 요청과 함께 저장하고 안내 화면에도 전달해요. 시각 지정 안내에는 현재 시점의 실시간 다음 열차를 섞어 표시하지 않으며, 지금 출발·기존 약속방의 도착정보는 유지해요. 시각 변경·화면 이탈 후 늦은 응답은 최신 결과를 덮지 않아요.
+- mock의 지금 출발은 기존 동작을 유지하고 시간 지정은 예시 소요시간으로만 화면을 확인해요. 이때 실제 열차 시각표 결과가 아니라는 안내를 표시해요. 서버 모드의 출발·도착·첫차·지각·여유 시간은 재계산하지 않아요. 실시간 도착정보는 아래 항목에서 다뤄요.
 
 ## 실시간 도착정보 (#95, 명세 6.3)
 
 ```ts
 import { fetchArrivals } from '@/services/arrivals';
-import { formatNextTrain } from '@/components/route/format';
+import { arrivalsCountdownBase, arrivalsElapsedSec, formatNextTrain } from '@/components/route/format';
 
 // GET /stations/222/arrivals?lineId=2&nextStationId=223&directionCode=INNER&limit=2
 const data = await fetchArrivals({ stationId: 222, lineId: 2, nextStationId: 223, directionCode: 'INNER', limit: 2 });
+const baseMs = arrivalsCountdownBase(); // 응답을 받은 순간의 앱 시각 (#173)
 if (data.available) {
-    const elapsed = Math.max(0, Math.floor((Date.now() - Date.parse(data.receivedAt!)) / 1000));
+    const elapsed = arrivalsElapsedSec(baseMs, Date.now());
     data.trains.map(train => formatNextTrain(train, elapsed)); // "성수행 2분 5초" · "성수행 곧 도착" · "성수행 · 2번째 전역"
 }
 ```
@@ -169,10 +178,10 @@ if (data.available) {
   - 화면이 쓰지 않는 `stopsAway`("[N]번째 전역"이 아니면 null)·`lastTrain`·`express`는 형식이 맞을 때만 담고, 없거나 다르면 빼요.
 - 서버 오류 코드는 그대로 전달해요. 401 계열은 공통 클라이언트(A-1)가 갱신·로그인 이동을 처리한 뒤 던져요.
 - 표시 규칙(`formatNextTrain`):
-  - `secondsUntil`이 숫자이면 `message`와 상관없이 카운트다운해요. 남은 초 = max(0, `secondsUntil` − `receivedAt` 이후 지난 초). 60초 미만이면 "성수행 곧 도착", 그 밖에는 "성수행 N분 N초"예요(60초 → "1분 0초", 59초·0초 → "곧 도착").
+  - `secondsUntil`이 숫자이면 `message`와 상관없이 카운트다운해요. 남은 초 = max(0, `secondsUntil` − 앱이 응답을 받은 시각 이후 지난 초). BE가 `secondsUntil`을 요청 시점 기준으로 보정해서 내려줘요(#173). 명세 6.3의 `receivedAt` 기준 문구와 다르며 BE 확인에 따라요. `receivedAt`(서버 캐시 시각)은 계산에 쓰지 않고, 기준 시각은 `arrivalsCountdownBase` 한 곳에서 정해요. 60초 미만이면 "성수행 곧 도착", 그 밖에는 "성수행 N분 N초"예요(60초 → "1분 0초", 59초·0초 → "곧 도착").
   - `secondsUntil`이 null일 때만 `message`를 시간 대신 "성수행 · 2번째 전역"처럼 보여줘요. `message` 맨 앞 "[N]"은 대괄호만 빼요("[3]번째 전역 (남영)" → "의정부행 · 3번째 전역 (남영)"). 나머지 글자는 원문 그대로예요. `message`가 이미 "성수행"으로 시작하면 행선지는 한 번만 나와요. `message`도 비어 있으면 "성수행"만 보여줘요.
   - 행선지는 `formatDestination`으로 "성수" → "성수행"처럼 "행"을 붙여요. 이미 "행"으로 끝나면 붙이지 않아요.
-- `NextTrains`는 화면에 들어올 때 바로 한 번, 이후 20초마다 불러요(서버가 역·노선별 10~20초 캐시와 일일 한도가 있어 15~30초를 지켜요). 이전 요청이 끝나지 않았으면 다음 폴링을 건너뛰어요. `available: false`·열차 없음·`receivedAt`을 읽을 수 없음·호출 실패(`UNKNOWN_ERROR` 포함)는 줄을 숨기고, 인증 오류는 이전 값을 그대로 둬요. 토큰을 갱신하는 동안에는 요청이 끝나지 않아 이전 값이 계속 보여요.
+- `NextTrains`는 화면에 들어올 때 바로 한 번, 이후 20초마다 불러요(서버가 역·노선별 10~20초 캐시와 일일 한도가 있어 15~30초를 지켜요). 이전 요청이 끝나지 않았으면 다음 폴링을 건너뛰어요. `available: false`·열차 없음·호출 실패(`UNKNOWN_ERROR` 포함, `receivedAt`을 읽을 수 없는 응답도 파서가 여기로 보내요)는 줄을 숨기고, 인증 오류는 이전 값과 이전 기준 시각을 그대로 둬요. 새 응답(폴링·화면 복귀 재조회)을 받을 때마다 기준 시각을 새로 잡아요. 토큰을 갱신하는 동안에는 요청이 끝나지 않아 이전 값이 계속 보여요.
 - mock 모드는 기존 동작을 유지하고 서버를 부르지 않아요. mock 응답도 실서버와 같은 필드 이름이고 `message`에 "3분 2초 후" 같은 문구를 채워요. 둘째 인자 `'none'`(available:false)·`'fail'`(호출 실패)은 mock 모드에서만 쓰고 서버 모드에서는 무시해요. 안내 화면 주소에 `&arrivals=none` 또는 `&arrivals=fail`을 붙여 확인해요.
 - 경로 검색(6.1)의 대기 필드(`waitSec`, `nextTrains`) 표시는 이번 범위가 아니에요.
 
@@ -320,3 +329,21 @@ await setSelectedStation(roomId, null); // DELETE …/selected-station, body 없
 - sessionGeneration:userId 범위를 요청 전후 검사하고, 같은 계정·방의 나가기/약속역 변경 연타를 막아요. 나가기 전에 시작한 목록·상세·멤버 조회는 제거한 방을 캐시에 되살리지 못해요. 계정·방 변경·화면 이탈 뒤 늦은 응답은 이전 화면의 성공 문구·이동을 실행하지 않아요. 화면 복귀 시 처리 중 버튼도 해제해요.
 - 서버 성공 뒤 상세 GET만 실패하면 '변경은 저장했지만 최신 정보를 불러오지 못했어요'라고 안내해요. 자동 재전송은 추가하지 않아요. 재저장 시 같은 역의 confirmedAt이 다시 갱신될 수 있어요.
 - BE 실시간 이벤트·SYSTEM 메시지·WebSocket, 후보·투표 API 변경은 범위 밖이에요. 기존 채팅의 mock SYSTEM 메시지가 실제 서버 이벤트를 수신한 것은 아니에요.
+
+## AI 표지판 방향 확인 (#151, 명세 9.1)
+
+```ts
+import { checkDirection } from '@/services/direction';
+
+await checkDirection(photo, { stationId, lineId, direction: 'INNER' });
+await checkDirection(photo, { stationId, lineId, headsign: '사당 방면' });
+// POST /ai/direction-check: image + route(JSON 문자열), 요청당 30초
+```
+
+- 역·노선 ID는 양의 정수이며, 알려진 `headsign` 또는 유효한 `direction` 중 하나가 필요해요. `direction`은 경로 SUBWAY 단계의 `directionCode`를 UP/DOWN/INNER/OUTER/LOOP 그대로 보내요. 잘못된 코드는 headsign 유무와 관계없이 거절해요.
+- `headsign`의 생략·null·공백은 방면 미상으로 처리하고 전송에서는 생략해요. 방향 코드로 종착역·행선지·방면 이름을 만들지 않아요. 알려진 방면 이름만 있는 기존 요청도 유지해요.
+- 경로 안내는 구간별 승차역·노선·방향으로 진입해요. 역·노선 정보가 없거나 방향·방면이 모두 없는 구간에는 버튼 대신 이유를 표시하고, 직접 사진 화면을 열어도 사진 선택·업로드를 막아요. mock의 기존 예시 흐름은 유지해요.
+- `expected.headsign`의 명시적 null은 정상이고, 그 밖의 필수 필드 누락·타입 오류는 기존처럼 `UNKNOWN_ERROR`예요. 요청에 사용한 코드는 결과 화면에서 **내 경로 방향**으로 표시하며 응답의 headsign에 채워 넣지 않아요.
+- CORRECT·WRONG·RETAKE와 사유는 서버 판독 결과를 따르고 FE에서 다시 추측하지 않아요. RETAKE/MISSING_INFO는 유효한 200 판독 결과이며 400 VALIDATION_ERROR와 구분해요. 방향 단독 요청에서 행선지 이름만 보이면 판정이 어려울 수 있다는 안내를 제공해요.
+- 사진 검증·축소·30초 제한·중복 제출 방지·같은 사진 재시도·인증 갱신·임시 파일 정리는 유지해요. 경로·계정·화면이 바뀐 뒤 늦은 판독은 표시하지 않아요.
+- 계약 기준: [BE 방향 단독 요청·응답 계약](https://github.com/TeamProject1-MJU/BE/blob/c6f793eff5e27e9f776144d905a695fc797192ea/docs/sign-75.md). 실제 역·노선·승차 방향 조합과 사진의 명시적 방향 근거는 BE가 검증해요.

@@ -2,7 +2,7 @@
  * 경로 검색 서비스 (#34)
  *
  * 서버 모드: 명세 6.1 POST /routes/search, mock 모드: 기존 경로를 유지해요.
- * - 요청: { originStationId, destinationStationId, roomId? } (departAt은 보내지 않아요)
+ * - 요청: { originStationId, destinationStationId, roomId?, departAt? | arriveAt? } (#152, 두 시각은 함께 보내지 않아요)
  * - 타임아웃: 10초 (명세 6.1, 서버가 카카오 5초 + 대체 경로 계산을 마칠 때까지 기다림)
  */
 
@@ -12,12 +12,14 @@ import { post } from '@/services/api/client';
 import { useMock as isMockMode } from '@/services/api/config';
 import { ApiError, isAuthError } from '@/services/api/errors';
 import { toCongestion } from '@/types/congestion';
+import { validateRouteTimeOptions } from '@/utils/route-time';
 import {
     RouteSearchError,
     type Route,
     type Congestion,
     type RouteErrorCode,
     type RouteSearchRequest,
+    type RouteSearchOptions,
     type RouteStationCongestion,
     type RouteStep,
     type RouteSummary,
@@ -44,7 +46,7 @@ const isNumber = (value: unknown): value is number => typeof value === 'number' 
 const isNullableString = (value: unknown): value is string | null => value === null || typeof value === 'string';
 const LEVELS = ['COMFORTABLE', 'RELAXED', 'NORMAL', 'CROWDED', 'VERY_CROWDED'];
 const KINDS = ['PREDICTED', 'ESTIMATED', 'MOCK'];
-const WAIT_KINDS = ['REALTIME', 'ESTIMATED', 'NONE'];
+const WAIT_KINDS = ['REALTIME', 'ESTIMATED', 'NONE', 'TIMETABLE'];
 
 /** 6.1은 kind를 받아요. 데이터 없음은 화면이 안전하게 읽을 수 있는 모양으로 정리해요. */
 function parseCongestion(value: unknown): Congestion {
@@ -66,8 +68,9 @@ function parseCongestion(value: unknown): Congestion {
 /** 대기 필드는 없으면 그대로 두고, 내려오는 경우에만 타입을 검사해요. */
 function validateWait(value: Record<string, unknown>, summary: boolean) {
     if (('waitSec' in value && value.waitSec !== null && !isNumber(value.waitSec))
-        || ('waitKind' in value && !WAIT_KINDS.includes(value.waitKind as string))
-        || (summary && ['transferWaitSec', 'totalWithWaitSec'].some(key => key in value && !isNumber(value[key])))
+        || ('waitKind' in value && value.waitKind !== null && !WAIT_KINDS.includes(value.waitKind as string))
+        || (summary && 'transferWaitSec' in value && !isNumber(value.transferWaitSec))
+        || (summary && 'totalWithWaitSec' in value && value.totalWithWaitSec !== null && !isNumber(value.totalWithWaitSec))
         || (!summary && 'nextTrains' in value && (!Array.isArray(value.nextTrains)
             || !value.nextTrains.every(train => isRecord(train)
                 && typeof train.destinationLabel === 'string'
@@ -91,6 +94,8 @@ function parseSummary(value: unknown): RouteSummary {
         throw new ApiError('UNKNOWN_ERROR');
     }
     validateWait(value, true);
+    if ('slackSeconds' in value && value.slackSeconds !== null
+        && (!isNumber(value.slackSeconds) || !Number.isInteger(value.slackSeconds) || value.slackSeconds < 0)) throw new ApiError('UNKNOWN_ERROR');
     return {
         ...value,
         noService: value.noService ?? false,
@@ -154,41 +159,57 @@ function parseRouteSearch(value: unknown): RouteSearchResponse {
     };
 }
 
-async function searchServerRoute(origin: StationSummary, destination: StationSummary, options: { roomId?: string }) {
+async function searchServerRoute(origin: StationSummary, destination: StationSummary, options: RouteSearchOptions) {
     try {
         const body: RouteSearchRequest = {
             originStationId: origin.id,
             destinationStationId: destination.id,
             ...(options.roomId === undefined ? {} : { roomId: options.roomId }),
+            ...(options.departAt === undefined ? {} : { departAt: options.departAt }),
+            ...(options.arriveAt === undefined ? {} : { arriveAt: options.arriveAt }),
         };
         return parseRouteSearch(await post<unknown>('/routes/search', body));
     } catch (error) {
         // 인증 갱신·실패 처리는 기존 A-1에 맡기고 화면용 오류로 감싸지 않아요.
         if (error instanceof ApiError && (error.code.startsWith('TOKEN_') || isAuthError(error))) throw error;
-        const code = error instanceof ApiError && ['STATION_UNSUPPORTED', 'ROUTE_NOT_FOUND', 'STATION_NOT_FOUND', 'NETWORK_ERROR'].includes(error.code)
+        const code = error instanceof ApiError && ['STATION_UNSUPPORTED', 'ROUTE_NOT_FOUND', 'STATION_NOT_FOUND', 'NOT_ROOM_MEMBER', 'ROOM_NOT_FOUND', 'VALIDATION_ERROR', 'NO_SERVICE_TIME', 'ARRIVAL_UNREACHABLE', 'NETWORK_ERROR'].includes(error.code)
             ? error.code as RouteErrorCode : 'EXTERNAL_API_ERROR';
         const messages = {
             STATION_UNSUPPORTED: '서비스에서 지원하지 않는 역이에요.',
             ROUTE_NOT_FOUND: '지하철 경로를 찾지 못했어요.',
             STATION_NOT_FOUND: '역 정보를 찾지 못했어요.',
+            NOT_ROOM_MEMBER: '참여 중인 약속방이 아니에요.',
+            ROOM_NOT_FOUND: '삭제됐거나 존재하지 않는 약속방이에요.',
+            VALIDATION_ERROR: '검색할 날짜와 시각을 다시 확인해 주세요.',
+            NO_SERVICE_TIME: '선택한 도착 시각에는 운행하는 열차가 없어요. 다른 시각을 선택해 주세요.',
+            ARRIVAL_UNREACHABLE: '그 시각까지 도착할 수 있는 경로가 없어요. 도착 시각을 늦춰 주세요.',
             NETWORK_ERROR: '서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.',
             EXTERNAL_API_ERROR: '경로를 불러오지 못했어요.',
         };
-        throw new RouteSearchError(code, messages[code]);
+        const details = code === 'VALIDATION_ERROR' && error instanceof ApiError && isRecord(error.details)
+            ? [error.details.departAt, error.details.arriveAt].filter(value => typeof value === 'string').join('\n') : '';
+        throw new RouteSearchError(code, details || messages[code]);
     }
 }
 
 export async function searchRoute(
     origin: StationSummary,
     destination: StationSummary,
-    options: { roomId?: string } = {},
+    options: RouteSearchOptions = {},
 ): Promise<RouteSearchResponse> {
+    const timeError = validateRouteTimeOptions(options);
+    if (timeError) throw new RouteSearchError('VALIDATION_ERROR', timeError);
     if (!isMockMode()) return searchServerRoute(origin, destination, options);
 
     await wait(MOCK_DELAY_MS);
 
     if (!origin.isSupported || !destination.isSupported) {
         throw new RouteSearchError('STATION_UNSUPPORTED', '서비스에서 지원하지 않는 역이에요.');
+    }
+
+    // 동일 역도 정상 상태예요. mock에서는 이동 경로를 만들지 않아요.
+    if (origin.id === destination.id) {
+        return { appointmentPassed: false, notice: null, routeSource: 'INTERNAL', routes: [] };
     }
 
     const result = findMockRoutes(origin.name, destination.name);
@@ -206,6 +227,15 @@ export async function searchRoute(
     return {
         ...result.data,
         routes: result.data.routes.map(route => {
+            // 시간 지정 mock은 화면 확인용 예시예요. 실제 시각표 계산으로 표시하지 않아요.
+            if (options.departAt !== undefined || options.arriveAt !== undefined) {
+                const example = withMockWait(route);
+                const duration = example.summary.totalWithWaitSec ?? example.summary.totalTimeSec;
+                const depart = options.arriveAt !== undefined ? Date.parse(options.arriveAt) - duration * 1000 : Date.parse(options.departAt!);
+                const timed = withStationSlots(example, depart);
+                return { ...timed, summary: { ...timed.summary, departureAt: new Date(depart).toISOString(),
+                    arrivalAt: new Date(depart + duration * 1000).toISOString(), slackSeconds: options.arriveAt !== undefined ? 0 : null } };
+            }
             const prepared = withMockWait(withStationSlots(route, now));
             return {
                 ...prepared,

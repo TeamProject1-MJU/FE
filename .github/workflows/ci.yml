@@ -1,0 +1,64 @@
+# PR 자동 검사 (#149)
+# dev 대상 PR 에서 타입 검사·검사 스크립트·웹 빌드를 돌려요. secrets 와 실제 서버를 쓰지 않아요(mock 모드).
+name: CI
+
+on:
+  pull_request:
+    branches: [dev]
+  workflow_dispatch:
+
+# 같은 PR(또는 같은 브랜치의 수동 실행)에 새 커밋이 오면 이전 실행을 취소해요.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CI: 'true'
+  # .env 없이 mock 모드로 검사해요. 실제 키·토큰은 넣지 않아요.
+  EXPO_PUBLIC_USE_MOCK: 'true'
+  EXPO_NO_TELEMETRY: '1'
+
+jobs:
+  check:
+    name: 타입·검사 스크립트·웹 빌드
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 코드 가져오기
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Node 22 준비 (npm 캐시)
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 의존성 설치 (npm ci, lock 파일 그대로)
+        run: npm ci
+
+      # TODO: #132(기존 lint 오류 정리) 완료 후 `npx expo lint` 단계를 여기에 추가해요.
+
+      - name: 타입 검사 (tsc --noEmit)
+        run: npx tsc --noEmit
+
+      - name: 검사 스크립트 (node --test scripts/verify-api-client.cjs)
+        run: node --test scripts/verify-api-client.cjs
+
+      - name: 웹 빌드 (expo export, 결과물은 저장소 밖 임시 폴더)
+        run: npx expo export --platform web --output-dir "${{ runner.temp }}/web-dist"
+
+      - name: 검사 중 바뀐 파일이 없는지 확인 (자동 패키지 설치·설정 파일 생성 방지)
+        run: |
+          changes="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$changes" ]; then
+            echo "::error::검사 중 저장소 파일이 바뀌거나 생겼어요. package.json 변경이나 자동 생성된 설정 파일이 없는지 확인해 주세요."
+            echo "$changes"
+            git diff --stat
+            exit 1
+          fi
+          echo "바뀐 파일 없음"

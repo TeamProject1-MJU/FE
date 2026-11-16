@@ -3,6 +3,7 @@ import { useFocusEffect } from 'expo-router';
 
 import {
     chatContentLength,
+    createChatClientId,
     fetchChatMessages,
     getPendingChatAiCount,
     parseChatMessage,
@@ -11,9 +12,11 @@ import {
 } from '@/services/chat';
 import type {
     ChatMessage,
+    ChatMessagePage,
     ChatMockScenario,
     PendingChatMessage,
 } from '@/types/chat';
+import { AI_REPLY_WINDOW_MS, createAiReplyTracker } from '@/services/chat-ai-wait';
 import { getRealtimeState, subscribeRealtimeState, subscribeRoomEvents } from '@/services/realtime';
 import { RoomError } from '@/types/room';
 import { useMock as isMockMode } from '@/services/api/config';
@@ -57,6 +60,10 @@ type Context = {
     historyLoading: boolean;
     hasMore: boolean;
     cursor: string | null;
+    /** REST 로 받아 빈 구간 없이 이어진 메시지 id (처음 로드·이전 메시지·복구). WS·전송 결과는 넣지 않아요(#137). */
+    syncedIds: Set<string>;
+    /** 이미 어떤 전송에 짝지어진 내 메시지 id (정상 저장 응답·재시도 확인·WS 확인). 다른 전송의 후보가 될 수 없어요(#139). */
+    claimedIds: Set<string>;
     sending: Set<string>;
     sendBaseline: Map<string, Set<string>>;
 };
@@ -104,6 +111,99 @@ export function mergeChatMessages(
     );
 }
 
+/** 재연결 복구에서 최신 쪽부터 받을 최대 페이지 수 (30개 × 10 = 300개, #137) */
+export const CHAT_RECOVERY_MAX_PAGES = 10;
+
+export type ChatRecovery = {
+    /** 받은 메시지(최신 → 오래된 순서) */
+    items: ChatMessage[];
+    /**
+     * overlap: 이어진 목록의 메시지를 만났어요. 그 사이를 합치고 오래된 쪽 cursor·hasMore 는 그대로예요.
+     * complete: 겹치기 전에 방의 처음까지 받았어요(hasMore: false). 받은 것이 방의 모든 메시지예요.
+     * replace: 상한까지 겹치지 않았어요. 목록을 받은 범위로 바꾸고 그보다 오래된 건 이전 메시지 조회로 이어 받아요.
+     */
+    mode: 'overlap' | 'complete' | 'replace';
+    cursor: string | null;
+    hasMore: boolean;
+};
+
+/**
+ * 재연결·화면 복귀·reload 때 끊긴 동안 쌓인 메시지를 빈 구간 없이 받아요 (#137, 명세 10.2·11장).
+ * 최신 페이지부터 nextCursor 를 따라 이어 받고, syncedIds(이미 이어져 있는 목록)의 메시지를 만나면 멈춰요.
+ * 중간에 실패하면 예외를 그대로 던져요(받은 일부만 합치면 빈 구간이 생겨요). 더 진행하면 안 되면(valid false) null.
+ */
+export async function recoverChatGap(
+    fetchPage: (cursor: string | null) => Promise<ChatMessagePage>,
+    syncedIds: ReadonlySet<string>,
+    valid: () => boolean,
+    maxPages = CHAT_RECOVERY_MAX_PAGES,
+): Promise<ChatRecovery | null> {
+    const items: ChatMessage[] = [];
+    let cursor: string | null = null;
+    for (let page = 1; ; page++) {
+        const result = await fetchPage(cursor);
+        if (!valid()) return null;
+        items.push(...result.items);
+        if (result.items.some(message => syncedIds.has(message.id))) return { items, mode: 'overlap', cursor: null, hasMore: false };
+        if (!result.hasMore || !result.nextCursor) return { items, mode: result.hasMore ? 'replace' : 'complete', cursor: result.nextCursor, hasMore: result.hasMore && !!result.nextCursor };
+        if (page >= maxPages) return { items, mode: 'replace', cursor: result.nextCursor, hasMore: true };
+        cursor = result.nextCursor;
+    }
+}
+
+/**
+ * 복구 결과를 현재 목록에 반영해요.
+ * - overlap: 합치기만 해요.
+ * - complete·replace: 받은 범위보다 오래된 기존 메시지만 버려요. 복구 중 WS 로 들어온 더 최신 메시지는 남겨요.
+ */
+export function applyChatRecovery(current: ChatMessage[], recovery: ChatRecovery) {
+    // 받은 것이 없으면(빈 방) 버릴 기준이 없어 그대로 둬요.
+    if (recovery.mode === 'overlap' || !recovery.items.length) return mergeChatMessages(current, recovery.items);
+    const oldest = Math.min(...recovery.items.map(message => Date.parse(message.createdAt)));
+    const fetched = new Set(recovery.items.map(message => message.id));
+    return mergeChatMessages(current.filter(message => fetched.has(message.id) || Date.parse(message.createdAt) >= oldest), recovery.items);
+}
+
+/** 서버 모드에서 최신 한 페이지만 합쳤을 때 이어진 목록과 사이가 빌 수 있는지 (#137) */
+function needsRecovery(ctx: Context, page: ChatMessagePage) {
+    return !isMockMode() && ctx.loaded && page.hasMore && !page.items.some(message => ctx.syncedIds.has(message.id));
+}
+
+export const CHAT_SEND_UNCONFIRMED_TEXT = '저장됐는지 확인하지 못했어요. 다시 보내면 같은 메시지가 두 번 저장될 수 있어요.';
+
+/** items 는 확인하며 받은 메시지, wholeRoom 은 방의 처음까지 받았는지(그러면 목록과 빈 구간 없이 이어져요)예요. */
+export type ChatSendCheck = { items: ChatMessage[]; wholeRoom: boolean } & (
+    | { status: 'saved'; message: ChatMessage }
+    | { status: 'notSaved' }
+    | { status: 'unknown' });
+
+/**
+ * 응답이 유실된 전송을 다시 보내기 전에 서버에 이미 저장됐는지 확인해요 (#139).
+ * 최신 페이지부터 nextCursor 로 과거로 넘기면서 첫 전송 전 기준(baseline)의 메시지를 만나거나 방의 처음까지 받아요(recoverChatGap 재사용).
+ * 원본이 저장됐다면 반드시 그 범위(기준보다 새것) 안에 있어요.
+ * - saved: 후보(기준에 없음·USER·나·본문 일치·다른 전송에 안 짝지어짐) 중 가장 오래된 하나
+ * - notSaved: 범위를 다 봤는데 후보가 없어요. 다시 보내도 돼요.
+ * - unknown: 기준을 모르거나(baseline 없음) 페이지 상한까지 기준을 못 만났어요. 자동으로 보내지 않아요.
+ * 확인 중 오류는 그대로 던지고, 더 진행하면 안 되면(valid false) null 이에요.
+ */
+export async function checkChatSend(
+    fetchPage: (cursor: string | null) => Promise<ChatMessagePage>,
+    baseline: ReadonlySet<string> | undefined,
+    isCandidate: (message: ChatMessage) => boolean,
+    valid: () => boolean,
+    maxPages = CHAT_RECOVERY_MAX_PAGES,
+): Promise<ChatSendCheck | null> {
+    if (!baseline) return { status: 'unknown', items: [], wholeRoom: false };
+    const range = await recoverChatGap(fetchPage, baseline, valid, maxPages);
+    if (!range) return null;
+    const checked = range.mode === 'overlap' || range.mode === 'complete';
+    const candidates = range.items.filter(message => !baseline.has(message.id) && isCandidate(message));
+    const saved = [...candidates].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || (a.id < b.id ? -1 : 1))[0];
+    const wholeRoom = range.mode === 'complete';
+    if (saved) return { status: 'saved', message: saved, items: range.items, wholeRoom };
+    return { status: checked ? 'notSaved' : 'unknown', items: range.items, wholeRoom };
+}
+
 const errorText = (error: unknown) =>
     error instanceof RoomError
         ? error.message
@@ -113,7 +213,6 @@ const denied = (error: unknown) =>
     error instanceof RoomError &&
     (error.code === 'NOT_ROOM_MEMBER' || error.code === 'ROOM_NOT_FOUND');
 
-let clientSequence = 1;
 
 export function useRoomChat(roomId: string, mock?: string) {
     useAuthStatus();
@@ -171,6 +270,37 @@ export function useRoomChat(roomId: string, mock?: string) {
             do {
                 ctx.refreshAgain = false;
 
+                // 서버 모드에서 이미 로드된 목록은 끊긴 동안 쌓인 메시지를 빈 구간 없이 복구해요(#137).
+                // 처음 로드와 mock 모드는 이전처럼 최신 한 페이지예요.
+                if (ctx.loaded && !isMockMode()) {
+                    const recovery = await recoverChatGap(
+                        cursor => fetchChatMessages(roomId, { cursor }),
+                        ctx.syncedIds,
+                        () => ctx.valid() && actionId === ctx.actionId,
+                    );
+                    if (!recovery) return;
+                    recovery.items.forEach(message => ctx.knownIds.add(message.id));
+                    if (recovery.mode === 'overlap') recovery.items.forEach(message => ctx.syncedIds.add(message.id));
+                    else {
+                        // 목록·cursor·hasMore 를 받은 범위로 맞춰요. 그보다 오래된 건 이전 메시지 조회로 이어 받아요.
+                        ctx.syncedIds = new Set(recovery.items.map(message => message.id));
+                        ctx.cursor = recovery.cursor;
+                        ctx.hasMore = recovery.hasMore;
+                    }
+                    ctx.receiveReplies(recovery.items);
+                    ctx.blocked = false;
+                    update(ctx, previous => ({
+                        ...previous,
+                        status: 'ready',
+                        error: null,
+                        blocked: false,
+                        hasMore: ctx.hasMore,
+                        messages: applyChatRecovery(previous.messages, recovery),
+                        aiPending: ctx.aiPending,
+                    }));
+                    continue;
+                }
+
                 const page = await fetchChatMessages(roomId, {
                     mock: scenario,
                 });
@@ -180,6 +310,7 @@ export function useRoomChat(roomId: string, mock?: string) {
                 if (!ctx.loaded) {
                     ctx.cursor = page.nextCursor;
                     ctx.hasMore = page.hasMore;
+                    page.items.forEach(message => ctx.syncedIds.add(message.id));
                 }
 
                 page.items.forEach(message => ctx.knownIds.add(message.id));
@@ -253,6 +384,8 @@ export function useRoomChat(roomId: string, mock?: string) {
             historyLoading: false,
             hasMore: false,
             cursor: null,
+            syncedIds: new Set(),
+            claimedIds: new Set(),
             sending: new Set(),
             sendBaseline: new Map(),
         };
@@ -266,20 +399,19 @@ export function useRoomChat(roomId: string, mock?: string) {
         let fetching = false;
         let latestPage: ReturnType<typeof fetchChatMessages> | undefined;
         const waiting = new Map<string, { question: ChatMessage; deadline: number; expiry: ReturnType<typeof setTimeout> | undefined }>();
-        let latestReplyAt = -Infinity;
+        // 방에서 보이는 질문·답변으로 "답변 하나 = 질문 하나"를 짝지어요(#138, services/chat-ai-wait.ts).
+        const replies = createAiReplyTracker();
         const received = ctx.confirmedIds;
-        const isReply = (message: ChatMessage) => message.senderType === 'AI'
-            || message.senderType === 'SYSTEM' && (message.content.startsWith('AI 사용 한도를 초과해')
-                || message.content.startsWith('AI가 답변을 만들지 못했어요'));
         const publishWaiting = () => {
-            ctx.aiPending = waiting.size;
+            // 짝짓기가 순서 추측이라 개수는 정확하지 않을 수 있어요. 화면에는 대기 여부(0·1)만 알려요.
+            ctx.aiPending = waiting.size > 0 ? 1 : 0;
             update(ctx, previous => ({ ...previous, aiPending: ctx.aiPending }));
             if (!waiting.size) { clearTimeout(timer); timer = undefined; }
         };
         const resolveWaiting = (messages: ChatMessage[]) => {
-            for (const reply of messages.filter(isReply)) latestReplyAt = Math.max(latestReplyAt, Date.parse(reply.createdAt));
+            replies.observe(messages);
             for (const [id, entry] of waiting) {
-                if (latestReplyAt > Date.parse(entry.question.createdAt)) {
+                if (replies.isAnswered(id)) {
                     clearTimeout(entry.expiry);
                     waiting.delete(id);
                 }
@@ -310,6 +442,8 @@ export function useRoomChat(roomId: string, mock?: string) {
                 page.items.forEach(message => ctx.knownIds.add(message.id));
                 resolveWaiting(page.items);
                 update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, page.items) }));
+                // 최신 한 페이지가 이어진 목록과 겹치지 않으면 그 사이가 비어요. 같은 복구(refresh)로 채워요(#137).
+                if (needsRecovery(ctx, page)) void refresh();
             } catch (error) {
                 if (!ctx.valid() || epoch !== generation) return;
                 if (denied(error)) block((error as RoomError).code as 'NOT_ROOM_MEMBER' | 'ROOM_NOT_FOUND');
@@ -357,8 +491,9 @@ export function useRoomChat(roomId: string, mock?: string) {
         };
         ctx.waitForAi = question => {
             if (isMockMode() || !ctx.valid() || ctx.blocked) return;
-            if (!waiting.has(question.id)) waiting.set(question.id, { question, deadline: Date.now() + 60_000, expiry: undefined });
-            resolveWaiting([]); // A reply may have arrived before the POST response.
+            replies.addQuestion(question);
+            if (!waiting.has(question.id)) waiting.set(question.id, { question, deadline: Date.now() + AI_REPLY_WINDOW_MS, expiry: undefined });
+            resolveWaiting([]); // POST 응답보다 먼저 온 답변도 짝짓기 규칙으로 바로 소비돼요.
             if (ctx.focused) ctx.resumePolling();
         };
         const offState = isMockMode() ? () => {} : subscribeRealtimeState(schedule);
@@ -376,12 +511,14 @@ export function useRoomChat(roomId: string, mock?: string) {
                     const duplicate = received.has(message.id);
                     received.add(message.id);
                     ctx.knownIds.add(message.id);
-                    if (!duplicate && message.senderType === 'USER' && message.senderId === getSession()?.userId) {
+                    if (!duplicate && !ctx.claimedIds.has(message.id) && message.senderType === 'USER' && message.senderId === getSession()?.userId) {
+                        // 늦게 온 내 메시지: 재시도 확인과 같은 기준(기준에 없음·본문 일치·가장 오래된 전송 하나)으로 저장을 확인해요(#139).
                         const entry = [...ctx.queued.values()]
                             .filter(item => item.content === message.content && ctx.sendBaseline.has(item.clientId)
                                 && !ctx.sendBaseline.get(item.clientId)!.has(message.id))
                             .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))[0];
                         if (entry) {
+                            ctx.claimedIds.add(message.id);
                             ctx.queued.delete(entry.clientId);
                             ctx.sendBaseline.delete(entry.clientId);
                             update(ctx, previous => ({ ...previous, pending: previous.pending.filter(item => item.clientId !== entry.clientId) }));
@@ -391,6 +528,12 @@ export function useRoomChat(roomId: string, mock?: string) {
                     update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, [message]) }));
                 }, {
                     onReconnected: () => { if (ctx.valid() && !ctx.blocked) void refresh(); },
+                    onSubscribed: () => {
+                        if (!ctx.valid() || ctx.blocked) return;
+                        // 구독 전에 시작한 요청은 동기화로 재사용하지 않고, 이후 요청끼리 합쳐요.
+                        latestPage = undefined;
+                        void latest();
+                    },
                     onRejected: code => {
                         if (ctx.valid() && (code === 'NOT_ROOM_MEMBER' || code === 'ROOM_NOT_FOUND')) block(code);
                     },
@@ -460,15 +603,18 @@ export function useRoomChat(roomId: string, mock?: string) {
             historyError: null,
         }));
 
+        const requestedCursor = ctx.cursor;
         try {
             const page = await fetchChatMessages(roomId, {
-                cursor: ctx.cursor,
+                cursor: requestedCursor,
                 mock: scenario,
             });
 
             if (!ctx.valid() || actionId !== ctx.actionId) return;
+            // 그사이 재연결 복구가 목록 범위를 바꿨으면(cursor 변경) 이 페이지는 이어지지 않아 버려요(#137).
+            if (ctx.cursor !== requestedCursor) return;
 
-            page.items.forEach(message => ctx.knownIds.add(message.id));
+            page.items.forEach(message => { ctx.knownIds.add(message.id); ctx.syncedIds.add(message.id); });
             ctx.cursor = page.nextCursor;
             ctx.hasMore = page.hasMore;
 
@@ -538,24 +684,37 @@ export function useRoomChat(roomId: string, mock?: string) {
         }));
 
         try {
-            // 최초 POST 전 기준을 유지해 새로고침으로 합쳐진 메시지도 저장된 것으로 확인해요.
-            if (!isMockMode() && entry.status === 'failed') {
-                // 기준이 유실됐다면 최신 목록의 동일 메시지를 우선 확인해 중복 전송을 피합니다.
-                const knownIds = ctx.sendBaseline.get(entry.clientId) ?? new Set<string>();
-                const latest = await fetchChatMessages(roomId);
-                if (!ctx.valid() || actionId !== ctx.actionId) return;
-                update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, latest.items) }));
-                const saved = latest.items.find(message => !knownIds.has(message.id) && message.senderType === 'USER'
-                    && message.senderId === getSession()?.userId && message.content === entry.content);
-                latest.items.forEach(message => ctx.knownIds.add(message.id));
-                ctx.receiveReplies(latest.items);
-                if (!ctx.queued.has(entry.clientId)) return;
-                if (saved) {
-                    ctx.confirmedIds.add(saved.id);
+            // 응답이 유실된 전송은 다시 보내기 전에 기준점까지 넘겨서 저장 여부를 확인해요(#139).
+            // 저장 여부 불명(unconfirmed) 안내를 본 뒤 다시 누른 경우만 확인 없이 보내요.
+            if (!isMockMode() && entry.status === 'failed' && !entry.unconfirmed) {
+                const myId = getSession()?.userId;
+                const check = await checkChatSend(
+                    cursor => fetchChatMessages(roomId, { cursor }),
+                    ctx.sendBaseline.get(entry.clientId),
+                    message => message.senderType === 'USER' && message.senderId === myId
+                        && message.content === entry.content && !ctx.claimedIds.has(message.id),
+                    () => ctx.valid() && actionId === ctx.actionId,
+                );
+                if (!check || !ctx.valid() || actionId !== ctx.actionId) return;
+                // 받은 범위를 #137 과 같은 방식으로 합쳐요. 이어진 목록과 겹치지 않으면 refresh 로 빈 구간을 채워요.
+                check.items.forEach(message => ctx.knownIds.add(message.id));
+                update(ctx, previous => ({ ...previous, messages: mergeChatMessages(previous.messages, check.items) }));
+                if (check.wholeRoom || check.items.some(message => ctx.syncedIds.has(message.id))) check.items.forEach(message => ctx.syncedIds.add(message.id));
+                else if (check.items.length) void refresh();
+                ctx.receiveReplies(check.items);
+                if (!ctx.queued.has(entry.clientId)) return; // 그사이 WS 로 저장이 확인됐어요.
+                if (check.status === 'saved') {
+                    ctx.claimedIds.add(check.message.id);
+                    ctx.confirmedIds.add(check.message.id);
                     ctx.queued.delete(entry.clientId);
                     ctx.sendBaseline.delete(entry.clientId);
                     update(ctx, previous => ({ ...previous, pending: previous.pending.filter(item => item.clientId !== entry.clientId) }));
-                    if (saved.content.includes('@링크로')) ctx.waitForAi(saved);
+                    if (check.message.content.includes('@링크로')) ctx.waitForAi(check.message);
+                    return;
+                }
+                if (check.status === 'unknown') {
+                    update(ctx, previous => ({ ...previous, pending: previous.pending.map(item => item.clientId === entry.clientId
+                        ? { ...item, status: 'failed', unconfirmed: true, errorMessage: CHAT_SEND_UNCONFIRMED_TEXT } : item) }));
                     return;
                 }
             }
@@ -573,6 +732,7 @@ export function useRoomChat(roomId: string, mock?: string) {
             ctx.queued.delete(entry.clientId);
             ctx.knownIds.add(result.message.id);
             ctx.confirmedIds.add(result.message.id);
+            ctx.claimedIds.add(result.message.id);
             if (result.aiPending) ctx.waitForAi(result.message);
 
             update(ctx, previous => ({
@@ -608,6 +768,8 @@ export function useRoomChat(roomId: string, mock?: string) {
                                 ? {
                                     ...item,
                                     status: 'failed',
+                                    // 새로 보낸 요청의 결과도 모르니 다음 재시도는 다시 기준점까지 확인해요.
+                                    unconfirmed: undefined,
                                     errorMessage: errorText(error),
                                 }
                                 : item,
@@ -664,7 +826,7 @@ export function useRoomChat(roomId: string, mock?: string) {
         }));
 
         void deliver({
-            clientId: `chat-client-${Date.now()}-${clientSequence++}`,
+            clientId: createChatClientId(),
             content,
             createdAt: new Date().toISOString(),
             status: 'sending',

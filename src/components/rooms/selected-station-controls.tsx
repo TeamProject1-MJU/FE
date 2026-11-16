@@ -1,12 +1,13 @@
+import WebModalFrame from '@/components/web-modal-frame';
 import {
     ActivityIndicator,
     Modal,
     Pressable,
     ScrollView,
     StyleSheet,
-    Text,
     View,
 } from 'react-native';
+import { Text } from '@/components/app-text';
 
 import {
     selectedStationName,
@@ -14,17 +15,19 @@ import {
 } from '@/hooks/use-selected-station';
 import type { RoomDetail } from '@/types/room';
 
-const NAVY = '#0f1c3f';
-const MINT = '#2bcf9a';
+const NAVY = '#25212D';
+const MINT = '#5C3F78';
 
 export default function SelectedStationControls({
                                                     detail,
                                                     controller,
                                                     bottomInset,
+                                                    embedded = false,
                                                 }: {
     detail: RoomDetail;
     controller: ReturnType<typeof useSelectedStation>;
     bottomInset: number;
+    embedded?: boolean;
 }) {
     const { busy, request, notice, pick, choose, submit, cancel } = controller;
     const owner = detail.myRole === 'OWNER';
@@ -52,9 +55,9 @@ export default function SelectedStationControls({
     );
 
     return (
-        <View style={styles.panel}>
+        <View style={embedded ? styles.embeddedPanel : styles.panel}>
             {detail.selectedStation && detail.confirmedAt && (
-                <Text style={styles.caption}>
+                <Text style={[styles.caption, embedded && styles.embeddedCaption]}>
                     확정 시각 ·{' '}
                     {new Intl.DateTimeFormat('ko-KR', {
                         timeZone: 'Asia/Seoul',
@@ -83,7 +86,7 @@ export default function SelectedStationControls({
                     )}
                 </View>
             ) : (
-                <Text style={styles.caption}>방장이 최종 확정할 수 있어요</Text>
+                <Text style={[styles.caption, embedded && styles.embeddedCaption]}>방장이 최종 확정할 수 있어요</Text>
             )}
 
             {!request && noticeView}
@@ -95,84 +98,88 @@ export default function SelectedStationControls({
                     animationType="fade"
                     onRequestClose={cancel}
                 >
-                    <View style={styles.backdrop}>
-                        <Pressable
-                            style={StyleSheet.absoluteFill}
-                            onPress={cancel}
-                            disabled={busy}
-                            accessibilityLabel="확인창 닫기"
-                        />
-                        <View
-                            style={[
-                                styles.sheet,
-                                { paddingBottom: bottomInset + 20 },
-                            ]}
-                            accessibilityViewIsModal
-                        >
-                            <ScrollView contentContainerStyle={styles.sheetContent}>
-                                <Text accessibilityRole="header" style={styles.title}>
-                                    {clearing
-                                        ? '확정한 약속역을 해제할까요?'
-                                        : `${targetName}${
-                                            changing
-                                                ? '으로 변경할까요?'
-                                                : '으로 확정할까요?'
-                                        }`}
-                                </Text>
-
-                                {changing && (
-                                    <Text style={styles.transition}>
-                                        {previousName} → {targetName}
+                    <WebModalFrame>
+                        <View style={styles.backdrop}>
+                            <Pressable
+                                style={StyleSheet.absoluteFill}
+                                onPress={cancel}
+                                disabled={busy}
+                                accessibilityLabel="확인창 닫기"
+                            />
+                            <View
+                                style={[
+                                    styles.sheet,
+                                    { paddingBottom: bottomInset + 20 },
+                                ]}
+                                accessibilityViewIsModal
+                            >
+                                <ScrollView contentContainerStyle={styles.sheetContent}>
+                                    <Text accessibilityRole="header" style={styles.title}>
+                                        {clearing
+                                            ? '확정한 약속역을 해제할까요?'
+                                            : `${targetName}${
+                                                changing
+                                                    ? '으로 변경할까요?'
+                                                    : '으로 확정할까요?'
+                                            }`}
                                     </Text>
-                                )}
 
-                                <Text style={styles.body}>
-                                    {clearing
-                                        ? '약속역이 미정으로 바뀌어요. 후보 목록과 투표는 그대로 유지돼요.'
-                                        : '투표 결과와 관계없이 선택한 역으로 정해요. 약속 시간과 후보·투표는 그대로 유지돼요.'}
-                                </Text>
-
-                                {noticeView}
-
-                                {busy && (
-                                    <View
-                                        style={styles.row}
-                                        accessibilityLiveRegion="polite"
-                                    >
-                                        <ActivityIndicator color={NAVY} />
-                                        <Text style={styles.body}>
-                                            {clearing
-                                                ? '해제하는 중이에요'
-                                                : '약속역을 저장하는 중이에요'}
+                                    {changing && (
+                                        <Text style={styles.transition}>
+                                            {previousName} → {targetName}
                                         </Text>
-                                    </View>
-                                )}
+                                    )}
 
-                                <View style={styles.row}>
-                                    <Action
-                                        label="취소"
-                                        onPress={cancel}
-                                        disabled={busy}
-                                    />
-                                    <Action
-                                        label={
-                                            notice?.retry
-                                                ? '다시 시도'
-                                                : clearing
-                                                    ? '확정 해제'
-                                                    : changing
-                                                        ? '변경하기'
-                                                        : '확정하기'
-                                        }
-                                        onPress={submit}
-                                        disabled={busy}
-                                        primary
-                                        danger={clearing}
-                                    />
-                                </View>
-                            </ScrollView>
+                                    <Text style={styles.body}>
+                                        {clearing
+                                            ? '약속역이 미정으로 바뀌어요. 후보 목록과 투표는 그대로 유지돼요.'
+                                            : '투표 결과와 관계없이 선택한 역으로 정해요. 약속 시간과 후보·투표는 그대로 유지돼요.'}
+                                    </Text>
+
+                                    {noticeView}
+
+                                    {busy && (
+                                        <View
+                                            style={styles.row}
+                                            accessibilityLiveRegion="polite"
+                                        >
+                                            <ActivityIndicator color={MINT} />
+                                            <Text style={styles.body}>
+                                                {clearing
+                                                    ? '해제하는 중이에요'
+                                                    : '약속역을 저장하는 중이에요'}
+                                            </Text>
+                                        </View>
+                                    )}
+
+                                    <View style={styles.sheetActions}>
+                                        <Action
+                                            label="취소"
+                                            sheet
+                                            onPress={cancel}
+                                            disabled={busy}
+                                        />
+                                        <Action
+                                            label={
+                                                notice?.retry
+                                                    ? '다시 시도'
+                                                    : clearing
+                                                        ? '확정 해제'
+                                                        : changing
+                                                            ? '변경하기'
+                                                            : '확정하기'
+                                            }
+                                            sheet
+                                            onPress={submit}
+                                            disabled={busy}
+                                            primary
+                                            danger={clearing}
+                                        />
+                                    </View>
+                                </ScrollView>
+                            </View>
                         </View>
-                    </View>
+                    </WebModalFrame>
                 </Modal>
             )}
         </View>
@@ -184,12 +191,14 @@ function Action({
                     onPress,
                     disabled,
                     primary,
+                    sheet,
                     danger,
                 }: {
     label: string;
     onPress: () => void;
     disabled?: boolean;
     primary?: boolean;
+    sheet?: boolean;
     danger?: boolean;
 }) {
     return (
@@ -200,6 +209,7 @@ function Action({
             disabled={disabled}
             style={({ pressed }) => [
                 styles.button,
+                sheet && styles.sheetButton,
                 primary && styles.primary,
                 disabled && styles.disabled,
                 pressed && styles.pressed,
@@ -209,7 +219,7 @@ function Action({
                 style={[
                     styles.buttonText,
                     primary && styles.primaryText,
-                    danger && !primary && styles.errorText,
+                    danger && !primary && styles.dangerText,
                 ]}
             >
                 {label}
@@ -224,8 +234,20 @@ const styles = StyleSheet.create({
         gap: 12,
         backgroundColor: '#fff',
         borderWidth: 1,
-        borderColor: '#e6e9ef',
-        borderRadius: 18,
+        borderColor: '#EEEAF2',
+        borderRadius: 22,
+    },
+    embeddedPanel: {
+        marginTop: 10,
+        paddingTop: 10,
+        borderTopWidth: 1,
+        borderTopColor: '#F1EEF4',
+        gap: 4,
+    },
+    embeddedCaption: {
+        color: '#6F6B78',
+        fontSize: 12.5,
+        lineHeight: 19,
     },
     row: {
         flexDirection: 'row',
@@ -234,7 +256,7 @@ const styles = StyleSheet.create({
         gap: 10,
     },
     caption: {
-        color: '#6b7488',
+        color: '#83808B',
         fontSize: 12,
         lineHeight: 19,
     },
@@ -243,21 +265,22 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         paddingVertical: 12,
         borderWidth: 1,
-        borderColor: '#e6e9ef',
-        borderRadius: 12,
+        borderColor: '#D9CCE4',
+        borderRadius: 22,
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: '#fff',
     },
     primary: {
-        borderColor: NAVY,
-        backgroundColor: NAVY,
+        borderColor: MINT,
+        backgroundColor: MINT,
     },
     buttonText: {
-        color: NAVY,
+        color: MINT,
         fontSize: 13,
         fontWeight: '700',
     },
+    dangerText: { color: MINT },
     primaryText: {
         color: '#fff',
     },
@@ -271,14 +294,14 @@ const styles = StyleSheet.create({
         borderRadius: 12,
         padding: 12,
         gap: 10,
-        backgroundColor: '#e6f8f1',
+        backgroundColor: '#EDE8F3',
         borderLeftWidth: 3,
         borderLeftColor: MINT,
     },
     noticeText: {
         fontSize: 13,
         lineHeight: 21,
-        color: '#15664e',
+        color: MINT,
     },
     error: {
         backgroundColor: '#fff1f0',
@@ -302,6 +325,8 @@ const styles = StyleSheet.create({
         borderTopLeftRadius: 24,
         borderTopRightRadius: 24,
     },
+    sheetActions: { flexDirection: 'row', gap: 10 },
+    sheetButton: { flex: 1, height: 52, borderRadius: 26, borderWidth: 0, backgroundColor: '#EDE8F3' },
     sheetContent: {
         gap: 16,
     },
@@ -318,7 +343,7 @@ const styles = StyleSheet.create({
         fontWeight: '700',
     },
     body: {
-        color: '#6b7488',
+        color: '#83808B',
         fontSize: 14,
         lineHeight: 22,
     },

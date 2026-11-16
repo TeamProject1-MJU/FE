@@ -1,5 +1,5 @@
 /**
- * 중간역 추천 타입 (API 명세 v1.12 8장 /rooms/{roomId}/recommendations, #99 BE 코드 기준으로 보정)
+ * 중간역 추천 타입 (API 명세 v1.12 8장, v1.13 participantTimes 추가 필드 #153 /rooms/{roomId}/recommendations, #99 BE 코드 기준으로 보정)
  *
  * 8.1 POST  /rooms/{roomId}/recommendations            추천 실행
  * 8.2 GET   /rooms/{roomId}/recommendations/latest     최근 실행 (없으면 data: null)
@@ -84,12 +84,51 @@ export type ParticipantTime = {
     /** 경로 정차역 혼잡도 최댓값. 데이터가 없으면 null 이에요(화면은 혼잡도 점·라벨을 숨겨요). */
     congestion: { pct?: number; level: CongestionLevel; levelLabel: string } | null;
     segments: ParticipantSegment[];
-    /** 서버가 더 보내는 값이에요. 이번 범위에서는 화면에 쓰지 않고 그대로 통과만 시켜요. */
-    boardingTrain?: unknown;
-    legs?: unknown;
-    source?: 'TIMETABLE' | 'ESTIMATE' | string | null;
-    arriveAt?: string | null;
-    slackSeconds?: number | null;
+    /*
+     * 명세 v1.13 추가 필드(#153). 추가만 된 값이라 없거나 모양이 틀리면 결과 전체를 실패시키지 않고 이 필드만 null·[] 로 낮춰요.
+     * 이전 실행(저장된 결과)은 arriveAt·slackSeconds·boardingTrain·source 가 null, legs 가 [] 예요.
+     */
+    /** 마지막 열차 도착 시각. ESTIMATE 면 departureAt + 그래프 경로 시간 */
+    arriveAt: string | null;
+    /** 약속 시각 − arriveAt(초). 약속이 없으면 null. 0 은 딱 맞춰 도착(null 과 달라요) */
+    slackSeconds: number | null;
+    /** TIMETABLE: 열차 시각표 기준, ESTIMATE: 고정 소요시간 추정, null: 이전 실행 */
+    source: RecommendationSource | null;
+    /** 첫 열차. ESTIMATE·이전 실행이면 null */
+    boardingTrain: BoardingTrain | null;
+    /** 열차별 구간. ESTIMATE·이전 실행이면 [] */
+    legs: TrainLeg[];
+};
+
+export type RecommendationSource = 'TIMETABLE' | 'ESTIMATE';
+export type TrainDirection = 'UP' | 'DOWN' | 'INNER' | 'OUTER' | 'LOOP';
+
+/** 명세 v1.13 boardingTrain. 표시에 꼭 필요한 값(lineName·stationName·departureAt)만 필수예요. */
+export type BoardingTrain = {
+    lineId: number | null;
+    lineName: string;
+    stationId: number | null;
+    stationName: string;
+    direction: TrainDirection | null;
+    departureAt: string;
+    terminal: string | null;
+    trainCode: string | null;
+};
+
+/** 명세 v1.13 legs[]. transferWaitSec = 승차 − (이전 하차 + walkSec), 첫 열차는 0 */
+export type TrainLeg = {
+    lineId: number | null;
+    lineName: string;
+    trainCode: string | null;
+    terminal: string | null;
+    direction: TrainDirection | null;
+    fromStationName: string;
+    toStationName: string;
+    boardAt: string;
+    alightAt: string;
+    stationCount: number;
+    walkSec: number;
+    transferWaitSec: number;
 };
 
 /** 최적역의 노선상 앞·뒤 한 정거장 (2·3위 후보가 아님) */

@@ -100,7 +100,8 @@ function parseArrivals(value: unknown): ArrivalsResponse {
                 };
             }
         } else if (
-            // 남은 시간은 receivedAt 기준으로 빼요. reason 은 available:true 면 null 이라 들여다보지 않아요.
+            // receivedAt 은 서버 캐시 시각이라 남은 시간 계산에 쓰지 않아요(기준은 format.ts arrivalsCountdownBase, #173). 형식만 검사해요.
+            // reason 은 available:true 면 null 이라 들여다보지 않아요.
             typeof value.receivedAt === 'string'
             && Number.isFinite(Date.parse(value.receivedAt))
             && Array.isArray(value.trains)

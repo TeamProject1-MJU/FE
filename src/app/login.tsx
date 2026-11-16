@@ -1,26 +1,29 @@
 import { useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
+import { Text } from '@/components/app-text';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import LinkRoLogo, { LinkRoColors } from '@/components/linkro-logo';
+import Passenger from '@/components/passenger';
 import { loginWithKakao } from '@/services/auth';
 import { isKakaoLoginCancelled } from '@/services/kakao';
 import { ApiError, API_ERROR_MESSAGES } from '@/services/api/errors';
 
-const BACKGROUND = '#f3f5f8';
-const SECONDARY = '#6b7488';
-const MINT_DEEP = '#12a77a';
+const BACKGROUND = '#F7F5FA';
+const INK = '#25212D';
+const SECONDARY = '#83808B';
+const ACCENT = '#5C3F78';
 
-const KAKAO_YELLOW = '#fee500';
-const KAKAO_BLACK = '#191919';
+const KAKAO_YELLOW = '#FEE500';
+const KAKAO_BLACK = '#191600';
 
 // 로그인에 성공하면 홈(/home)으로 이동해요.
 const HOME_ROUTE = '/home';
 
 export default function LoginScreen() {
     const insets = useSafeAreaInsets();
+    const { height } = useWindowDimensions();
 
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState('');
@@ -37,43 +40,40 @@ export default function LoginScreen() {
     };
 
     return (
-        <View style={styles.container}>
+        <View style={[styles.container, { paddingBottom: 54 + insets.bottom }]}>
             <StatusBar style="dark" />
 
-            {/* 브랜드 영역: 로고 + 태그라인 + 설명 */}
-            <View style={[styles.brand, { paddingTop: 172 + insets.top }]}>
-                <LinkRoLogo size={48} />
-                <Text style={styles.tagline}>지하철을 더 가깝게, 함께.</Text>
-                <Text style={styles.description}>LinkRo에서 이동을 시작해보세요.</Text>
-            </View>
-
-            {/* 액션 영역: 카카오 버튼 + 안내 문구 */}
-            <View style={[styles.actions, { bottom: 103 + insets.bottom }]}>
-                <Pressable
-                    style={({ pressed }) => [
-                        styles.kakaoButton,
-                        pressed && styles.kakaoButtonPressed,
-                    ]}
-                    disabled={loading}
-                    onPress={handleKakaoLogin}
-                    accessibilityRole="button"
-                    accessibilityLabel="카카오로 시작하기"
-                >
-                    {loading ? <ActivityIndicator color={KAKAO_BLACK} /> : <KakaoChatIcon />}
-                    <Text style={styles.kakaoButtonText}>카카오로 시작하기</Text>
-                </Pressable>
-
-                {message ? <Text accessibilityRole="alert">{message}</Text> : null}
-                <View style={styles.kakaoNote}>
-                    <LockIcon />
-                    <Text style={styles.kakaoNoteText}>
-                        카카오 계정으로 안전하고 간편하게 시작해요
-                    </Text>
+            {/* 브랜드 영역: 화면 전체의 정중앙에 캐릭터 + LINKRO (터치는 막지 않아요) */}
+            <View style={styles.brand}>
+                <View style={styles.passengers}>
+                    <Passenger tone="me" size={76} />
+                    <Passenger tone="other" size={58} />
+                    <Passenger tone="pink" size={46} />
                 </View>
+                <Text style={styles.wordmark}>LINKRO</Text>
             </View>
+
+            <View style={styles.spacer} />
+
+            {/* 액션 영역: 카카오 버튼 + 오류 + 약관 안내 */}
+            <Pressable
+                style={({ pressed }) => [
+                    styles.kakaoButton,
+                    pressed && styles.kakaoButtonPressed,
+                ]}
+                disabled={loading}
+                onPress={handleKakaoLogin}
+                accessibilityRole="button"
+                accessibilityLabel="카카오로 시작하기"
+            >
+                {loading ? <ActivityIndicator color={KAKAO_BLACK} /> : <KakaoChatIcon />}
+                <Text style={styles.kakaoButtonText}>카카오로 시작하기</Text>
+            </Pressable>
+
+            {message ? <Text accessibilityRole="alert" style={styles.message}>{message}</Text> : null}
 
             {/* 약관 안내 */}
-            <Text style={[styles.terms, { bottom: 34 + insets.bottom }]}>
+            <Text style={styles.terms}>
                 계속하면 LinkRo의{' '}
                 <Text style={styles.termsLink}>이용약관</Text>
                 {' '}및{' '}
@@ -93,61 +93,52 @@ function KakaoChatIcon() {
     );
 }
 
-/** 자물쇠 아이콘 (고리 + 몸통) */
-function LockIcon() {
-    return (
-        <View style={styles.lockIcon}>
-            <View style={styles.lockShackle} />
-            <View style={styles.lockBody} />
-        </View>
-    );
-}
-
 const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: BACKGROUND,
-        paddingHorizontal: 20,
+        paddingTop: 120,
+        paddingHorizontal: 28,
     },
 
-    // 브랜드
+    // 브랜드: 화면 전체를 덮고 가로·세로 정중앙에 놓아요.
     brand: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
         alignItems: 'center',
+        justifyContent: 'center',
+        pointerEvents: 'none',
     },
 
-    tagline: {
-        marginTop: 20,
-        color: LinkRoColors.navy,
-        fontSize: 17,
-        lineHeight: 22,
+    passengers: {
+        flexDirection: 'row',
+        alignItems: 'flex-end',
+        gap: 6,
+    },
+
+    wordmark: {
+        marginTop: 24,
+        color: INK,
+        fontSize: 40,
         fontWeight: '800',
-        letterSpacing: -0.6,
+        letterSpacing: -1,
     },
 
-    description: {
-        marginTop: 9,
-        color: SECONDARY,
-        fontSize: 13,
-        lineHeight: 18,
-        fontWeight: '500',
+    spacer: {
+        flex: 1,
     },
 
     // 액션
-    actions: {
-        position: 'absolute',
-        left: 20,
-        right: 20,
-    },
-
     kakaoButton: {
-        height: 56,
+        height: 54,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
-        borderRadius: 18,
-        borderWidth: 1,
-        borderColor: KAKAO_YELLOW,
+        borderRadius: 14,
         backgroundColor: KAKAO_YELLOW,
     },
 
@@ -158,69 +149,36 @@ const styles = StyleSheet.create({
 
     kakaoButtonText: {
         color: KAKAO_BLACK,
-        fontSize: 14,
-        fontWeight: '800',
+        fontSize: 16,
+        fontWeight: '700',
     },
 
+    // 말풍선 아이콘: 18 너비(시안 18×18 상자) 타원 + 왼쪽 아래 꼬리
     chatIcon: {
-        width: 22,
-        height: 18,
-        borderRadius: 11,
+        width: 18,
+        height: 15,
+        borderRadius: 9,
         backgroundColor: KAKAO_BLACK,
     },
 
     chatIconTail: {
         position: 'absolute',
         left: 2,
-        bottom: -3,
-        width: 7,
-        height: 7,
+        bottom: -2.5,
+        width: 6,
+        height: 6,
         backgroundColor: KAKAO_BLACK,
         transform: [{ rotate: '28deg' }],
     },
 
-    kakaoNote: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 5,
-        marginTop: 13,
-    },
-
-    kakaoNoteText: {
-        color: SECONDARY,
-        fontSize: 12,
-        fontWeight: '600',
-    },
-
-    lockIcon: {
-        width: 13,
-        height: 15,
-        alignItems: 'center',
-    },
-
-    lockShackle: {
-        width: 8,
-        height: 7,
-        borderWidth: 2,
-        borderBottomWidth: 0,
-        borderColor: MINT_DEEP,
-        borderTopLeftRadius: 4,
-        borderTopRightRadius: 4,
-    },
-
-    lockBody: {
-        width: 13,
-        height: 9,
-        borderRadius: 2.5,
-        backgroundColor: MINT_DEEP,
+    message: {
+        marginTop: 14,
+        textAlign: 'center',
     },
 
     // 약관
     terms: {
-        position: 'absolute',
-        left: 20,
-        right: 20,
+        marginTop: 14,
         color: SECONDARY,
         fontSize: 12,
         lineHeight: 18.5,
@@ -229,7 +187,7 @@ const styles = StyleSheet.create({
     },
 
     termsLink: {
-        color: SECONDARY,
+        color: ACCENT,
         textDecorationLine: 'underline',
     },
 });
