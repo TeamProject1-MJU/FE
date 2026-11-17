@@ -1,7 +1,8 @@
 import type { KakaoMapProps } from '@/components/KakaoMap';
 import { isRouteMarkerKind, ROUTE_MARKER_ICONS } from '@/components/map/route-marker-icons';
-import { isHexColor, isValidMapLines } from '@/components/map/map-html';
-import { isCoordinate, isMapBounds, isMapLevel, type Coordinate, type MapBounds } from '@/utils/home-map';
+import { isHexColor, isValidMapLines, isValidMapSelection } from '@/components/map/map-html';
+import { mapModelElement } from '@/components/map/map-models';
+import { isCoordinate, isMapBounds, isMapLevel, shouldShowStations, type Coordinate, type MapBounds } from '@/utils/home-map';
 
 type Point = { getLat(): number; getLng(): number };
 type Overlay = { setMap(map: WebMap | null): void };
@@ -22,6 +23,7 @@ export type MapSdk = {
     Polyline?: new (options: { map: WebMap; path: Point[]; strokeWeight: number; strokeColor: string; strokeOpacity: number; strokeStyle: string }) => Overlay;
     LatLngBounds?: new (sw: Point, ne: Point) => unknown;
     event: {
+        preventMap?(): void;
         addListener(map: WebMap, event: string, callback: () => void): void;
         removeListener(map: WebMap, event: string, callback: () => void): void;
     };
@@ -89,10 +91,10 @@ export function loadMapSdk(key: string, host: MapWindow = window): Promise<MapSd
     return promise;
 }
 
-type MapState = Pick<KakaoMapProps, 'center' | 'myLocation' | 'markers' | 'centerRevision' | 'lines' | 'fitBounds' | 'fitRevision'>;
+type MapState = Pick<KakaoMapProps, 'center' | 'myLocation' | 'markers' | 'centerRevision' | 'lines' | 'fitBounds' | 'fitRevision' | 'selectedStationId' | 'selectedStationName' | 'selectedStationColor'> & { stationSelection?: boolean };
 /** 네이티브 WebView 안의 검증과 같은 규칙이에요. 하나라도 틀리면 갱신 전체를 무시해요. */
 export function validMapState(state: MapState) {
-    return isCoordinate(state.center) && (state.myLocation === null || isCoordinate(state.myLocation))
+    return isValidMapSelection(state) && isCoordinate(state.center) && (state.myLocation === null || isCoordinate(state.myLocation))
         && Number.isSafeInteger(state.centerRevision ?? 0) && Array.isArray(state.markers) && state.markers.length <= 500
         && state.markers.every(marker => isCoordinate(marker) && Number.isSafeInteger(marker.id) && typeof marker.isSupported === 'boolean'
             && (marker.color === undefined || isHexColor(marker.color))
@@ -111,7 +113,7 @@ export function mapBounds(map: WebMap): MapBounds | null {
 
 /** React와 분리한 웹 지도 수명 주기. 홈의 디바운스에 bounds를 그대로 전달해요. */
 export function createWebMap(container: HTMLElement, sdk: MapSdk, initial: MapState,
-    callbacks: { onRegionChange(bounds: MapBounds, level: number): void; onReady(): void; onError(): void }) {
+    callbacks: { onRegionChange(bounds: MapBounds, level: number): void; onReady(): void; onError(): void; onStationPress?(id: number): void; onMapPress?(): void }) {
     if (!validMapState(initial)) throw new Error('Invalid map state');
     const point = (p: Coordinate) => new sdk.LatLng(p.latitude, p.longitude);
     const map = new sdk.Map(container, { center: point(initial.center), level: 5 });
@@ -120,11 +122,32 @@ export function createWebMap(container: HTMLElement, sdk: MapSdk, initial: MapSt
     let lastCenter: Coordinate | null = null;
     let lastRevision: number | undefined;
     let lastFit: number | undefined;
+    let state = initial;
+    let selected: Overlay | null = null;
     const clearOverlays = () => { overlays.forEach(overlay => overlay.setMap(null)); overlays = []; };
-    const dot = (p: Coordinate, color: string, mine: boolean, filled = mine) => {
-        const el = container.ownerDocument.createElement('div');
-        el.style.cssText = `${filled ? `width:16px;height:16px;border:3px solid white;background-color:${color}` : `box-sizing:border-box;width:11px;height:11px;border:2.5px solid ${color};background-color:white`};border-radius:50%;box-shadow:0 1px 4px #555;pointer-events:none`;
+    const dot = (p: Coordinate & { id?: number }, color: string, mine: boolean, filled = mine) => {
+        let el = container.ownerDocument.createElement('div');
+        el.style.cssText = `${filled ? `width:16px;height:16px;border:3px solid white;background-color:${color}` : `box-sizing:border-box;width:14px;height:14px;border:3px solid ${color};background-color:white`};border-radius:50%;box-shadow:0 1px 4px #555;pointer-events:none`;
+        const id = p.id;
+        if (state.stationSelection && id !== undefined && id > 0) {
+            const hit = container.ownerDocument.createElement('div'); hit.className = 'station-hit';
+            hit.style.cssText = 'width:44px;height:44px;display:flex;align-items:center;justify-content:center;pointer-events:auto;cursor:pointer';
+            hit.setAttribute('role', 'button'); hit.setAttribute('aria-label', '역 선택'); hit.tabIndex = 0;
+            const stop = (event: Event) => { event.stopPropagation(); sdk.event.preventMap?.(); };
+            hit.onmousedown = hit.ontouchstart = stop;
+            hit.onclick = event => { stop(event); if (!disposed) callbacks.onStationPress?.(id); };
+            hit.onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); hit.click(); } };
+            hit.appendChild(el); el = hit;
+        }
         overlays.push(new sdk.CustomOverlay({ map, position: point(p), content: el, yAnchor: 0.5, zIndex: mine ? 2 : 1 }));
+    };
+    const model = (p: Coordinate, train: boolean, label: string, color: string) => new sdk.CustomOverlay({ map, position: point(p),
+        content: mapModelElement(container.ownerDocument, train, label, color), yAnchor: 1, zIndex: train ? 3 : 2 });
+    const selectedModel = () => {
+        selected?.setMap(null); selected = null;
+        if (!state.stationSelection || !shouldShowStations(map.getLevel())) return;
+        const marker = state.markers.find(item => item.id === state.selectedStationId);
+        if (marker) selected = model(marker, true, state.selectedStationName ?? '선택한 역', state.selectedStationColor ?? '#5C3F78');
     };
     const routeMarker = (marker: MapState['markers'][number]) => {
         if (marker.kind === undefined) { dot(marker, marker.color ?? (marker.isSupported ? '#5C3F78' : '#B9B5C0'), false, marker.color !== undefined); return; }
@@ -137,12 +160,13 @@ export function createWebMap(container: HTMLElement, sdk: MapSdk, initial: MapSt
     };
     const region = () => {
         if (disposed) return;
-        try { const bounds = mapBounds(map); const level = map.getLevel(); if (bounds && isMapLevel(level)) callbacks.onRegionChange(bounds, level); }
+        try { selectedModel(); const bounds = mapBounds(map); const level = map.getLevel(); if (bounds && isMapLevel(level)) callbacks.onRegionChange(bounds, level); }
         catch { callbacks.onError(); }
     };
     const ready = () => { if (!disposed) callbacks.onReady(); };
-    const update = (state: MapState) => {
-        if (disposed || !validMapState(state)) return;
+    const update = (next: MapState) => {
+        if (disposed || !validMapState(next)) return;
+        state = next;
         if (!lastCenter || lastCenter.latitude !== state.center.latitude || lastCenter.longitude !== state.center.longitude || lastRevision !== (state.centerRevision ?? 0)) {
             map.setCenter(point(state.center));
             lastCenter = { ...state.center }; lastRevision = state.centerRevision ?? 0;
@@ -154,7 +178,11 @@ export function createWebMap(container: HTMLElement, sdk: MapSdk, initial: MapSt
                 strokeColor: line.color, strokeOpacity: 0.9, strokeStyle: line.dashed ? 'shortdash' : 'solid' })));
         }
         state.markers.forEach(routeMarker);
-        if (state.myLocation) dot(state.myLocation, '#2879ef', true);
+        if (state.myLocation) {
+            if (state.stationSelection) overlays.push(model(state.myLocation, false, '나', '#5C3F78'));
+            else dot(state.myLocation, '#2879ef', true);
+        }
+        selectedModel();
         // 범위 맞춤은 번호가 바뀔 때만 해요. 같은 번호로 다시 오면 사용자가 움직인 지도를 그대로 둬요.
         const fit = state.fitBounds; const revision = state.fitRevision ?? 0;
         if (fit && lastFit !== revision && sdk.LatLngBounds && map.setBounds) {
@@ -162,17 +190,21 @@ export function createWebMap(container: HTMLElement, sdk: MapSdk, initial: MapSt
             lastFit = revision;
         }
     };
+    const mapPress = () => { if (!disposed && state.stationSelection) callbacks.onMapPress?.(); };
     const dispose = () => {
         if (disposed) return;
         disposed = true;
         sdk.event.removeListener(map, 'idle', region);
         sdk.event.removeListener(map, 'tilesloaded', ready);
+        sdk.event.removeListener(map, 'click', mapPress);
+        selected?.setMap(null); selected = null;
         clearOverlays();
         container.replaceChildren();
     };
     try {
         sdk.event.addListener(map, 'idle', region);
         sdk.event.addListener(map, 'tilesloaded', ready);
+        sdk.event.addListener(map, 'click', mapPress);
         update(initial);
         region();
     } catch (error) { dispose(); throw error; }

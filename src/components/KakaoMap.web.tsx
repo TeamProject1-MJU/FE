@@ -11,7 +11,8 @@ import { createWebMap, loadMapSdk } from '@/components/map/map-web';
 export type { KakaoMapProps, MapMarker } from '@/components/KakaoMap';
 
 export default function KakaoMap(props: KakaoMapProps) {
-    const { center, myLocation, markers, centerRevision = 0, bottomInset = 0, lines, fitBounds, fitRevision = 0, label = '주변 역 지도' } = props;
+    const { center, myLocation, markers, centerRevision = 0, bottomInset = 0, lines, fitBounds, fitRevision = 0, label = '주변 역 지도', selectedStationId, selectedStationName, selectedStationColor } = props;
+    const stationSelection = !!props.onStationPress;
     const key = process.env.EXPO_PUBLIC_KAKAO_MAP_JS_KEY?.trim() ?? '';
     const container = useRef<HTMLDivElement>(null);
     const controller = useRef<ReturnType<typeof createWebMap> | null>(null);
@@ -38,10 +39,12 @@ export default function KakaoMap(props: KakaoMapProps) {
         failCurrent.current = fail;
         void loadMapSdk(key).then(sdk => {
             if (!active || reported || !node) return;
-            const created = createWebMap(node, sdk, latest.current, {
+            const created = createWebMap(node, sdk, { ...latest.current, stationSelection: !!latest.current.onStationPress }, {
                 onRegionChange: (bounds, level) => latest.current.onRegionChange(bounds, level),
                 onReady: () => clearTimeout(timer),
                 onError: fail,
+                onStationPress: id => latest.current.onStationPress?.(id),
+                onMapPress: () => latest.current.onMapPress?.(),
             });
             if (reported) { created.dispose(); return; }
             controller.current = created;
@@ -63,9 +66,9 @@ export default function KakaoMap(props: KakaoMapProps) {
     }, [key, attempt]);
 
     useEffect(() => {
-        try { controller.current?.update({ center, myLocation, markers, centerRevision, lines, fitBounds, fitRevision }); }
+        try { controller.current?.update({ center, myLocation, markers, centerRevision, lines, fitBounds, fitRevision, stationSelection, selectedStationId, selectedStationName, selectedStationColor }); }
         catch { failCurrent.current(); }
-    }, [center, myLocation, markers, centerRevision, lines, fitBounds, fitRevision]);
+    }, [center, myLocation, markers, centerRevision, lines, fitBounds, fitRevision, stationSelection, selectedStationId, selectedStationName, selectedStationColor]);
 
     return <View style={[styles.container, { marginBottom: bottomInset }]}>
         <div ref={container} aria-label={label} style={{ position: 'absolute', inset: 0 }} />

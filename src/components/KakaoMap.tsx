@@ -18,6 +18,11 @@ export type KakaoMapProps = {
     bottomInset?: number;
     onRegionChange: (bounds: MapBounds, level: number) => void;
     onError?: () => void;
+    selectedStationId?: number | null;
+    selectedStationName?: string;
+    selectedStationColor?: string;
+    onStationPress?: (id: number) => void;
+    onMapPress?: () => void;
     /** 선택 값: 폴리라인. 넘기지 않으면 홈 지도처럼 선을 그리지 않아요. */
     lines?: MapLine[];
     /** 선택 값: 이 범위가 다 보이게 맞춰요. fitRevision 이 바뀔 때만 맞추고, 같은 번호로는 다시 맞추지 않아요. */
@@ -27,7 +32,7 @@ export type KakaoMapProps = {
     label?: string;
 };
 
-export default function KakaoMap({ center, myLocation, markers, centerRevision = 0, bottomInset = 0, onRegionChange, onError, lines, fitBounds, fitRevision = 0 }: KakaoMapProps) {
+export default function KakaoMap({ center, myLocation, markers, centerRevision = 0, bottomInset = 0, onRegionChange, onError, lines, fitBounds, fitRevision = 0, selectedStationId, selectedStationName, selectedStationColor, onStationPress, onMapPress }: KakaoMapProps) {
     const key = process.env.EXPO_PUBLIC_KAKAO_MAP_JS_KEY?.trim() ?? '';
     const source = useMemo(() => ({ html: buildMapHtml(key), baseUrl: 'https://localhost' }), [key]);
     const web = useRef<WebView>(null);
@@ -37,6 +42,7 @@ export default function KakaoMap({ center, myLocation, markers, centerRevision =
     const failRef = useRef(onError);
     useEffect(() => { failRef.current = onError; }, [onError]);
     const fail = () => { setFailed(true); failRef.current?.(); };
+    const stationSelection = !!onStationPress;
 
     useEffect(() => {
         if (!key || ready || failed) return;
@@ -47,8 +53,9 @@ export default function KakaoMap({ center, myLocation, markers, centerRevision =
         if (!ready || failed) return;
         // 선택 값은 넘겼을 때만 메시지에 넣어요. 홈 지도의 메시지는 이전과 같아요.
         const fit = fitBounds ? { bounds: fitBounds, revision: fitRevision } : undefined;
-        web.current?.postMessage(JSON.stringify({ type: 'state', center, myLocation, markers, revision: centerRevision, lines, fit }));
-    }, [ready, failed, center, myLocation, markers, centerRevision, lines, fitBounds, fitRevision]);
+        const selection = stationSelection ? { stationSelection: true, selectedStationId: selectedStationId ?? null, selectedStationName, selectedStationColor } : {};
+        web.current?.postMessage(JSON.stringify({ type: 'state', center, myLocation, markers, revision: centerRevision, lines, fit, ...selection }));
+    }, [ready, failed, center, myLocation, markers, centerRevision, lines, fitBounds, fitRevision, selectedStationId, selectedStationName, selectedStationColor, stationSelection]);
 
     return <View style={[styles.container, { marginBottom: bottomInset }]}>
         {!!key && !failed && <WebView
@@ -72,6 +79,8 @@ export default function KakaoMap({ center, myLocation, markers, centerRevision =
                 if (message?.type === 'ready') setReady(true);
                 else if (message?.type === 'error') fail();
                 else if (message?.type === 'region') onRegionChange(message.bounds, message.level);
+                else if (message?.type === 'stationPress') onStationPress?.(message.id);
+                else if (message?.type === 'mapPress') onMapPress?.();
             }}
         />}
         {(!key || failed) && <View style={styles.error}>

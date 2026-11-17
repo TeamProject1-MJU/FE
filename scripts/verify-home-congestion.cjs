@@ -243,7 +243,7 @@ test('230 home map exposes full fetched stations without changing markers; denie
     r.render(Component); await flush();
     assert.equal(r.render(Component).kind, 'off');
     assert.equal(map.myLocation, null); assert.equal(map.locationLoading, false);
-    map.onRegionChange({ minLng: 126, minLat: 37, maxLng: 128, maxLat: 38 });
+    map.onRegionChange({ minLng: 126, minLat: 37, maxLng: 128, maxLat: 38 }, 5);
     r.advance(400); await flush(); r.render(Component);
     assert.equal(map.stations, items); assert.equal(map.markers, items);
     assert.equal(map.stations[0].lines[0].lineId, 22);
@@ -255,6 +255,108 @@ function elements(node, predicate) {
     if (Array.isArray(node)) return node.flatMap(child => elements(child, predicate));
     return [...(predicate(node) ? [node] : []), ...elements(node.props?.children, predicate)];
 }
+
+function selectedFixture(extra = {}) {
+    const r = runtime();
+    const hook = r.load('src/hooks/use-home-congestion').useSelectedHomeCongestion;
+    const options = { serverMode: true, account: '1:a', station: station(1, 37.5), lineId: 22, ...extra };
+    return { r, options, view: () => r.render(hook, options) };
+}
+
+test('259 selection does not require location; parallel directions keep the busier value and unchanged request shape', async () => {
+    const { r, view } = selectedFixture(); const calls = []; const pending = [];
+    r.fetch(query => { calls.push(query); return new Promise(done => pending.push(done)); });
+    view(); assert.equal(view().state.kind, 'loading');
+    assert.deepEqual(plain(calls), ['INNER', 'OUTER'].map(direction => ({ stationId: 1, lineId: 22, direction, date: '2026-11-16', time: '12:14' })));
+    pending[0](response('INNER')); pending[1](response('OUTER', 'CROWDED')); await flush();
+    assert.equal(view().state.data.direction, 'OUTER'); assert.equal(view().state.data.congestion.kind, 'ESTIMATED');
+    r.blur(); assert.equal(view().state.kind, 'hidden');
+});
+
+test('259 no selection, mock, logout and unsupported stations make no congestion requests', () => {
+    for (const extra of [{ station: null }, { serverMode: false }, { account: null }, { station: station(1, 37.5, { isSupported: false }) }]) {
+        const { r, view } = selectedFixture(extra); let calls = 0;
+        r.fetch(() => { calls++; throw Error('must not query'); });
+        view(); assert.equal(view().state.kind, extra.station?.isSupported === false ? 'unsupported' : 'hidden');
+        assert.equal(calls, 0); r.blur();
+    }
+});
+
+test('259 rapid station/line changes and clearing selection discard all earlier responses', async () => {
+    const secondLine = { lineId: 33, lineName: '3호선', color: '#EF7C1C', stationCode: '301' };
+    const { r, options, view } = selectedFixture({ station: station(1, 37.5, { lines: [line, secondLine] }) }); const pending = [];
+    r.fetch(query => new Promise(done => pending.push({ query, done })));
+    view(); options.lineId = 33; view();
+    assert.equal(view().line.color, '#EF7C1C'); assert.equal(view().state.kind, 'loading');
+    assert.deepEqual(pending.slice(2).map(item => item.query.direction), ['UP', 'DOWN']);
+    options.station = station(2, 37.51); options.lineId = 22; view();
+    options.station = station(3, 37.52); view();
+    for (const item of pending.slice(0, 6)) item.done(response(item.query.direction, 'VERY_CROWDED'));
+    await flush(); assert.equal(view().state.kind, 'loading');
+    for (const item of pending.slice(6)) item.done(response(item.query.direction, 'NORMAL'));
+    await flush(); assert.equal(view().state.data.station.id, 3);
+    options.station = station(4, 37.53); view(); options.station = null; view();
+    for (const item of pending.slice(8)) item.done(response(item.query.direction));
+    await flush(); assert.equal(view().state.kind, 'hidden'); r.blur();
+});
+
+test('259 request errors offer retry and supported=false is an information-empty state', async () => {
+    const { r, view } = selectedFixture(); let calls = 0;
+    r.fetch(async () => { calls++; throw Error('offline'); }); view(); await flush();
+    assert.equal(view().state.kind, 'error'); assert.equal(calls, 2);
+    r.fetch(async query => { calls++; return response(query.direction, null, false); }); view().retry(); view(); await flush();
+    assert.equal(view().state.kind, 'empty'); assert.equal(calls, 4);
+    r.fetch(async query => response(query.direction)); view().retry(); view(); await flush();
+    assert.equal(view().state.kind, 'ready'); r.blur();
+});
+
+test('259 blur, account change and session generation invalidate in-flight results', async () => {
+    for (const mode of ['blur', 'account', 'generation']) {
+        const { r, options, view } = selectedFixture(); const pending = [];
+        r.fetch(query => new Promise(done => pending.push({ query, done }))); view();
+        if (mode === 'blur') r.blur();
+        if (mode === 'account') { options.account = '2:b'; options.station = null; view(); }
+        if (mode === 'generation') r.session();
+        for (const item of [...pending]) item.done(response(item.query.direction));
+        await flush(); assert.notEqual(view().state.kind, 'ready', mode);
+        if (mode === 'blur') { r.focus(); view(); assert.equal(view().state.kind, 'loading'); }
+        r.blur();
+    }
+});
+
+test('259 selected card labels, transfer line toggles, close/retry and unsupported guidance', () => {
+    const r = runtime(); const Card = r.load('src/components/home-congestion-card').default;
+    const preview = r.load('src/utils/home-congestion').homeCongestionPreview(false, 'congestion');
+    const secondLine = { lineId: 33, lineName: '3호선', color: '#EF7C1C', stationCode: '301' };
+    const selected = station(1, 37.5, { lines: [line, secondLine] }); let closed = 0; let retried = 0; const lines = [];
+    const draw = (state, extra = {}) => {
+        const node = Card({ state, station: selected, line, onClose: () => closed++, onRetry: () => retried++, onSelectLine: id => lines.push(id), ...extra });
+        return typeof node?.type === 'function' ? node.type(node.props) : node;
+    };
+    const text = node => elements(node, element => element.type === 'Text').map(element => element.props.children).join(' ');
+    for (const [state, label] of [
+        [{ kind: 'loading' }, '혼잡도를 불러오고 있어요'], [{ kind: 'empty' }, '혼잡도 정보 없음'],
+        [{ kind: 'error' }, '혼잡도를 불러오지 못했어요'], [{ kind: 'unsupported' }, '지원하지 않는 역이에요'],
+        [{ kind: 'ready', data: preview }, '여유'],
+    ]) {
+        const card = draw(state); assert.ok(text(card).includes('선택한 역')); assert.ok(text(card).includes(label));
+        assert.equal(elements(card, element => element.props?.accessibilityLabel === '선택한 역 혼잡도 다시 시도').length, state.kind === 'error' ? 1 : 0);
+    }
+    const ready = draw({ kind: 'ready', data: preview }); assert.ok(text(ready).includes('추정'));
+    const normal = draw({ kind: 'ready', data: { ...preview, congestion: { ...preview.congestion, kind: 'PREDICTED' } } });
+    assert.equal(text(normal).includes('추정'), false); assert.ok(text(normal).includes('여유'));
+    assert.equal(elements(ready, element => element.type === 'CongestionBlocks')[0].props.level, 2);
+    const choices = elements(ready, element => element.props?.accessibilityLabel?.endsWith('혼잡도 보기'));
+    assert.deepEqual(choices.map(choice => choice.props.accessibilityState.selected), [true, false]); choices[1].props.onPress(); assert.deepEqual(lines, [33]);
+    const changed = draw({ kind: 'loading' }, { line: secondLine });
+    assert.equal(elements(changed, element => element.type === 'TrainBlock')[0].props.color, '#EF7C1C');
+    elements(ready, element => element.props?.accessibilityLabel === '선택한 역 닫기')[0].props.onPress(); assert.equal(closed, 1);
+    elements(draw({ kind: 'error' }), element => element.props?.accessibilityLabel === '선택한 역 혼잡도 다시 시도')[0].props.onPress(); assert.equal(retried, 1);
+    const unsupported = draw({ kind: 'unsupported' }, { station: { ...selected, isSupported: false } });
+    assert.equal(elements(unsupported, element => element.type === 'CongestionBlocks').length, 0);
+    assert.ok(elements(unsupported, element => element.props?.accessibilityLabel?.endsWith('혼잡도 보기')).every(button => button.props.disabled));
+    assert.equal(draw({ kind: 'hidden' }), null);
+});
 test('230 card geometry is identical for off/loading/ready, hidden removes space, only off button is interactive', () => {
     const r = runtime(); const Card = r.load('src/components/home-congestion-card').default;
     let presses = 0;

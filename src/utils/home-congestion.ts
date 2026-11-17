@@ -17,7 +17,20 @@ export type HomeCongestionState =
     | { kind: 'off' }
     | { kind: 'loading' }
     | { kind: 'hidden' }
+    | { kind: 'empty' }
+    | { kind: 'error' }
+    | { kind: 'unsupported' }
     | { kind: 'ready'; data: HomeCongestionData };
+
+export function selectedCongestionLabel(state: HomeCongestionState): string {
+    switch (state.kind) {
+        case 'ready': return state.data.congestion.levelLabel ?? '혼잡도 정보 없음';
+        case 'loading': return '혼잡도를 불러오고 있어요';
+        case 'error': return '혼잡도를 불러오지 못했어요';
+        case 'unsupported': return '지원하지 않는 역이에요';
+        default: return '혼잡도 정보 없음';
+    }
+}
 
 export function nearestHomeStation(location: Coordinate | null, stations: readonly Station[]) {
     if (!location) return null;
