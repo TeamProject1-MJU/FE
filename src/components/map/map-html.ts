@@ -1,3 +1,4 @@
+import { ROUTE_MARKER_ICONS } from '@/components/map/route-marker-icons';
 import { isCoordinate, isMapBounds, type MapBounds } from '@/utils/home-map';
 
 /** 지도로 보내는 메시지 상한. 앱(route-map)이 이 안으로 줄여 보내고, 넘는 메시지는 지도가 통째로 무시해요. */
@@ -43,9 +44,9 @@ export function isAllowedMapNavigation(url: string) {
 
 /**
  * 위치·역·경로 데이터는 HTML에 삽입하지 않고 검증된 JSON 메시지로만 전달해요.
- * state 메시지: { type, center, myLocation, markers[{ id, latitude, longitude, isSupported, color? }], revision,
+ * state 메시지: { type, center, myLocation, markers[{ id, latitude, longitude, isSupported, color?, kind? }], revision,
  *   lines?[{ id, color, points[{ latitude, longitude }], dashed? }], fit?{ bounds, revision } }
- * 선택 값(lines, fit, marker.color)이 없으면 홈 지도와 같은 메시지·동작이에요.
+ * 선택 값(lines, fit, marker.color·kind)이 없으면 홈 지도와 같은 메시지·동작이에요.
  */
 export function buildMapHtml(key: string): string {
     const sdkUrl = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(key).replace(/'/g, '%27')}&autoload=false`;
@@ -55,6 +56,8 @@ export function buildMapHtml(key: string): string {
 <body><div id="map"></div><script>
 (function(){
  var map, overlays=[], polylines=[], mine=null, lastCenter=null, lastFit=null;
+ var routeIcons=${JSON.stringify(ROUTE_MARKER_ICONS)};
+ function routeKind(k){return k==='origin' || k==='transfer' || k==='destination';}
  window.open=function(){return null;};
  // 지도는 외부 링크를 열지 않아요(저작권 링크도 앱 밖으로 보내지 않아요).
  document.addEventListener('click',function(e){var el=e.target;while(el && el.tagName!=='A')el=el.parentElement;if(el)e.preventDefault();},true);
@@ -75,17 +78,24 @@ export function buildMapHtml(key: string): string {
  function fit(f){var b=f && f.bounds;return Number.isSafeInteger(f && f.revision) && b && [b.minLng,b.minLat,b.maxLng,b.maxLat].every(function(n){return typeof n==='number' && Number.isFinite(n);}) && b.minLng>=-180 && b.maxLng<=180 && b.minLat>=-90 && b.maxLat<=90 && b.minLng<b.maxLng && b.minLat<b.maxLat;}
  function coordinate(p){return new kakao.maps.LatLng(p.latitude,p.longitude);}
  function dot(p,color){var el=document.createElement('div');el.className='dot';el.style.backgroundColor=color;return new kakao.maps.CustomOverlay({map:map,position:coordinate(p),content:el,yAnchor:0.5});}
+ function routeMarker(m){
+  if(m.kind===undefined)return dot(m,m.color||(m.isSupported?'#12a77a':'#8c93a3'));
+  var icon=routeIcons[m.kind],el=document.createElement('img');
+  el.src=icon.uri;el.alt=icon.label;el.draggable=false;
+  el.style.cssText='display:block;width:'+icon.width+'px;height:'+icon.height+'px;border:0;padding:0;pointer-events:none;user-select:none';
+  return new kakao.maps.CustomOverlay({map:map,position:coordinate(m),content:el,xAnchor:icon.xAnchor,yAnchor:icon.yAnchor,zIndex:m.kind==='destination'?4:3});
+ }
  function receive(event){
   try {
    var v=JSON.parse(event.data);
    if(!map || !v || v.type!=='state' || !Number.isSafeInteger(v.revision) || !point(v.center) || !(v.myLocation===null || point(v.myLocation)) || !Array.isArray(v.markers) || v.markers.length>500) return;
-   if(!v.markers.every(function(m){return point(m) && Number.isSafeInteger(m.id) && typeof m.isSupported==='boolean' && (m.color===undefined || color(m.color));})) return;
+   if(!v.markers.every(function(m){return point(m) && Number.isSafeInteger(m.id) && typeof m.isSupported==='boolean' && (m.color===undefined || color(m.color)) && (m.kind===undefined || routeKind(m.kind));})) return;
    if(!(v.lines===undefined || lines(v.lines)) || !(v.fit===undefined || fit(v.fit))) return;
    if(!lastCenter || lastCenter.latitude!==v.center.latitude || lastCenter.longitude!==v.center.longitude || lastCenter.revision!==v.revision){map.setCenter(coordinate(v.center));lastCenter={latitude:v.center.latitude,longitude:v.center.longitude,revision:v.revision};}
    polylines.forEach(function(o){o.setMap(null);});
    polylines=(v.lines||[]).map(function(l){return new kakao.maps.Polyline({map:map,path:l.points.map(coordinate),strokeWeight:6,strokeColor:l.color,strokeOpacity:0.9,strokeStyle:l.dashed?'shortdash':'solid'});});
    overlays.forEach(function(o){o.setMap(null);});
-   overlays=v.markers.map(function(m){return dot(m,m.color||(m.isSupported?'#12a77a':'#8c93a3'));});
+   overlays=v.markers.map(routeMarker);
    // 범위 맞춤은 번호가 바뀔 때만 해요. 사용자가 움직인 지도는 같은 번호의 갱신으로 되돌리지 않아요.
    if(v.fit && lastFit!==v.fit.revision){var b=v.fit.bounds;map.setBounds(new kakao.maps.LatLngBounds(new kakao.maps.LatLng(b.minLat,b.minLng),new kakao.maps.LatLng(b.maxLat,b.maxLng)),40,40,40,40);lastFit=v.fit.revision;}
    if(mine)mine.setMap(null);

@@ -2,11 +2,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/app-text';
 import { WebView } from 'react-native-webview';
+import type { RouteMarkerKind } from '@/components/map/route-marker-icons';
 import type { Coordinate, MapBounds } from '@/utils/home-map';
 import { buildMapHtml, isAllowedMapNavigation, parseMapMessage } from '@/components/map/map-html';
 
-/** color(#RRGGBB)가 있으면 그 색, 없으면 isSupported 로 색을 정해요. */
-export type MapMarker = Coordinate & { id: number; isSupported: boolean; color?: string };
+/** kind가 있는 경로 마커는 전용 아이콘, 그 외에는 기존 color·isSupported 색의 점이에요. */
+export type MapMarker = Coordinate & { id: number; isSupported: boolean; color?: string; kind?: RouteMarkerKind };
 /** points 는 { latitude, longitude } 순서예요. dashed 는 점선(도보)이에요. */
 export type MapLine = { id: number; color: string; points: Coordinate[]; dashed?: boolean };
 export type KakaoMapProps = {

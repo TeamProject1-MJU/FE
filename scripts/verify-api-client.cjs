@@ -7078,7 +7078,7 @@ function html129() {
         kakao: { maps: { LatLng, load: fn => fn(), event: { addListener() {} },
                 LatLngBounds: class { constructor(sw, ne) { this.sw = sw; this.ne = ne; } },
                 Map: class { setCenter() {} setBounds(bounds, ...padding) { fits.push({ bounds, padding }); } getBounds() { return { getSouthWest: () => new LatLng(37.4, 126.9), getNorthEast: () => new LatLng(37.7, 127.2) }; } },
-                CustomOverlay: class { constructor(options) { this.color = options.content.style.backgroundColor; dots.push(this); } setMap(v) { this.detached = v === null; } },
+                CustomOverlay: class { constructor(options) { this.options = options; this.color = options.content.style.backgroundColor; dots.push(this); } setMap(v) { this.detached = v === null; } },
                 Polyline: class { constructor(options) { this.options = options; polylines.push(this); } setMap(v) { this.detached = v === null; } },
             } },
     };
@@ -10683,5 +10683,184 @@ test('241 B안 첫차 기준은 시간 아래 한 줄이며 noService 출발 안
             assert.ok(findElement(children[2], node => node.props?.name === 'information-circle-outline'));
         }
         assert.equal(JSON.stringify(route), original);
+    }
+});
+
+/* ---------- 경로 지도 마커 표시와 플랫폼 호환 (#261) ---------- */
+test('261 웹 경로 마커는 원래 좌표에서 전용 아이콘을 쓰고 홈·내 위치 점과 지도 이동을 유지해요', () => {
+    const r = createRuntime();
+    const { createWebMap } = r.load('src/components/map/map-web.ts');
+    const f = webMap126Fixture();
+    const kinds = ['origin', 'transfer', 'transfer', 'destination'];
+    const markers = kinds.map((kind, id) => ({ id, isSupported: true, kind, latitude: 37.5 + id * .01, longitude: 127 + id * .01 }));
+    const state = { ...f.state, markers: [...markers, f.state.markers[0]] };
+    const controller = createWebMap(f.container, f.sdk, state, { onRegionChange() {}, onReady() {}, onError() { assert.fail(); } });
+    const route = f.overlays.slice(0, kinds.length).map(o => o.options);
+    assert.deepEqual(route.map(o => o.content.tagName), ['img', 'img', 'img', 'img']);
+    assert.deepEqual(route.map(o => [o.position.getLat(), o.position.getLng()]), markers.map(m => [m.latitude, m.longitude]));
+    assert.deepEqual(route.map(o => o.content.alt), ['출발', '환승', '환승', '도착']);
+    assert.ok(route[0].yAnchor > .9, '캐릭터는 중심이 아니라 발밑을 좌표에 맞춰요');
+    assert.equal(route[1].yAnchor, .5, '환승 원은 중심을 좌표에 맞춰요');
+    assert.ok(route[3].yAnchor > .9 && route[3].xAnchor < .5, '깃발 천 중심이 아니라 왼쪽 기둥 아래가 좌표예요');
+    assert.equal(route[1].content.src, route[2].content.src);
+    assert.notEqual(route[0].content.src, route[1].content.src);
+    assert.notEqual(route[3].content.src, route[1].content.src);
+    assert.match(f.overlays[4].options.content.style.cssText, /background-color:#12a77a/);
+    assert.match(f.overlays[5].options.content.style.cssText, /background-color:#2879ef/);
+    const centerCount = f.centers.length;
+    controller.update({ ...state, markers: [] });
+    assert.ok(f.overlays.slice(0, 6).every(o => o.detached));
+    assert.equal(f.centers.length, centerCount, '마커 갱신으로 사용자가 이동한 중심을 되돌리지 않아요');
+    controller.dispose(); assert.ok(f.overlays.every(o => o.detached));
+});
+
+test('261 WebView와 웹 지도는 같은 아이콘·기준점·좌표를 쓰고 이전 마커를 정리해요', () => {
+    const r = createRuntime(); const f = webMap126Fixture(); const h = html129();
+    const markers = ['origin', 'transfer', 'destination'].map((kind, id) => ({ ...h.point, latitude: h.point.latitude + id * .01, id, kind, isSupported: true }));
+    h.send({ ...h.base, markers });
+    const controller = r.load('src/components/map/map-web.ts').createWebMap(f.container, f.sdk,
+        { ...f.state, myLocation: null, markers }, { onRegionChange() {}, onReady() {}, onError() { assert.fail(); } });
+    assert.equal(h.dots.length, 3);
+    for (let i = 0; i < markers.length; i++) {
+        const native = h.dots[i].options; const web = f.overlays[i].options;
+        assert.equal(native.content.src, web.content.src);
+        assert.equal(native.content.alt, web.content.alt);
+        assert.equal(native.xAnchor, web.xAnchor); assert.equal(native.yAnchor, web.yAnchor);
+        assert.deepEqual([native.position.getLat(), native.position.getLng()], [markers[i].latitude, markers[i].longitude]);
+    }
+    h.send({ ...h.base, markers: [] }); assert.ok(h.dots.every(o => o.detached));
+    controller.dispose();
+});
+
+test('261 알 수 없는 마커 종류는 웹·WebView 모두 갱신 전체를 거절하고 기존 마커를 보존해요', () => {
+    const r = createRuntime(); const { validMapState, createWebMap } = r.load('src/components/map/map-web.ts');
+    const f = webMap126Fixture(); const h = html129();
+    const markers = [{ ...h.point, id: 0, isSupported: true, kind: 'origin' }];
+    const state = { ...f.state, myLocation: null, markers };
+    const controller = createWebMap(f.container, f.sdk, state, { onRegionChange() {}, onReady() {}, onError() { assert.fail(); } });
+    h.send({ ...h.base, markers });
+    for (const kind of [null, '', 'other', 'constructor', '__proto__', '<img onerror=alert(1)>', 0, {}]) {
+        const invalid = [{ ...markers[0], kind }];
+        assert.equal(validMapState({ ...state, markers: invalid }), false);
+        controller.update({ ...state, markers: invalid });
+        h.send({ ...h.base, markers: invalid });
+        assert.equal(f.overlays.length, 1); assert.equal(h.dots.length, 1);
+        assert.ok(!f.overlays[0].detached && !h.dots[0].detached);
+    }
+    controller.dispose();
+});
+
+test('261 앱 지도 메시지는 경로 마커 종류와 좌표를 그대로 전달하고 홈 메시지는 그대로예요', () => {
+    const markers = ['origin', 'transfer', 'destination'].map((kind, id) => ({ latitude: 37.5, longitude: 127 + id * .01, id, isSupported: true, kind }));
+    const before = JSON.stringify(markers);
+    const native = nativeMap129({ myLocation: null, markers });
+    assert.deepEqual(native.posted.at(-1).markers, markers);
+    assert.equal(JSON.stringify(markers), before); native.r.unmount();
+    const home = nativeMap129({});
+    assert.ok(home.posted.at(-1).markers.every(m => !Object.hasOwn(m, 'kind'))); home.r.unmount();
+});
+
+test('261 예시 지도는 서버 요청 없이 같은 마커와 범례를 쓰고 빈 경로에 가짜 도착점을 만들지 않아요', () => {
+    const r = createScreenRuntime({}, 'src/components/route/RouteMapPreview.tsx');
+    const route = route129(); const before = JSON.stringify(route);
+    r.screen.default = (() => { const Preview = r.screen.default; return () => Preview({ route }); })();
+    let view = r.render();
+    findElement(view, e => typeof e.props?.onLayout === 'function').props.onLayout({ nativeEvent: { layout: { width: 320, height: 150 } } });
+    view = r.render();
+    const Marker = r.load('src/components/route/RouteMapMarker.tsx').default;
+    const kinds = findElements(view, e => e.type === Marker).map(e => e.props.kind);
+    assert.equal(kinds[0], 'origin'); assert.equal(kinds.at(-1), 'destination');
+    assert.ok(kinds.slice(1, -1).every(kind => kind === 'transfer'));
+    const Legend = r.load('src/components/route/RouteMapLegend.tsx').default;
+    const legend = findElement(view, e => e.type === Legend); assert.ok(legend);
+    const legendView = Legend(legend.props);
+    for (const text of ['도보', '출발', '환승', '도착', '혼잡도', '노선']) assert.ok(findText(legendView, text), text);
+    const legendMarkers = findElements(legendView, e => e.type === Marker);
+    for (const node of legendMarkers) {
+        const image = Marker(node.props);
+        assert.equal(image.props.source.uri, r.load('src/components/map/route-marker-icons.ts').ROUTE_MARKER_ICONS[node.props.kind].uri);
+        assert.ok(image.props.style.width < 20, '범례는 지도 마커보다 작은 보조 표시예요');
+    }
+    assert.equal(JSON.stringify(route), before); r.unmount();
+    const empty = createScreenRuntime({}, 'src/components/route/RouteMapPreview.tsx');
+    const Preview = empty.screen.default; empty.screen.default = () => Preview({ route: { ...route, steps: [] } });
+    const emptyView = empty.render();
+    findElement(emptyView, e => typeof e.props?.onLayout === 'function').props.onLayout({ nativeEvent: { layout: { width: 320, height: 150 } } });
+    assert.equal(findElements(empty.render(), e => e.type === empty.load('src/components/route/RouteMapMarker.tsx').default).length, 0);
+    empty.unmount();
+});
+
+test('261 긴 역명·여러 환승·좁은 화면·큰 글꼴에서도 이름표와 모든 마커가 겹치거나 지도 밖으로 나가지 않아요', () => {
+    const { layoutRouteMapPreview } = createRuntime().load('src/utils/route-map-preview.ts');
+    const overlaps = (a, b) => a.left < b.left + b.width - .01 && b.left < a.left + a.width - .01
+        && a.top < b.top + b.height - .01 && b.top < a.top + a.height - .01;
+    for (const width of [240, 320, 390]) for (const fontScale of [1, 1.3, 2]) for (const count of [2, 4, 9, 30]) {
+        const names = Array.from({ length: count }, (_, i) => ['건대입구', '고속터미널', '동대문역사문화공원', '서울대입구(관악구청)', '사당'][i % 5]);
+        const input = JSON.stringify(names);
+        const layout = layoutRouteMapPreview(names, width, fontScale);
+        assert.equal(layout.points.length, count); assert.equal(JSON.stringify(names), input);
+        const rectangles = layout.points.flatMap(point => [point.label, point.marker]);
+        for (const point of layout.points) {
+            assert.equal(point.label.text.replace(/\n/g, ''), point.name, '줄을 바꿔도 역명 전체를 유지해요');
+            assert.ok(!point.label.text.includes('…'));
+            assert.ok(Number.isFinite(point.x) && Number.isFinite(point.y));
+        }
+        for (let i = 0; i < rectangles.length; i++) {
+            const rect = rectangles[i];
+            assert.ok(rect.left >= 0 && rect.top >= 0 && rect.left + rect.width <= width + .01);
+            assert.ok(rect.top + rect.height <= layout.height - 24, '아래 안내와도 간격을 둬요');
+            for (let j = i + 1; j < rectangles.length; j++) assert.ok(!overlaps(rect, rectangles[j]), `${width}px, 글꼴 ${fontScale}, ${count}개: ${i}/${j}`);
+        }
+    }
+    for (const width of [0, NaN]) assert.equal(layoutRouteMapPreview(['사당'], width).points.length, 0);
+    assert.equal(layoutRouteMapPreview([], 320).points.length, 0);
+});
+
+test('261 예시 지도는 긴 이름을 아이콘 밖에서 표시하고 화면 폭·글꼴 변화에 맞춰 다시 배치해요', () => {
+    const r = createScreenRuntime({}, 'src/components/route/RouteMapPreview.tsx');
+    const route = route129(); const subway = route.steps.filter(step => step.type === 'SUBWAY');
+    const names = ['건대입구', '고속터미널', '동대문역사문화공원', '서울대입구(관악구청)'];
+    subway.forEach((step, i) => { step.stops = [{ id: i * 2 + 1, name: names[i % names.length], order: 0 }, { id: i * 2 + 2, name: '중간역', order: 1 }]; });
+    subway.at(-1).stops.at(-1).name = '사당';
+    const before = JSON.stringify(route);
+    const Preview = r.screen.default; r.screen.default = () => Preview({ route });
+    const resize = width => {
+        const view = r.render();
+        findElement(view, e => typeof e.props?.onLayout === 'function').props.onLayout({ nativeEvent: { layout: { width, height: 150 } } });
+        return r.render();
+    };
+    const small = resize(240);
+    const Marker = r.load('src/components/route/RouteMapMarker.tsx').default;
+    const labels = view => findElements(view, e => e.type === 'Text' && typeof e.props.accessibilityLabel === 'string');
+    assert.equal(labels(small).length, subway.length + 1);
+    for (const label of labels(small)) {
+        assert.equal(textOf(label).replace(/\n/g, ''), label.props.accessibilityLabel);
+        assert.equal(label.props.numberOfLines, undefined, '긴 역명을 임의로 잘라내지 않아요');
+    }
+    const smallMap = findElement(small, e => typeof e.props?.onLayout === 'function');
+    const large = resize(390); const largeMap = findElement(large, e => typeof e.props?.onLayout === 'function');
+    assert.ok(largeMap.props.style[1].height <= smallMap.props.style[1].height);
+    assert.deepEqual(labels(large).map(e => e.props.accessibilityLabel), labels(small).map(e => e.props.accessibilityLabel));
+    r.native.useWindowDimensions = () => ({ width: 390, height: 844, scale: 1, fontScale: 2 });
+    const bigger = r.render();
+    assert.equal(labels(bigger).length, subway.length + 1);
+    assert.equal(findElements(bigger, e => e.type === Marker).length, subway.length + 1);
+    assert.equal(JSON.stringify(route), before); r.unmount();
+});
+
+
+test('261 지도 역명은 역을 덧붙이지 않고 서울역을 보존하며 긴 이름은 균형 있게 줄을 나눠요', () => {
+    const { layoutRouteMapPreview } = createRuntime().load('src/utils/route-map-preview.ts');
+    const names = ['건대입구', '고속터미널', '교대', '사당'];
+    const ordinary = layoutRouteMapPreview(names, 360);
+    assert.deepEqual(plain(ordinary.points.map(point => point.label.text)), names);
+    const long = layoutRouteMapPreview(['서울역', '디지털미디어시티', '동대문역사문화공원', '사당'], 360);
+    assert.equal(long.points[0].name, '서울역'); assert.equal(long.points[0].label.text, '서울역');
+    assert.equal(long.points[2].label.text, '동대문역사\n문화공원');
+    for (const point of long.points) {
+        const lines = point.label.text.split('\n');
+        assert.equal(lines.join(''), point.name);
+        assert.ok(lines.length <= 2);
+        if (lines.length === 2) assert.ok(Math.abs(lines[0].length - lines[1].length) <= 1);
     }
 });

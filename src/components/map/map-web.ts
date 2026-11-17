@@ -1,4 +1,5 @@
 import type { KakaoMapProps } from '@/components/KakaoMap';
+import { isRouteMarkerKind, ROUTE_MARKER_ICONS } from '@/components/map/route-marker-icons';
 import { isHexColor, isValidMapLines } from '@/components/map/map-html';
 import { isCoordinate, isMapBounds, type Coordinate, type MapBounds } from '@/utils/home-map';
 
@@ -15,7 +16,7 @@ export type MapSdk = {
     load(callback: () => void): void;
     LatLng: new (latitude: number, longitude: number) => Point;
     Map: new (container: HTMLElement, options: { center: Point; level: number }) => WebMap;
-    CustomOverlay: new (options: { map: WebMap; position: Point; content: HTMLElement; yAnchor: number; zIndex: number }) => Overlay;
+    CustomOverlay: new (options: { map: WebMap; position: Point; content: HTMLElement; xAnchor?: number; yAnchor: number; zIndex: number }) => Overlay;
     /** 선을 쓰는 지도만 필요해요. 선이 없는 홈 지도는 이 값이 없어도 동작해요. */
     Polyline?: new (options: { map: WebMap; path: Point[]; strokeWeight: number; strokeColor: string; strokeOpacity: number; strokeStyle: string }) => Overlay;
     LatLngBounds?: new (sw: Point, ne: Point) => unknown;
@@ -93,7 +94,8 @@ export function validMapState(state: MapState) {
     return isCoordinate(state.center) && (state.myLocation === null || isCoordinate(state.myLocation))
         && Number.isSafeInteger(state.centerRevision ?? 0) && Array.isArray(state.markers) && state.markers.length <= 500
         && state.markers.every(marker => isCoordinate(marker) && Number.isSafeInteger(marker.id) && typeof marker.isSupported === 'boolean'
-            && (marker.color === undefined || isHexColor(marker.color)))
+            && (marker.color === undefined || isHexColor(marker.color))
+            && (marker.kind === undefined || isRouteMarkerKind(marker.kind)))
         && (state.lines === undefined || isValidMapLines(state.lines))
         && (state.fitBounds === undefined || state.fitBounds === null || isMapBounds(state.fitBounds))
         && Number.isSafeInteger(state.fitRevision ?? 0);
@@ -123,6 +125,15 @@ export function createWebMap(container: HTMLElement, sdk: MapSdk, initial: MapSt
         el.style.cssText = `width:16px;height:16px;border:3px solid white;border-radius:50%;box-shadow:0 1px 4px #555;pointer-events:none;background-color:${color}`;
         overlays.push(new sdk.CustomOverlay({ map, position: point(p), content: el, yAnchor: 0.5, zIndex: mine ? 2 : 1 }));
     };
+    const routeMarker = (marker: MapState['markers'][number]) => {
+        if (marker.kind === undefined) { dot(marker, marker.color ?? (marker.isSupported ? '#12a77a' : '#8c93a3'), false); return; }
+        const icon = ROUTE_MARKER_ICONS[marker.kind];
+        const el = container.ownerDocument.createElement('img');
+        el.src = icon.uri; el.alt = icon.label; el.draggable = false;
+        el.style.cssText = `display:block;width:${icon.width}px;height:${icon.height}px;border:0;padding:0;pointer-events:none;user-select:none`;
+        overlays.push(new sdk.CustomOverlay({ map, position: point(marker), content: el,
+            xAnchor: icon.xAnchor, yAnchor: icon.yAnchor, zIndex: marker.kind === 'destination' ? 4 : 3 }));
+    };
     const region = () => {
         if (disposed) return;
         try { const bounds = mapBounds(map); if (bounds) callbacks.onRegionChange(bounds); }
@@ -141,7 +152,7 @@ export function createWebMap(container: HTMLElement, sdk: MapSdk, initial: MapSt
             state.lines.forEach(line => overlays.push(new Polyline({ map, path: line.points.map(point), strokeWeight: 6,
                 strokeColor: line.color, strokeOpacity: 0.9, strokeStyle: line.dashed ? 'shortdash' : 'solid' })));
         }
-        state.markers.forEach(marker => dot(marker, marker.color ?? (marker.isSupported ? '#12a77a' : '#8c93a3'), false));
+        state.markers.forEach(routeMarker);
         if (state.myLocation) dot(state.myLocation, '#2879ef', true);
         // 범위 맞춤은 번호가 바뀔 때만 해요. 같은 번호로 다시 오면 사용자가 움직인 지도를 그대로 둬요.
         const fit = state.fitBounds; const revision = state.fitRevision ?? 0;
