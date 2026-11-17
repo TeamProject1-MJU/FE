@@ -181,8 +181,7 @@ function ServerDirectionScreen() {
     const pick = async (camera: boolean) => {
         if (inFlight.current || !validRoute) return;
         lastPickCamera.current = camera;
-        // 새 사진을 고르면 유지하던 사진과 임시 파일을 먼저 정리해요.
-        inFlight.current = true; setBusy('pick'); setError(null); setData(null); setPhoto(null); clean();
+        inFlight.current = true; setBusy('pick');
         const id = ++requestId.current;
         const generation = getSessionGeneration();
         const current = () => active.current && id === requestId.current && generation === getSessionGeneration();
@@ -199,6 +198,8 @@ function ServerDirectionScreen() {
             const result = camera ? await ImagePicker.launchCameraAsync(options) : await ImagePicker.launchImageLibraryAsync(options);
             if (result.canceled) return;
             const asset = result.assets[0];
+            // 실제 사진을 받은 뒤에만 교체하고, 새 파일을 등록하기 전에 기존 파일을 정리해요.
+            if (current()) { setError(null); setData(null); setPhoto(null); clean(); }
             // Only delete picker-owned cache files, never an original library asset.
             if (Platform.OS !== 'web' && asset.uri.startsWith(Paths.cache.uri)) temporary.current.add(asset.uri);
             if (!current()) return;
