@@ -8,11 +8,17 @@ import { UiColors } from '@/constants/linkro-colors';
 export const TAB_BAR_CONTENT_HEIGHT = 54;
 
 type TabKey = 'home' | 'route' | 'rooms' | 'my';
+function switchTab(pathname: '/home' | '/route-search' | '/rooms' | '/my') {
+    // Router는 두 동작을 같은 큐에서 순서대로 처리해 탭 화면 한 장만 남겨요.
+    if (router.canDismiss()) router.dismissAll();
+    router.replace({ pathname, params: { tabSwitch: '1' } });
+}
+
 const TABS: { key: TabKey; label: string; go: () => void }[] = [
-    { key: 'home', label: '홈', go: () => router.replace({ pathname: '/home', params: { tabSwitch: '1' } }) },
-    { key: 'route', label: '경로', go: () => router.replace({ pathname: '/route-search', params: { tabSwitch: '1' } }) },
-    { key: 'rooms', label: '약속방', go: () => router.replace({ pathname: '/rooms', params: { tabSwitch: '1' } }) },
-    { key: 'my', label: '마이', go: () => router.replace({ pathname: '/my', params: { tabSwitch: '1' } }) },
+    { key: 'home', label: '홈', go: () => switchTab('/home') },
+    { key: 'route', label: '경로', go: () => switchTab('/route-search') },
+    { key: 'rooms', label: '약속방', go: () => switchTab('/rooms') },
+    { key: 'my', label: '마이', go: () => switchTab('/my') },
 ];
 
 const ICON_PATHS: Record<TabKey, string> = {

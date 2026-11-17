@@ -168,7 +168,7 @@ export default function HomeScreen() {
 
     const openMeeting = () => {
         if (!meeting) {
-            router.push('/rooms');
+            router.replace({ pathname: '/rooms', params: { tabSwitch: '1' } });
             return;
         }
 
@@ -258,7 +258,7 @@ export default function HomeScreen() {
                         <Text style={styles.sectionTitle}>내 약속</Text>
                         <Pressable
                             style={({ pressed }) => [styles.allMeetingsButton, pressed && styles.pressed]}
-                            onPress={() => router.push('/rooms')}
+                            onPress={() => router.replace({ pathname: '/rooms', params: { tabSwitch: '1' } })}
                             hitSlop={8}
                             accessibilityRole="button"
                             accessibilityLabel="전체 보기"
@@ -323,7 +323,7 @@ export default function HomeScreen() {
                     ) : (
                         <Pressable
                             style={({ pressed }) => [styles.meetingCard, pressed && styles.pressed]}
-                            onPress={() => router.push('/rooms')}
+                            onPress={() => router.replace({ pathname: '/rooms', params: { tabSwitch: '1' } })}
                         >
                             <View style={styles.meetingBadge}>
                                 <Ionicons name="calendar-outline" size={20} color={PURPLE} />
