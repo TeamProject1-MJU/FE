@@ -7,11 +7,60 @@ import TrainBlock from '@/components/train-block';
 import { DIRECTION_LABELS } from '@/components/route/format';
 import { blockLevel } from '@/utils/congestion-level';
 import type { HomeCongestionState } from '@/utils/home-congestion';
+import { selectedCongestionLabel } from '@/utils/home-congestion';
+import type { Station, StationLine } from '@/types/station';
 import { formatStationName } from '@/utils/station-name';
 
 const DIRECTIONS = { ...DIRECTION_LABELS, INNER: '내선순환', OUTER: '외선순환' };
 
-export default function HomeCongestionCard({ state, onLocate }: { state: HomeCongestionState; onLocate: () => void }) {
+type Props = {
+    state: HomeCongestionState; onLocate?: () => void;
+    station?: Station | null; line?: StationLine | null;
+    onClose?: () => void; onSelectLine?: (lineId: number) => void; onRetry?: () => void;
+};
+
+function SelectedStationCard({ state, station, line, onClose, onSelectLine, onRetry }: Props & { station: Station }) {
+    const ready = state.kind === 'ready' ? state.data : null;
+    const estimated = ready?.congestion.kind === 'ESTIMATED';
+    return <View style={styles.selectedCard}>
+        <View style={styles.selectedHeading}>
+            <Text style={styles.caption}>선택한 역</Text>
+            <Pressable onPress={onClose} style={styles.close} accessibilityRole="button" accessibilityLabel="선택한 역 닫기">
+                <Ionicons name="close" size={20} color="#83808B" />
+            </Pressable>
+        </View>
+        <View style={styles.selectedContent}>
+            <View style={styles.icon}><TrainBlock size={44} color={line?.color ?? '#5C3F78'} /></View>
+            <View style={styles.body}>
+                <View style={styles.stationRow}>
+                    <Text style={styles.stationName}>{formatStationName(station.name)}</Text>
+                    <View style={styles.lineChoices}>
+                        {station.lines.map(item => {
+                            const selected = item.lineId === line?.lineId;
+                            return <Pressable key={item.lineId} style={styles.lineChoice} disabled={!station.isSupported} onPress={station.isSupported ? () => onSelectLine?.(item.lineId) : undefined} accessibilityRole="button" accessibilityLabel={`${item.lineName} 혼잡도 보기`} accessibilityState={{ selected, disabled: !station.isSupported }}>
+                                <View style={[styles.choiceCircle, { borderColor: item.color, backgroundColor: selected ? item.color : '#fff' }]}>
+                                    <Text style={[styles.choiceText, { color: selected ? '#fff' : item.color }]}>{item.lineName.replace('호선', '')}</Text>
+                                </View>
+                            </Pressable>;
+                        })}
+                    </View>
+                </View>
+                {!!line && <Text style={styles.caption}>{line.lineName}{ready ? ` · ${DIRECTIONS[ready.direction]}` : ''}</Text>}
+                <View style={styles.labelRow}>
+                    <Text style={styles.selectedLabel} accessibilityLiveRegion="polite">{selectedCongestionLabel(state)}</Text>
+                    {estimated && <View style={styles.kindChip}><Text style={styles.kindText}>추정</Text></View>}
+                </View>
+                {state.kind === 'error' && <Pressable style={styles.retry} onPress={onRetry} accessibilityRole="button" accessibilityLabel="선택한 역 혼잡도 다시 시도"><Text style={styles.retryText}>다시 시도</Text></Pressable>}
+            </View>
+            {ready && <CongestionBlocks size={15} level={blockLevel(ready.congestion)} />}
+        </View>
+    </View>;
+}
+
+export default function HomeCongestionCard(props: Props) {
+    const { state, onLocate } = props;
+    if (props.station) return state.kind === 'hidden' ? null : <SelectedStationCard {...props} station={props.station} />;
+    if (state.kind === 'empty' || state.kind === 'error' || state.kind === 'unsupported') return null;
     if (state.kind === 'hidden') return null;
     if (state.kind === 'loading') return (
         <View style={styles.card} accessible accessibilityLabel="지금 역 혼잡도를 불러오고 있어요">
@@ -57,6 +106,19 @@ export default function HomeCongestionCard({ state, onLocate }: { state: HomeCon
 }
 
 const styles = StyleSheet.create({
+    selectedCard: { marginBottom: 16, padding: 14, paddingTop: 4, backgroundColor: '#fff', borderWidth: 1, borderColor: '#EEEAF2', borderRadius: 18 },
+    selectedHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    close: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginRight: -8 },
+    selectedContent: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    stationRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 4 },
+    stationName: { fontSize: 17, fontWeight: '800', color: '#25212D' },
+    lineChoices: { flexDirection: 'row', flexWrap: 'wrap' },
+    lineChoice: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+    choiceCircle: { minWidth: 23, height: 23, borderRadius: 12, borderWidth: 2, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 },
+    choiceText: { fontSize: 10, fontWeight: '800' },
+    selectedLabel: { fontSize: 14, fontWeight: '700', color: '#25212D', flexShrink: 1 },
+    retry: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start' },
+    retryText: { color: '#5C3F78', fontSize: 13, fontWeight: '700' },
     card: { height: 68, flexShrink: 0, marginBottom: 16, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: '#EEEAF2', borderRadius: 18 },
     icon: { width: 46, height: 46, flexShrink: 0, borderRadius: 14, backgroundColor: '#EDE8F3', alignItems: 'center', justifyContent: 'center' },
     body: { flex: 1, minWidth: 0, gap: 3 },

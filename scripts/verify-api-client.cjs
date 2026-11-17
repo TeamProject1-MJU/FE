@@ -211,8 +211,8 @@ test('126 web map state validation and bbox conversion preserve native marker se
     const controller = createWebMap(f.container, f.sdk, f.state, { onRegionChange: bounds => regions.push(plain(bounds)), onReady: () => ready++, onError() { assert.fail(); } });
     assert.deepEqual(plain(mapBounds(f.map())), map126Bounds); assert.deepEqual(regions, [map126Bounds]);
     assert.deepEqual(f.overlays.map(o => /background-color:([^;]+)/.exec(o.options.content.style.cssText)[1]), ['white', 'white', '#2879ef']);
-    assert.match(f.overlays[0].options.content.style.cssText, /border:2\.5px solid #5C3F78/);
-    assert.match(f.overlays[1].options.content.style.cssText, /border:2\.5px solid #B9B5C0/);
+    assert.match(f.overlays[0].options.content.style.cssText, /border:3px solid #5C3F78/);
+    assert.match(f.overlays[1].options.content.style.cssText, /border:3px solid #B9B5C0/);
     assert.deepEqual(f.overlays.map(o => o.options.zIndex), [1, 1, 2]);
     f.events.get('tilesloaded')(); assert.equal(ready, 1);
     f.events.get('idle')(); assert.equal(regions.length, 2);
@@ -316,9 +316,120 @@ test('126 WebView 키 인코딩·JSON 메시지·이동 도메인 검증', () =>
 
 const directionRoute114 = { stationId: 105, lineId: 2, headsign: '사당 방면', direction: 'INNER' };
 
+test('259 stationPress/mapPress 메시지는 ID를 엄격하게 검증하고 알 수 없는 메시지는 무시해요', () => {
+    const parse = createRuntime().load('src/components/map/map-html.ts').parseMapMessage;
+    assert.deepEqual(plain(parse('{"type":"stationPress","id":42}')), { type: 'stationPress', id: 42 });
+    assert.deepEqual(plain(parse('{"type":"mapPress"}')), { type: 'mapPress' });
+    for (const id of [undefined, null, 0, -1, 1.5, '42', {}, [], Number.MAX_SAFE_INTEGER + 1]) {
+        assert.equal(parse(JSON.stringify({ type: 'stationPress', id })), null);
+    }
+    for (const raw of ['{', 'null', '[]', '{"type":"stationTap","id":42}', '{"type":"mapClick"}', '{"type":"future"}']) assert.equal(parse(raw), null);
+    const stations = []; let cleared = 0;
+    const native = nativeMap129({ selectedStationId: 1, selectedStationName: '시청역', selectedStationColor: '#00A84D', onStationPress: id => stations.push(id), onMapPress: () => cleared++ });
+    assert.equal(native.posted.at(-1).stationSelection, true); assert.equal(native.posted.at(-1).selectedStationColor, '#00A84D');
+    const web = findElement(native.view, node => node.type === 'WebView');
+    for (const message of [{ type: 'stationPress', id: 1 }, { type: 'mapPress' }, { type: 'stationPress', id: '1' }, { type: 'unknown' }]) web.props.onMessage({ nativeEvent: { data: JSON.stringify(message) } });
+    assert.deepEqual(stations, [1]); assert.equal(cleared, 1); native.r.unmount();
+});
+
+function html259() {
+    const html = createRuntime().load('src/components/map/map-html.ts').buildMapHtml('test');
+    const listeners = {}; const events = {}; const overlays = []; const messages = []; let script; let map; let prevented = false;
+    const element = tag => ({ tagName: tag, style: {}, children: [], attributes: {}, appendChild(child) { this.children.push(child); }, setAttribute(key, value) { this.attributes[key] = value; } });
+    const doc = { addEventListener() {}, getElementById: () => ({}), createElement: element, head: { appendChild: value => { script = value; } } };
+    class LatLng { constructor(lat, lng) { this.lat = lat; this.lng = lng; } getLat() { return this.lat; } getLng() { return this.lng; } }
+    const sdk = {
+        LatLng, load: fn => fn(),
+        Map: class { constructor() { map = this; this.level = 5; } setCenter() {} getLevel() { return this.level; } getBounds() { return { getSouthWest: () => new LatLng(37.4, 126.9), getNorthEast: () => new LatLng(37.7, 127.2) }; } },
+        CustomOverlay: class { constructor(options) { this.options = options; overlays.push(this); } setMap(value) { this.detached = value === null; } },
+        event: { addListener: (_map, name, fn) => { events[name] = fn; }, preventMap: () => { prevented = true; } },
+    };
+    vm.runInNewContext(html.split('<script>')[1].split('</script>')[0], { window: { ReactNativeWebView: { postMessage: value => messages.push(JSON.parse(value)) }, addEventListener: (name, fn) => { listeners[name] = fn; } }, document: doc, kakao: { maps: sdk } });
+    script.onload();
+    const point = { latitude: 37.5, longitude: 127 };
+    const state = { type: 'state', center: point, myLocation: point, markers: [{ ...point, id: 1, isSupported: true }], revision: 0, stationSelection: true, selectedStationId: 1, selectedStationName: '시청역', selectedStationColor: '#00A84D' };
+    return { html, sdk, doc, overlays, messages, state, events, map: () => map,
+        send: value => listeners.message({ data: JSON.stringify(value) }),
+        active: className => overlays.filter(overlay => !overlay.detached && overlay.options.content.className === className),
+        clickMap() { if (!prevented) events.click(); prevented = false; },
+    };
+}
+
+test('259 WebView 역 점은 44px 터치 영역과 14px 모양을 유지하고 점 탭과 빈 지도 탭을 분리해요', () => {
+    const h = html259(); h.send(h.state); h.messages.length = 0;
+    assert.match(h.html, /\.station-hit\{width:44px;height:44px;[^}]*pointer-events:auto/);
+    assert.match(h.html, /\.dot\{box-sizing:border-box;width:14px;height:14px/);
+    const hit = h.active('station-hit')[0].options.content;
+    assert.equal(h.active('station-hit')[0].options.yAnchor, 0.5);
+    assert.equal(hit.children[0].className, 'dot'); assert.equal(hit.children[0].style.borderColor, '#5C3F78');
+    let stopped = 0; hit.onclick({ stopPropagation: () => stopped++ }); h.clickMap();
+    assert.equal(stopped, 1); assert.deepEqual(h.messages, [{ type: 'stationPress', id: 1 }]);
+    h.clickMap(); assert.deepEqual(h.messages.at(-1), { type: 'mapPress' });
+});
+
+test('259 WebView 모형은 최대 두 개이고 노선 색·안전한 이름표·발 기준 anchor·축소 숨김을 지켜요', () => {
+    const h = html259(); const label = '<img src=x onerror=alert(1)>';
+    h.send({ ...h.state, selectedStationName: label, markers: Array.from({ length: 500 }, (_, index) => ({ ...h.state.markers[0], id: index + 1 })) });
+    assert.equal(h.active('station-hit').length, 500); assert.equal(h.active('map-model').length, 2);
+    const train = h.active('map-model').find(model => model.options.zIndex === 3);
+    const passenger = h.active('map-model').find(model => model.options.zIndex === 2);
+    assert.equal(train.options.yAnchor, 1); assert.equal(passenger.options.yAnchor, 1);
+    assert.equal(train.options.content.children[0].textContent, label); assert.equal(passenger.options.content.children[0].textContent, '나');
+    const svg = model => decodeURIComponent(model.options.content.children[1].src.split(',')[1]);
+    assert.ok(svg(train).includes('fill="#00A84D"')); assert.ok(svg(passenger).includes('fill="#BCA6D2"'));
+    h.send({ ...h.state, selectedStationColor: '#EF7C1C' });
+    assert.equal(h.active('map-model').length, 2); assert.ok(svg(h.active('map-model').find(model => model.options.zIndex === 3)).includes('fill="#EF7C1C"'));
+    const count = h.overlays.length;
+    for (const selectedStationColor of ['red', '#fff', 'url(x)', '#1234567', {}, null]) h.send({ ...h.state, selectedStationColor });
+    for (const selectedStationId of ['1', 0, -1, 1.5]) h.send({ ...h.state, selectedStationId });
+    assert.equal(h.overlays.length, count, '잘못된 선택 데이터는 갱신 전체 무시');
+    h.map().level = 8; h.events.idle(); assert.equal(h.active('map-model').length, 1);
+    h.map().level = 7; h.events.idle(); assert.equal(h.active('map-model').length, 2);
+    h.send({ ...h.state, selectedStationId: null }); assert.equal(h.active('map-model').length, 1);
+    h.send({ ...h.state, selectedStationId: null, myLocation: null }); assert.equal(h.active('map-model').length, 0);
+});
+
+test('259 지도 SVG는 앱 TrainBlock·Passenger(me)의 좌표와 색까지 같아요', () => {
+    const models = createRuntime().load('src/components/map/map-models.ts');
+    const normalize = svg => svg.replace(/\r\n/g, '\n');
+    for (const color of ['#00A84D', '#EF7C1C', '#5C3F78']) {
+        const r = createScreenRuntime({}, 'src/components/train-block.tsx');
+        const image = r.renderComponent({ type: r.screen.default, props: { size: 48, color } });
+        assert.equal(normalize(models.trainModelSvg(color)), normalize(decodeURIComponent(image.props.source.uri.split(',')[1]))); r.unmount();
+    }
+    const r = createScreenRuntime({}, 'src/components/passenger.tsx');
+    const image = r.renderComponent({ type: r.screen.default, props: { size: 40, tone: 'me' } });
+    assert.equal(normalize(models.passengerModelSvg()), normalize(decodeURIComponent(image.props.source.uri.split(',')[1]))); r.unmount();
+});
+
+test('259 웹 지도도 14px 점·44px 터치 영역·모형 두 개·노선 색·레벨 8 숨김을 유지해요', () => {
+    const r = createRuntime(); const { createWebMap, validMapState } = r.load('src/components/map/map-web.ts');
+    const f = webMap126Fixture(); const h = html259(); f.container.ownerDocument = h.doc;
+    const pressed = []; let cleared = 0; let prevented = false;
+    f.sdk.event.preventMap = () => { prevented = true; };
+    const state = { ...f.state, stationSelection: true, selectedStationId: 1, selectedStationName: '시청역', selectedStationColor: '#00A84D' };
+    const controller = createWebMap(f.container, f.sdk, state, { onRegionChange() {}, onReady() {}, onError() { assert.fail(); }, onStationPress: id => pressed.push(id), onMapPress: () => cleared++ });
+    const active = name => f.overlays.filter(overlay => !overlay.detached && overlay.options.content.className === name);
+    const hit = active('station-hit')[0]; assert.equal(hit.options.yAnchor, 0.5);
+    assert.match(hit.options.content.style.cssText, /width:44px;height:44px/);
+    assert.match(hit.options.content.children[0].style.cssText, /width:14px;height:14px;border:3px solid #5C3F78/);
+    hit.options.content.onclick({ stopPropagation() {} });
+    if (!prevented) f.events.get('click')(); prevented = false;
+    assert.deepEqual(pressed, [1]); assert.equal(cleared, 0); f.events.get('click')(); assert.equal(cleared, 1);
+    assert.equal(active('map-model').length, 2); assert.ok(active('map-model').every(model => model.options.yAnchor === 1));
+    controller.update({ ...state, selectedStationColor: '#EF7C1C' });
+    const train = active('map-model').find(model => model.options.zIndex === 3);
+    assert.equal(train.options.position.getLat(), hit.options.position.getLat());
+    assert.ok(decodeURIComponent(train.options.content.children[1].src).includes('fill="#EF7C1C"'));
+    for (const change of [{ selectedStationColor: 'red' }, { selectedStationId: '1' }, { selectedStationName: {} }, { stationSelection: 'true' }]) assert.equal(validMapState({ ...state, ...change }), false);
+    f.map().level = 8; f.events.get('idle')(); assert.equal(active('map-model').length, 1);
+    controller.dispose(); assert.ok(f.overlays.every(overlay => overlay.detached));
+    hit.options.content.onclick({ stopPropagation() {} }); assert.deepEqual(pressed, [1]);
+});
+
 test('126 WebView 안에서도 잘못된 JSON·타입은 무시하고 지원 여부를 다른 색으로 표시', () => {
     const html = createRuntime().load('src/components/map/map-html.ts').buildMapHtml('test');
-    assert.match(html, /\.dot\{box-sizing:border-box;width:11px;height:11px;background:white;border:2\.5px solid #5C3F78;[^}]*pointer-events:none\}/);
+    assert.match(html, /\.dot\{box-sizing:border-box;width:14px;height:14px;background:white;border:3px solid #5C3F78;[^}]*pointer-events:none\}/);
     const listeners = {}; const events = {}; const colors = []; const messages = []; let script;
     class LatLng { constructor(latitude, longitude) { this.latitude = latitude; this.longitude = longitude; } getLat() { return this.latitude; } getLng() { return this.longitude; } }
     const sandbox = {
@@ -4973,6 +5084,45 @@ function homeRuntime(env = serverEnv) {
     return r;
 }
 const homeMeetingCard = view => findElement(view, element => element.props?.accessibilityLabel?.startsWith('다가오는 약속 '));
+test('259 홈 역 선택·노선 전환·빈 지도/닫기 해제·계정 전환·이탈은 카드와 모형 선택을 함께 갱신해요', async () => {
+    const r = homeRuntime(); const pending = []; const focusEffects = new Set(); let focused = true;
+    r.external['expo-router'].useFocusEffect = callback => r.external.react.useEffect(() => {
+        const item = { callback, cleanup: focused ? callback() : null }; focusEffects.add(item);
+        return () => { item.cleanup?.(); focusEffects.delete(item); };
+    }, [callback]);
+    const line = { lineId: 2, lineName: '2호선', color: '#00A84D', stationCode: '201' };
+    const transfer = { lineId: 3, lineName: '3호선', color: '#EF7C1C', stationCode: '301' };
+    const stations = [1, 2].map(id => ({ id, name: `선택${id}`, latitude: 37.5, longitude: 127, isSupported: true, lines: [line, transfer] }));
+    const mapState = { center: { latitude: 37.5, longitude: 127 }, myLocation: null, markers: stations, stations, guidance: '', truncated: false, zoomedOut: false, onRegionChange() {}, locate() {} };
+    r.load('src/hooks/use-home-map.ts').useHomeMap = () => mapState;
+    r.load('src/services/congestion.ts').fetchCongestion = query => new Promise(resolve => pending.push({ query, resolve }));
+    r.respond(async () => ok([]));
+    const card = () => findElement(r.view(), node => node.type?.name === 'HomeCongestionCard');
+    const map = () => findElement(r.view(), node => node.type?.name === 'KakaoMap');
+    r.view(); await settle(); assert.equal(card(), null);
+    map().props.onStationPress(999); assert.equal(card(), null);
+    map().props.onStationPress(1); assert.equal(card().props.station.id, 1); assert.equal(map().props.selectedStationColor, '#00A84D');
+    card().props.onSelectLine(3); assert.equal(card().props.line.lineId, 3); assert.equal(map().props.selectedStationColor, '#EF7C1C');
+    const finish = item => item.resolve({ ...item.query, supported: true, level: 'CROWDED', levelLabel: '혼잡', pct: 70, source: 'ESTIMATED' });
+    pending.slice(0, 2).forEach(finish); await settle(); assert.equal(card().props.state.kind, 'loading');
+    pending.slice(2, 4).forEach(finish); await settle(); assert.equal(card().props.state.data.line.lineId, 3);
+    map().props.onStationPress(2); assert.equal(card().props.station.id, 2); assert.equal(map().props.selectedStationId, 2);
+    map().props.onMapPress(); assert.equal(card(), null); assert.equal(map().props.selectedStationId, null);
+    pending.slice(4).forEach(finish); await settle(); assert.equal(card(), null);
+    map().props.onStationPress(1); card().props.onClose(); assert.equal(card(), null);
+    map().props.onStationPress(1); r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_OTHER, nickname: '다른 계정' });
+    assert.equal(card(), null); assert.equal(map().props.selectedStationId, null);
+    map().props.onStationPress(2); assert.ok(card());
+    focused = false; for (const item of focusEffects) { item.cleanup?.(); item.cleanup = null; }
+    assert.equal(card(), null); assert.equal(map().props.selectedStationId, null);
+    focused = true; for (const item of [...focusEffects]) item.cleanup = item.callback(); r.view(); assert.equal(card(), null);
+    map().props.onStationPress(1); assert.ok(card());
+    r.load('src/stores/auth-store.ts').signOut(); assert.equal(card(), null); assert.equal(map().props.selectedStationId, null);
+    map().props.onStationPress(1); assert.equal(card(), null); r.unmount();
+    const mock = homeRuntime({}); const view = mock.view();
+    assert.equal(findElement(view, node => node.type?.name === 'KakaoMap'), null);
+    assert.equal(findElement(view, node => node.type?.name === 'HomeCongestionCard'), null); mock.unmount();
+});
 test('258 홈은 축소 안내를 기존 위치·스타일로 표시하고 서버·mock 모두 주변역 혼잡도 카드를 호출·렌더하지 않아요', async () => {
     for (const env of [serverEnv, {}]) {
         const r = homeRuntime(env);
@@ -7277,7 +7427,7 @@ test('129 웹 지도: 선과 색 마커, 갱신 때 이전 것 지우기, 범위
     const controller = createWebMap(g.container, g.sdk, state, { onRegionChange() {}, onReady() {}, onError() { assert.fail(); } });
     assert.deepEqual(polylines.map(p => [p.options.strokeColor, p.options.strokeStyle, p.options.path.length]), [['#f07a1f', 'solid', 2], ['#8c93a3', 'shortdash', 2]]);
     assert.deepEqual(g.overlays.map(o => /background-color:([^;]+)/.exec(o.options.content.style.cssText)[1]), ['#6a5ae0', 'white']);
-    assert.match(g.overlays[1].options.content.style.cssText, /border:2\.5px solid #B9B5C0/);
+    assert.match(g.overlays[1].options.content.style.cssText, /border:3px solid #B9B5C0/);
     assert.equal(fits.length, 1); assert.equal(fits[0].bounds.sw.getLat(), bounds.minLat); assert.equal(fits[0].bounds.ne.getLng(), bounds.maxLng);
     controller.update({ ...state, lines: [line129(5, '#e5484d')] });
     assert.ok(polylines.slice(0, 2).every(p => p.detached)); assert.equal(polylines.length, 3); assert.ok(g.overlays.slice(0, 2).every(o => o.detached));

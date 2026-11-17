@@ -19,6 +19,10 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import KakaoMap from '@/components/KakaoMap';
 import { useHomeMap } from '@/hooks/use-home-map';
+import { useSelectedHomeCongestion } from '@/hooks/use-home-congestion';
+import HomeCongestionCard from '@/components/home-congestion-card';
+import { isHexColor } from '@/components/map/map-html';
+import type { Station as HomeMapStation } from '@/types/station';
 import { STATION_ZOOM_GUIDANCE } from '@/utils/home-map';
 import { getAuthStatus, getSession, useRedirectIfSignedOut } from '@/stores/auth-store';
 import { HOME_UPCOMING_MEETING } from '@/constants/home-mock';
@@ -111,7 +115,26 @@ export default function HomeScreen() {
      *   다른 계정의 결과는 렌더할 때 계정 기준을 비교해서 바로 숨겨요. 인증 오류는 화면 안내 없이 기존 흐름에 맡겨요.
      */
     const serverMode = !isMockMode();
-    const homeMap = useHomeMap(serverMode, currentAccount());
+    const account = currentAccount();
+    const homeMap = useHomeMap(serverMode, account);
+    const [selectedStationId, setSelectedStationId] = useState<number | null>(null);
+    const [selection, setSelection] = useState<{ station: HomeMapStation; account: string; generation: number } | null>(null);
+    const [selectedLineId, setSelectedLineId] = useState<number | null>(null);
+    const mapFocused = useRef(false);
+    const clearSelection = useCallback(() => { setSelectedStationId(null); setSelection(null); setSelectedLineId(null); }, []);
+    useFocusEffect(useCallback(() => {
+        mapFocused.current = account !== null;
+        return () => { mapFocused.current = false; clearSelection(); };
+    }, [account, clearSelection]));
+    const selectedStation = selection && selection.account === account && selection.generation === getSessionGeneration()
+        && selection.station.id === selectedStationId ? selection.station : null;
+    const selectedCongestion = useSelectedHomeCongestion({ serverMode, account, station: selectedStation, lineId: selectedLineId });
+    const onStationPress = (id: number) => {
+        if (!serverMode || !mapFocused.current || !account || account !== currentAccount() || !Number.isSafeInteger(id) || id <= 0) return;
+        const station = homeMap.stations.find(item => item.id === id);
+        if (!station) return;
+        setSelectedStationId(id); setSelection({ station, account, generation: getSessionGeneration() }); setSelectedLineId(station.lines[0]?.lineId ?? null);
+    };
     const requestId = useRef(0);
     const [load, setLoad] = useState<MeetingLoad>({ kind: 'loading' });
 
@@ -193,6 +216,11 @@ export default function HomeScreen() {
                     centerRevision={homeMap.centerRevision}
                     bottomInset={sheetHeight}
                     onRegionChange={homeMap.onRegionChange}
+                    selectedStationId={selectedStation?.id ?? null}
+                    selectedStationName={selectedStation ? formatStationName(selectedStation.name) : undefined}
+                    selectedStationColor={isHexColor(selectedCongestion.line?.color) ? selectedCongestion.line.color : '#5C3F78'}
+                    onStationPress={onStationPress}
+                    onMapPress={clearSelection}
                 /> : <MockMap />}
                 {serverMode && (homeMap.guidance || homeMap.truncated || homeMap.zoomedOut) && <View pointerEvents="none" style={{ position: 'absolute', top: insets.top + 125, alignSelf: 'center', backgroundColor: '#ffffffee', borderRadius: 8, padding: 8 }}>
                     {!!homeMap.guidance && <Text style={{ color: SECONDARY, fontSize: 12 }}>{homeMap.guidance}</Text>}
@@ -251,6 +279,8 @@ export default function HomeScreen() {
                     showsVerticalScrollIndicator={false}
                     bounces={false}
                 >
+                    {serverMode && selectedStation && <HomeCongestionCard state={selectedCongestion.state} station={selectedStation} line={selectedCongestion.line} onClose={clearSelection} onRetry={selectedCongestion.retry}
+                        onSelectLine={lineId => { if (selectedStation.lines.some(line => line.lineId === lineId)) setSelectedLineId(lineId); }} />}
                     <View style={styles.meetingHeader}>
                         <Text style={styles.sectionTitle}>내 약속</Text>
                         <Pressable

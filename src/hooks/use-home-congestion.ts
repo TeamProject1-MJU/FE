@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 
 import { getSessionGeneration } from '@/services/auth';
+import { isAuthError } from '@/services/api/errors';
 import { fetchCongestion } from '@/services/congestion';
 import type { CongestionResponse } from '@/types/congestion';
 import { toCongestion } from '@/types/congestion';
@@ -11,6 +12,52 @@ import {
     highestHomeCongestion, homeCongestionDirections, homeCongestionPreview, homeCongestionTime,
     nearestHomeStation, type HomeCongestionState,
 } from '@/utils/home-congestion';
+
+/** 선택한 역만 조회해요. 위치와 무관하며 선택·노선·계정·포커스가 바뀌면 이전 응답을 폐기해요. */
+export function useSelectedHomeCongestion({ serverMode, account, station, lineId }: {
+    serverMode: boolean; account: string | null; station: Station | null; lineId: number | null;
+}) {
+    const line = station?.lines.find(item => item.lineId === lineId) ?? station?.lines[0];
+    const stationId = station?.id;
+    const supported = station?.isSupported;
+    const stationName = station?.name ?? '';
+    const chosenLineId = line?.lineId;
+    const lineName = line?.lineName ?? '';
+    const lineColor = line?.color ?? '';
+    const stationCode = line?.stationCode ?? '';
+    const [retryVersion, setRetryVersion] = useState(0);
+    const generation = getSessionGeneration();
+    const key = JSON.stringify([generation, account, stationId, chosenLineId, retryVersion]);
+    const [result, setResult] = useState<{ key: string; state: HomeCongestionState } | null>(null);
+    const [focused, setFocused] = useState(false);
+    useFocusEffect(useCallback(() => {
+        setFocused(true);
+        let active = true;
+        const show = (state: HomeCongestionState) => {
+            if (active && generation === getSessionGeneration()) setResult({ key, state });
+        };
+        if (serverMode && account && stationId && supported && chosenLineId) {
+            show({ kind: 'loading' });
+            const { date, time } = homeCongestionTime(new Date());
+            void Promise.all(homeCongestionDirections(lineName).map(direction => fetchCongestion({ stationId, lineId: chosenLineId, direction, date, time })))
+                .then(responses => {
+                    const response = highestHomeCongestion(responses);
+                    show(response?.level ? { kind: 'ready', data: {
+                        station: { id: stationId, name: stationName },
+                        line: { lineId: chosenLineId, lineName, color: lineColor, stationCode },
+                        direction: response.direction, congestion: toCongestion(response),
+                    } } : { kind: 'empty' });
+                }).catch(error => show({ kind: isAuthError(error) ? 'hidden' : 'error' }));
+        }
+        return () => { active = false; setFocused(false); };
+    }, [serverMode, account, stationId, supported, chosenLineId, stationName, lineName, lineColor, stationCode, generation, key]));
+    let state: HomeCongestionState = { kind: 'hidden' };
+    if (serverMode && account && station && focused) {
+        state = !supported ? { kind: 'unsupported' } : !line ? { kind: 'empty' }
+            : result?.key === key ? result.state : { kind: 'loading' };
+    }
+    return { state, line: line ?? null, retry: () => setRetryVersion(value => value + 1) };
+}
 
 export function useHomeCongestion({ serverMode, account, location, locationLoading, stations, mock }: {
     serverMode: boolean;
