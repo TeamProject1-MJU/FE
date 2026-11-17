@@ -39,7 +39,7 @@ export default function KakaoMap(props: KakaoMapProps) {
         void loadMapSdk(key).then(sdk => {
             if (!active || reported || !node) return;
             const created = createWebMap(node, sdk, latest.current, {
-                onRegionChange: bounds => latest.current.onRegionChange(bounds),
+                onRegionChange: (bounds, level) => latest.current.onRegionChange(bounds, level),
                 onReady: () => clearTimeout(timer),
                 onError: fail,
             });

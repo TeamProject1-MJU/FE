@@ -15,7 +15,7 @@ export type KakaoMapProps = {
     markers: MapMarker[];
     centerRevision?: number;
     bottomInset?: number;
-    onRegionChange: (bounds: MapBounds) => void;
+    onRegionChange: (bounds: MapBounds, level: number) => void;
     onError?: () => void;
     /** 선택 값: 폴리라인. 넘기지 않으면 홈 지도처럼 선을 그리지 않아요. */
     lines?: MapLine[];
@@ -70,7 +70,7 @@ export default function KakaoMap({ center, myLocation, markers, centerRevision =
                 const message = parseMapMessage(event.nativeEvent.data);
                 if (message?.type === 'ready') setReady(true);
                 else if (message?.type === 'error') fail();
-                else if (message?.type === 'region') onRegionChange(message.bounds);
+                else if (message?.type === 'region') onRegionChange(message.bounds, message.level);
             }}
         />}
         {(!key || failed) && <View style={styles.error}>
