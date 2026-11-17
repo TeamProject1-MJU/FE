@@ -4900,6 +4900,8 @@ function homeRuntime(env = serverEnv) {
     r.refocus = () => { blur?.(); blur = focusCallback(); };
     r.pushes = [];
     r.external['expo-router'].router.push = target => { r.pushes.push(target); };
+    r.replaces = [];
+    r.external['expo-router'].router.replace = target => { r.replaces.push(target); };
     if (env === serverEnv) r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_ME, nickname: '서버 나' });
     r.calls = [];
     r.respond = handler => { r.context.fetch = async (url, options) => { r.calls.push({ url, options }); return handler(url, options); }; };
@@ -4954,7 +4956,8 @@ test('서버 홈: 방 0개·전부 지났거나 시각 없음은 "예정된 약�
         assert.ok(findText(view, '예정된 약속이 없어요'), `${rooms.length}개`);
         assert.equal(homeMeetingCard(view), null);
         findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '예정된 약속이 없어요')).props.onPress();
-        assert.deepEqual(plain(r.pushes), ['/rooms']);
+        assert.deepEqual(plain(r.replaces), [{ pathname: '/rooms', params: { tabSwitch: '1' } }]);
+        assert.deepEqual(r.pushes, []);
         r.unmount();
     }
 });
@@ -5232,7 +5235,8 @@ test('서버 홈: 서버 오류는 안내와 다시 시도, 다른 기능 버튼
         assert.ok(button, label);
         button.props.onPress();
     }
-    assert.deepEqual(plain(r.pushes), ['/rooms', '/rooms/new', '/rooms/join']);
+    assert.deepEqual(plain(r.replaces), [{ pathname: '/rooms', params: { tabSwitch: '1' } }]);
+    assert.deepEqual(plain(r.pushes), ['/rooms/new', '/rooms/join']);
     r.respond(async () => ok([homeRoom('aaaa0000-aaaa-4aaa-8aaa-aaaaaaaaaaaa', HOME_DAY, { name: '다시 불러온 모임' })]));
     findElement(view, element => element.props?.accessibilityLabel === '다가오는 약속 다시 불러오기').props.onPress();
     view = r.view();
@@ -10551,8 +10555,85 @@ test('241 하단 탭은 replace만 사용하고 파라미터 경로 검색은 �
     assert.deepEqual([...new Set(calls.map(call => call.pathname))].sort(), ['/home', '/my', '/rooms', '/route-search']);
     const options = r.load('src/utils/tab-navigation.ts').tabScreenOptions;
     for (const call of calls) assert.equal(options({ route: { params: call.params } }).animation, 'none');
-    for (const params of [undefined, {}, { roomId: 'room-241', departure: '강남', destination: '사당' }]) {
+    for (const params of [undefined, {}, { focus: 'departure' }, { roomId: 'room-241', departure: '강남', destination: '사당' }]) {
         assert.equal(options({ route: { params } }).animation, 'default');
+    }
+});
+
+test('255 홈 약속방 진입 세 곳은 탭 replace이고 역 검색·방 만들기·참여는 push를 유지해요', async () => {
+    // 약속이 없을 때의 openMeeting 방어 분기도 포함해 세 진입점을 검사해요.
+    const source = ts.createSourceFile('home.tsx', fs.readFileSync(path.join(root, 'src/app/home.tsx'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const entries = [];
+    function visit(node) {
+        if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.expression.getText(source) === 'router') {
+            const argument = node.arguments[0];
+            const roomsEntry = argument && (ts.isStringLiteral(argument) ? argument.text === '/rooms' : ts.isObjectLiteralExpression(argument) && argument.properties.some(property => ts.isPropertyAssignment(property) && property.name.getText(source) === 'pathname' && ts.isStringLiteral(property.initializer) && property.initializer.text === '/rooms'));
+            if (roomsEntry) {
+                const href = vm.runInNewContext(`(${argument.getText(source)})`);
+                if (href === '/rooms' || href.pathname === '/rooms') entries.push({ method: node.expression.name.text, href: plain(href) });
+            }
+        }
+        ts.forEachChild(node, visit);
+    }
+    visit(source);
+    assert.deepEqual(entries, Array.from({ length: 3 }, () => ({ method: 'replace', href: { pathname: '/rooms', params: { tabSwitch: '1' } } })));
+
+    const r = homeRuntime(); r.respond(async () => ok([])); r.view(); await settle(); const view = r.view();
+    findElement(view, node => node.props?.accessibilityLabel === '전체 보기').props.onPress();
+    findElement(view, node => node.type === 'Pressable' && findText(node.props.children, '예정된 약속이 없어요')).props.onPress();
+    assert.deepEqual(plain(r.replaces), Array.from({ length: 2 }, () => ({ pathname: '/rooms', params: { tabSwitch: '1' } })));
+    for (const label of ['출발역과 도착역 검색', '방 만들기', '코드로 참여']) {
+        findElement(view, node => node.props?.accessibilityLabel === label).props.onPress();
+    }
+    assert.deepEqual(plain(r.pushes), [{ pathname: '/route-search', params: { focus: 'departure' } }, '/rooms/new', '/rooms/join']);
+    r.unmount();
+});
+
+test('255 탭은 SDK 큐 한 번으로 쌓인 화면을 비우고 대상 한 장만 남기며 선택된 탭은 그대로예요', () => {
+    const { StackRouter } = require('expo-router/build/react-navigation/routers/StackRouter');
+    const stackRouter = StackRouter({ initialRouteName: 'home' });
+    const config = { routeNames: ['home', 'route-search', 'rooms/index', 'my', 'station-search'], routeParamList: {}, routeGetIdList: {} };
+    const nameOf = pathname => pathname === '/rooms' ? 'rooms/index' : pathname.slice(1);
+    for (const active of ['home', 'route', 'rooms', 'my']) for (const stacked of [false, true]) {
+        const r = createRuntime(); const router = r.external['expo-router'].router; const calls = [];
+        let state = stackRouter.getInitialState(config);
+        // 경로 해석만 대체하고 설치된 SDK의 실제 큐와 스택 reducer를 사용해요.
+        const queueModule = { exports: {} };
+        const queuePath = require.resolve('expo-router/build/global-state/routingQueue');
+        const queueCode = fs.readFileSync(queuePath, 'utf8');
+        new vm.Script(`(function(require, exports) { ${queueCode}\n})`, { filename: queuePath }).runInThisContext()(id => {
+            assert.equal(id, './getNavigationAction');
+            return { getNavigateAction: (href, options) => ({ type: options.event, target: state.key, payload: { name: nameOf(href.pathname), params: plain(href.params) } }) };
+        }, queueModule.exports);
+        const queue = queueModule.exports.routingQueue;
+        const dispatch = action => { state = stackRouter.getStateForAction(state, action, config) ?? state; };
+        router.canDismiss = () => state.routes.length > 1;
+        router.dismissAll = () => { calls.push('dismissAll'); queue.add({ type: 'POP_TO_TOP' }); };
+        router.replace = href => { calls.push('replace'); queue.add({ type: 'ROUTER_LINK', payload: { href, options: { event: 'REPLACE' } } }); };
+        router.push = () => assert.fail('탭은 push하지 않아요');
+        const Bar = r.load('src/components/bottom-tab-bar.tsx').default;
+        const tabs = findElements(Bar({ active }), node => node.props?.accessibilityRole === 'tab');
+        for (const tab of tabs) {
+            if (tab.props.accessibilityState.selected) { assert.equal(tab.props.onPress, undefined); continue; }
+            for (let repeat = 0; repeat < 3; repeat++) {
+                calls.length = 0;
+                if (stacked) {
+                    dispatch({ type: 'PUSH', payload: { name: 'route-search', params: { focus: 'departure' } } });
+                    dispatch({ type: 'PUSH', payload: { name: 'station-search' } });
+                }
+                tab.props.onPress();
+                assert.deepEqual(calls, stacked ? ['dismissAll', 'replace'] : ['replace']);
+                assert.equal(queue.snapshot().length, stacked ? 2 : 1, '대기나 다음 프레임 없이 큐에 등록');
+                queue.run({ current: { dispatch } });
+                const expected = { home: 'home', route: 'route-search', rooms: 'rooms/index', my: 'my' }[tab.key];
+                assert.equal(state.index, 0); assert.equal(state.routes.length, 1);
+                assert.equal(state.routes[0].name, expected); assert.deepEqual(state.routes[0].params, { tabSwitch: '1' });
+                assert.equal(r.load('src/utils/tab-navigation.ts').tabScreenOptions({ route: state.routes[0] }).animation, 'none');
+                assert.equal(stackRouter.getStateForAction(state, { type: 'GO_BACK' }, config), null, '뒤로 갈 중복 화면 없음');
+                const selected = findElements(Bar({ active: tab.key }), node => node.props?.accessibilityState?.selected)[0];
+                assert.equal(selected.props.onPress, undefined); assert.equal(queue.snapshot().length, 0);
+            }
+        }
     }
 });
 
