@@ -10286,11 +10286,36 @@ test('233 배지는 대기 포함 초·환승·요금을 독립 비교하고 동
     const routes = [a, c, b];
     assert.deepEqual(plain(sortRoutes(routes).map(route => route.routeId)), ['b', 'c', 'a']);
     assert.deepEqual(plain(routes.map(route => route.routeId)), ['a', 'c', 'b']);
-    assert.deepEqual(plain(routeBadges(b, routes)), ['최소시간', '최저요금']);
-    assert.deepEqual(plain(routeBadges(c, routes)), ['최소환승', '최저요금']);
+    assert.deepEqual(plain(routeBadges(b, routes)), ['최소시간']);
+    assert.deepEqual(plain(routeBadges(c, routes)), ['최소환승']);
     assert.deepEqual(plain(routeBadges(a, routes)), []);
     assert.deepEqual(plain(routeBadges(a, [a])), []);
-    assert.deepEqual(plain(routeBadges(a, [a, { ...a, routeId: 'tie' }])), ['최소시간', '최소환승', '최저요금']);
+    assert.deepEqual(plain(routeBadges(a, [a, { ...a, routeId: 'tie' }])), []);
+});
+
+test('252 기준별 유일한 최솟값에만 배지를 붙이고 일부·전체 최솟값 동률은 숨겨요', () => {
+    const { routeBadges } = createRuntime().load('src/components/route/result.ts');
+    const make = (id, summary = {}) => ({ ...routeData().routes[0], routeId: id,
+        summary: { ...routeData().routes[0].summary, totalTimeSec: 1200, totalWithWaitSec: 1500, transferCount: 1, fare: 1650, ...summary } });
+    const equal = [make('a'), make('b'), make('c')];
+    for (const route of equal) assert.deepEqual(plain(routeBadges(route, equal)), []);
+    for (const [field, larger, label] of [
+        ['totalWithWaitSec', 1600, '최소시간'], ['transferCount', 2, '최소환승'], ['fare', 1750, '최저요금'],
+    ]) {
+        const tiedMinima = [make('a'), make('b'), make('c', { [field]: larger })];
+        assert.deepEqual(plain(routeBadges(tiedMinima[0], tiedMinima)), []);
+        assert.deepEqual(plain(routeBadges(tiedMinima[1], tiedMinima)), []);
+        assert.deepEqual(plain(routeBadges(tiedMinima[2], tiedMinima)), []);
+        const uniqueMinimum = [make('a'), make('b', { [field]: larger }), make('c', { [field]: larger })];
+        assert.deepEqual(plain(routeBadges(uniqueMinimum[0], uniqueMinimum)), [label]);
+        assert.deepEqual(plain(routeBadges(uniqueMinimum[1], uniqueMinimum)), []);
+        assert.deepEqual(plain(routeBadges(uniqueMinimum[2], uniqueMinimum)), []);
+    }
+    const equalFares = [make('a'), make('b', { totalWithWaitSec: 1600, transferCount: 2 }), make('c', { totalWithWaitSec: 1700, transferCount: 2 })];
+    assert.deepEqual(plain(routeBadges(equalFares[0], equalFares)), ['최소시간', '최소환승']);
+    for (const route of equalFares) assert.equal(routeBadges(route, equalFares).includes('최저요금'), false);
+    assert.deepEqual(plain(routeBadges(equal[0], [equal[0]])), []);
+    assert.deepEqual(plain(routeBadges(equal[0], [])), []);
 });
 
 test('233 mock·서버 응답 경로 1개·복수 모두 표시하고 독립 토글·안내 시작으로 원본 경로를 전달해요', async () => {
