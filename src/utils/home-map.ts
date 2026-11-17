@@ -2,6 +2,15 @@ export type Coordinate = { latitude: number; longitude: number };
 export type MapBounds = { minLng: number; minLat: number; maxLng: number; maxLat: number };
 export const DEFAULT_MAP_CENTER: Coordinate = { latitude: 37.5665, longitude: 126.9780 };
 export const LOCATION_GUIDANCE = '위치 권한을 켜면 내 주변이 보여요';
+/** 카카오 일반 지도 약 2km 축척부터 역 점과 역 조회를 숨겨요. */
+export const STATION_HIDE_LEVEL = 8;
+export const STATION_ZOOM_GUIDANCE = '지도를 확대하면 역이 보여요';
+export function isMapLevel(value: unknown): value is number {
+    return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 14;
+}
+export function shouldShowStations(level: number): boolean {
+    return isMapLevel(level) && level < STATION_HIDE_LEVEL;
+}
 export function isCoordinate(value: unknown): value is Coordinate {
     if (!value || typeof value !== 'object') return false;
     const v = value as Coordinate;

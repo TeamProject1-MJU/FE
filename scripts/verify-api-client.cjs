@@ -151,6 +151,7 @@ function webMap126Fixture() {
             constructor(_node, options) { map = this; this.center = options.center; }
             setCenter(point) { centers.push(point); this.center = point; }
             getCenter() { return this.center; }
+            getLevel() { return this.level ?? 5; }
             relayout() { relayouts++; }
             getBounds() { return { getSouthWest: () => new LatLng(37.4, 126.9), getNorthEast: () => new LatLng(37.7, 127.2) }; }
         },
@@ -209,7 +210,9 @@ test('126 web map state validation and bbox conversion preserve native marker se
     const regions = []; let ready = 0;
     const controller = createWebMap(f.container, f.sdk, f.state, { onRegionChange: bounds => regions.push(plain(bounds)), onReady: () => ready++, onError() { assert.fail(); } });
     assert.deepEqual(plain(mapBounds(f.map())), map126Bounds); assert.deepEqual(regions, [map126Bounds]);
-    assert.deepEqual(f.overlays.map(o => /background-color:([^;]+)/.exec(o.options.content.style.cssText)[1]), ['#12a77a', '#8c93a3', '#2879ef']);
+    assert.deepEqual(f.overlays.map(o => /background-color:([^;]+)/.exec(o.options.content.style.cssText)[1]), ['white', 'white', '#2879ef']);
+    assert.match(f.overlays[0].options.content.style.cssText, /border:2\.5px solid #5C3F78/);
+    assert.match(f.overlays[1].options.content.style.cssText, /border:2\.5px solid #B9B5C0/);
     assert.deepEqual(f.overlays.map(o => o.options.zIndex), [1, 1, 2]);
     f.events.get('tilesloaded')(); assert.equal(ready, 1);
     f.events.get('idle')(); assert.equal(regions.length, 2);
@@ -305,7 +308,7 @@ test('126 WebView 키 인코딩·JSON 메시지·이동 도메인 검증', () =>
     const key = '</script>"&abc=한글'; const html = buildMapHtml(key);
     assert.ok(html.includes(encodeURIComponent(key))); assert.ok(!html.includes(key));
     for (const raw of ['', '{', 'null', '[]', '{"type":"future"}', '{"type":"region","bounds":{}}']) assert.equal(parseMapMessage(raw), null);
-    assert.deepEqual(plain(parseMapMessage(JSON.stringify({ type: 'region', bounds: map126Bounds }))), { type: 'region', bounds: map126Bounds });
+    assert.deepEqual(plain(parseMapMessage(JSON.stringify({ type: 'region', bounds: map126Bounds, level: 5 }))), { type: 'region', bounds: map126Bounds, level: 5 });
     assert.equal(parseMapMessage('{"type":"error","key":"secret"}').key, undefined);
     for (const url of ['https://localhost', 'https://dapi.kakao.com/v2/maps/sdk.js']) assert.equal(isAllowedMapNavigation(url), true);
     for (const url of ['https://kakao.com.evil.test', 'http://dapi.kakao.com', 'javascript:alert(1)', 'https://localhost:9999', 'https://user@kakao.com']) assert.equal(isAllowedMapNavigation(url), false);
@@ -315,23 +318,25 @@ const directionRoute114 = { stationId: 105, lineId: 2, headsign: '사당 방면'
 
 test('126 WebView 안에서도 잘못된 JSON·타입은 무시하고 지원 여부를 다른 색으로 표시', () => {
     const html = createRuntime().load('src/components/map/map-html.ts').buildMapHtml('test');
-    const listeners = {}; const events = {}; const colors = []; let script;
+    assert.match(html, /\.dot\{box-sizing:border-box;width:11px;height:11px;background:white;border:2\.5px solid #5C3F78;[^}]*pointer-events:none\}/);
+    const listeners = {}; const events = {}; const colors = []; const messages = []; let script;
     class LatLng { constructor(latitude, longitude) { this.latitude = latitude; this.longitude = longitude; } getLat() { return this.latitude; } getLng() { return this.longitude; } }
     const sandbox = {
-        window: { ReactNativeWebView: { postMessage() {} }, addEventListener: (name, fn) => { listeners[name] = fn; } },
+        window: { ReactNativeWebView: { postMessage: raw => messages.push(JSON.parse(raw)) }, addEventListener: (name, fn) => { listeners[name] = fn; } },
         document: { addEventListener() {}, getElementById: () => ({}), createElement: () => ({ style: {} }), head: { appendChild: el => { script = el; } } },
         kakao: { maps: { LatLng, load: fn => fn(), event: { addListener: (_map, name, fn) => { events[name] = fn; } },
-                Map: class { setCenter() {} getBounds() { return { getSouthWest: () => new LatLng(37.4, 126.9), getNorthEast: () => new LatLng(37.7, 127.2) }; } },
-                CustomOverlay: class { constructor(options) { colors.push(options.content.style.backgroundColor); } setMap() {} },
+                Map: class { setCenter() {} getLevel() { return 5; } getBounds() { return { getSouthWest: () => new LatLng(37.4, 126.9), getNorthEast: () => new LatLng(37.7, 127.2) }; } },
+                CustomOverlay: class { constructor(options) { colors.push(options.content.style.borderColor ?? options.content.style.backgroundColor); } setMap() {} },
             } },
     };
     vm.runInNewContext(html.split('<script>')[1].split('</script>')[0], sandbox); script.onload();
+    assert.deepEqual(messages, [{ type: 'region', bounds: map126Bounds, level: 5 }]);
     for (const raw of ['{', 'null', '{"type":"unknown"}', JSON.stringify({ type: 'state', center: { latitude: 37.5, longitude: 127 }, myLocation: null, markers: [{}], revision: 1 })]) listeners.message({ data: raw });
     assert.equal(colors.length, 0);
     const point = { latitude: 37.5, longitude: 127 };
     listeners.message({ data: JSON.stringify({ type: 'state', center: point, myLocation: point, revision: 1,
             markers: [{ ...point, id: 1, isSupported: true }, { ...point, id: 2, isSupported: false }] }) });
-    assert.deepEqual(colors, ['#12a77a', '#8c93a3', '#2879ef']);
+    assert.deepEqual(colors, ['#5C3F78', '#B9B5C0', '#2879ef']);
 });
 
 function map126Runtime() {
@@ -375,16 +380,16 @@ test('126 bbox 디바운스·마지막 응답·실패 시 유지·이탈·계정
     const r = map126Runtime(); const pending = [];
     r.load('src/services/station.ts').fetchStationsInBounds = async bounds => await new Promise((resolve, reject) => pending.push({ bounds, resolve, reject }));
     r.view(); await settle();
-    r.view().onRegionChange(map126Bounds); r.advance(399); assert.equal(pending.length, 0);
+    r.view().onRegionChange(map126Bounds, 5); r.advance(399); assert.equal(pending.length, 0);
     r.advance(1); assert.equal(pending.length, 1);
-    r.view().onRegionChange({ ...map126Bounds, minLng: 127 }); r.advance(400);
+    r.view().onRegionChange({ ...map126Bounds, minLng: 127 }, 5); r.advance(400);
     const station = { id: 1, latitude: 37.5, longitude: 127.1, isSupported: false };
     pending[1].resolve({ items: [station], totalElements: 501 }); await settle();
     pending[0].resolve({ items: [], totalElements: 0 }); await settle();
     assert.deepEqual(plain(r.view().markers), [station]); assert.equal(r.view().truncated, true);
-    r.view().onRegionChange(map126Bounds); r.advance(400); pending[2].reject(Error()); await settle();
+    r.view().onRegionChange(map126Bounds, 5); r.advance(400); pending[2].reject(Error()); await settle();
     assert.equal(r.view().markers.length, 1);
-    r.view().onRegionChange(map126Bounds); r.advance(400); r.blur(); pending[3].resolve({ items: [], totalElements: 0 }); await settle();
+    r.view().onRegionChange(map126Bounds, 5); r.advance(400); r.blur(); pending[3].resolve({ items: [], totalElements: 0 }); await settle();
     assert.equal(r.view().markers.length, 1);
     r.account('b'); assert.equal(r.view().markers.length, 0); r.unmount();
 });
@@ -404,6 +409,65 @@ test('126 권한 시작은 순서대로 요청·이중 탭 차단·오류에도 
         assert.deepEqual(routes, ['/login']); r.unmount();
     }
 });
+test('258 줌 임계값과 region 메시지는 정수 레벨·좌표 범위를 엄격하게 검사해요', () => {
+    const r = createRuntime();
+    const { STATION_HIDE_LEVEL, shouldShowStations } = r.load('src/utils/home-map.ts');
+    const { parseMapMessage } = r.load('src/components/map/map-html.ts');
+    assert.equal(shouldShowStations(STATION_HIDE_LEVEL - 1), true);
+    assert.equal(shouldShowStations(STATION_HIDE_LEVEL), false);
+    assert.equal(shouldShowStations(STATION_HIDE_LEVEL + 1), false);
+    for (const level of [undefined, null, '5', NaN, Infinity, -1, 0, 1.5, 15, {}, []]) {
+        assert.equal(shouldShowStations(level), false);
+        assert.equal(parseMapMessage(JSON.stringify({ type: 'region', bounds: map126Bounds, level })), null);
+    }
+    for (const level of [1, STATION_HIDE_LEVEL - 1, STATION_HIDE_LEVEL, 14]) {
+        assert.deepEqual(plain(parseMapMessage(JSON.stringify({ type: 'region', bounds: map126Bounds, level }))), { type: 'region', bounds: map126Bounds, level });
+        assert.equal(parseMapMessage(JSON.stringify({ type: 'region', bounds: { ...map126Bounds, maxLat: 91 }, level })), null);
+    }
+});
+
+test('258 축소하면 대기·진행 중 역 조회를 무효화하고 마커를 비우며 확대 후에만 다시 조회해요', async () => {
+    const r = map126Runtime(); const pending = [];
+    const { STATION_HIDE_LEVEL } = r.load('src/utils/home-map.ts');
+    r.load('src/services/station.ts').fetchStationsInBounds = async bounds => new Promise(resolve => pending.push({ bounds, resolve }));
+    r.view(); await settle();
+    const region = level => r.view().onRegionChange(map126Bounds, level);
+    region(STATION_HIDE_LEVEL - 1); r.advance(399);
+    region(STATION_HIDE_LEVEL); r.advance(1000);
+    assert.equal(pending.length, 0, '축소 전 디바운스 취소'); assert.equal(r.view().zoomedOut, true);
+    region(STATION_HIDE_LEVEL - 1); r.advance(400);
+    const station = { id: 1, latitude: 37.5, longitude: 127.1, isSupported: true };
+    pending[0].resolve({ items: [station], totalElements: 501 }); await settle();
+    assert.equal(r.view().markers.length, 1); assert.equal(r.view().truncated, true);
+    region(STATION_HIDE_LEVEL - 1); r.advance(400);
+    region(STATION_HIDE_LEVEL);
+    assert.deepEqual(plain(r.view().markers), []); assert.deepEqual(plain(r.view().stations), []);
+    assert.equal(r.view().truncated, false);
+    pending[1].resolve({ items: [station], totalElements: 1 }); await settle();
+    assert.equal(r.view().markers.length, 0, '늦은 응답으로 점을 복원하지 않아요');
+    region(STATION_HIDE_LEVEL + 1); r.advance(1000); assert.equal(pending.length, 2);
+    r.blur(); r.account('b'); r.view(); r.advance(1000); assert.equal(pending.length, 2, '축소한 채 다시 포커스·계정 전환해도 조회하지 않아요');
+    region(STATION_HIDE_LEVEL - 1); r.advance(400); assert.equal(pending.length, 3);
+    pending[2].resolve({ items: [station], totalElements: 1 }); await settle();
+    assert.equal(r.view().zoomedOut, false); assert.equal(r.view().markers.length, 1); r.unmount();
+});
+
+test('258 웹과 네이티브 지도는 region 레벨을 전달하고 잘못된 레벨은 버려요', () => {
+    const received = [];
+    const native = nativeMap129({ onRegionChange: (bounds, level) => received.push({ bounds: plain(bounds), level }) });
+    const webView = findElement(native.view, node => node.type === 'WebView');
+    for (const level of [5, 9, '9', 9.5, 0, 15, undefined]) {
+        webView.props.onMessage({ nativeEvent: { data: JSON.stringify({ type: 'region', bounds: map126Bounds, level }) } });
+    }
+    assert.deepEqual(received, [5, 9].map(level => ({ bounds: map126Bounds, level }))); native.r.unmount();
+    const r = createRuntime(); const f = webMap126Fixture(); const levels = [];
+    const controller = r.load('src/components/map/map-web.ts').createWebMap(f.container, f.sdk, f.state, {
+        onRegionChange: (_bounds, level) => levels.push(level), onReady() {}, onError() { assert.fail(); },
+    });
+    for (const level of [9, '9', 9.5, 0, 15]) { f.map().level = level; f.events.get('idle')(); }
+    assert.deepEqual(levels, [5, 9]); controller.dispose();
+});
+
 const directionData114 = (result = 'CORRECT') => ({ result, reason: result === 'CORRECT' ? null : 'UNREADABLE',
     recognized: { stationName: null, lineName: null, headsign: null }, expected: { stationName: '강남', lineName: '2호선', headsign: '사당 방면' }, message: '안내' });
 const directionPhoto114 = { uri: 'file:///temporary.jpg', mimeType: 'image/jpeg', fileName: 'direction.jpg', file: new Blob(['jpeg'], { type: 'image/jpeg' }) };
@@ -4909,6 +4973,29 @@ function homeRuntime(env = serverEnv) {
     return r;
 }
 const homeMeetingCard = view => findElement(view, element => element.props?.accessibilityLabel?.startsWith('다가오는 약속 '));
+test('258 홈은 축소 안내를 기존 위치·스타일로 표시하고 서버·mock 모두 주변역 혼잡도 카드를 호출·렌더하지 않아요', async () => {
+    for (const env of [serverEnv, {}]) {
+        const r = homeRuntime(env);
+        const state = { center: { latitude: 37.5, longitude: 127 }, myLocation: null, markers: [], guidance: '', truncated: true, zoomedOut: false, onRegionChange() {}, locate() {} };
+        r.load('src/hooks/use-home-map.ts').useHomeMap = () => state;
+        r.load('src/hooks/use-home-congestion.ts').useHomeCongestion = () => assert.fail('홈에서 주변역 혼잡도 훅을 부르지 않아요');
+        r.respond(async () => ok([]));
+        let view = r.view(); await settle(); view = r.view();
+        assert.equal(findElement(view, node => node.type?.name === 'HomeCongestionCard'), null);
+        if (env === serverEnv) {
+            const before = findElement(view, node => node.type === 'View' && node.props.pointerEvents === 'none' && findText(node, '일부 역만 표시했어요. 지도를 확대해 주세요.'));
+            assert.ok(before);
+            state.zoomedOut = true; view = r.view();
+            const after = findElement(view, node => node.type === 'View' && node.props.pointerEvents === 'none' && findText(node, '지도를 확대하면 역이 보여요'));
+            assert.ok(after); assert.deepEqual(plain(after.props.style), plain(before.props.style));
+            assert.deepEqual(plain(findText(after, '지도를 확대하면 역이 보여요').props.style), plain(findText(before, '일부 역만 표시했어요. 지도를 확대해 주세요.').props.style));
+            assert.equal(findText(view, '일부 역만 표시했어요. 지도를 확대해 주세요.'), null);
+            state.zoomedOut = false; state.truncated = false; view = r.view();
+            assert.equal(findText(view, '지도를 확대하면 역이 보여요'), null);
+        }
+        r.unmount();
+    }
+});
 /** 홈 약속 배지 기대값을 서울 달력 날짜로 따로 세요 (기기 시간대와 무관). 0 → 오늘, 1 → 내일, 2 이상 → D-n. */
 const seoulDayKey = date => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 const expectedHomeBadge = (when, now = new Date()) => {
@@ -7077,8 +7164,8 @@ function html129() {
         document: { addEventListener() {}, getElementById: () => ({}), createElement: () => ({ style: {} }), head: { appendChild: el => { script = el; } } },
         kakao: { maps: { LatLng, load: fn => fn(), event: { addListener() {} },
                 LatLngBounds: class { constructor(sw, ne) { this.sw = sw; this.ne = ne; } },
-                Map: class { setCenter() {} setBounds(bounds, ...padding) { fits.push({ bounds, padding }); } getBounds() { return { getSouthWest: () => new LatLng(37.4, 126.9), getNorthEast: () => new LatLng(37.7, 127.2) }; } },
-                CustomOverlay: class { constructor(options) { this.options = options; this.color = options.content.style.backgroundColor; dots.push(this); } setMap(v) { this.detached = v === null; } },
+                Map: class { setCenter() {} getLevel() { return 5; } setBounds(bounds, ...padding) { fits.push({ bounds, padding }); } getBounds() { return { getSouthWest: () => new LatLng(37.4, 126.9), getNorthEast: () => new LatLng(37.7, 127.2) }; } },
+                CustomOverlay: class { constructor(options) { this.options = options; this.color = options.content.style.borderColor ?? options.content.style.backgroundColor; dots.push(this); } setMap(v) { this.detached = v === null; } },
                 Polyline: class { constructor(options) { this.options = options; polylines.push(this); } setMap(v) { this.detached = v === null; } },
             } },
     };
@@ -7094,7 +7181,7 @@ test('129 WebView: 선·색 마커·범위 맞춤은 번호가 바뀔 때만, �
     const h = html129();
     h.send({ ...h.base, markers: [{ ...h.point, id: 1, isSupported: true, color: '#2879ef' }, { ...h.point, id: 2, isSupported: false }],
         lines: [line129(1), { ...line129(2, '#8c93a3'), dashed: true }], fit: fit129(1) });
-    assert.deepEqual(h.dots.map(d => d.color), ['#2879ef', '#8c93a3']);
+    assert.deepEqual(h.dots.map(d => d.color), ['#2879ef', '#B9B5C0']);
     assert.deepEqual(h.polylines.map(p => [p.options.strokeColor, p.options.strokeStyle, p.options.path.length]), [['#00a84d', 'solid', 2], ['#8c93a3', 'shortdash', 2]]);
     assert.equal(h.fits.length, 1); assert.equal(h.fits[0].bounds.sw.latitude, 37.49); assert.equal(h.fits[0].bounds.ne.longitude, 127.05);
     // 같은 번호는 다시 맞추지 않고(사용자가 움직인 지도 유지), 선은 새로 그려요.
@@ -7189,7 +7276,8 @@ test('129 웹 지도: 선과 색 마커, 갱신 때 이전 것 지우기, 범위
     }
     const controller = createWebMap(g.container, g.sdk, state, { onRegionChange() {}, onReady() {}, onError() { assert.fail(); } });
     assert.deepEqual(polylines.map(p => [p.options.strokeColor, p.options.strokeStyle, p.options.path.length]), [['#f07a1f', 'solid', 2], ['#8c93a3', 'shortdash', 2]]);
-    assert.deepEqual(g.overlays.map(o => /background-color:([^;]+)/.exec(o.options.content.style.cssText)[1]), ['#6a5ae0', '#8c93a3']);
+    assert.deepEqual(g.overlays.map(o => /background-color:([^;]+)/.exec(o.options.content.style.cssText)[1]), ['#6a5ae0', 'white']);
+    assert.match(g.overlays[1].options.content.style.cssText, /border:2\.5px solid #B9B5C0/);
     assert.equal(fits.length, 1); assert.equal(fits[0].bounds.sw.getLat(), bounds.minLat); assert.equal(fits[0].bounds.ne.getLng(), bounds.maxLng);
     controller.update({ ...state, lines: [line129(5, '#e5484d')] });
     assert.ok(polylines.slice(0, 2).every(p => p.detached)); assert.equal(polylines.length, 3); assert.ok(g.overlays.slice(0, 2).every(o => o.detached));
@@ -10705,7 +10793,7 @@ test('261 웹 경로 마커는 원래 좌표에서 전용 아이콘을 쓰고 �
     assert.equal(route[1].content.src, route[2].content.src);
     assert.notEqual(route[0].content.src, route[1].content.src);
     assert.notEqual(route[3].content.src, route[1].content.src);
-    assert.match(f.overlays[4].options.content.style.cssText, /background-color:#12a77a/);
+    assert.match(f.overlays[4].options.content.style.cssText, /border:2\.5px solid #5C3F78/);
     assert.match(f.overlays[5].options.content.style.cssText, /background-color:#2879ef/);
     const centerCount = f.centers.length;
     controller.update({ ...state, markers: [] });
@@ -10863,4 +10951,30 @@ test('261 지도 역명은 역을 덧붙이지 않고 서울역을 보존하며 
         assert.ok(lines.length <= 2);
         if (lines.length === 2) assert.ok(Math.abs(lines[0].length - lines[1].length) <= 1);
     }
+});
+
+test('261 최신 홈 역 점·색 지정 점·내 위치와 경로 아이콘이 웹·WebView에서 함께 유지돼요', () => {
+    const r = createRuntime(); const f = webMap126Fixture(); const h = html129();
+    const markers = [
+        { ...h.point, id: 0, isSupported: true, kind: 'destination' },
+        { ...h.point, id: 1, isSupported: true },
+        { ...h.point, id: 2, isSupported: false },
+        { ...h.point, id: 3, isSupported: true, color: '#123456' },
+    ];
+    const levels = [];
+    const controller = r.load('src/components/map/map-web.ts').createWebMap(f.container, f.sdk,
+        { ...f.state, markers }, { onRegionChange: (_bounds, level) => levels.push(level), onReady() {}, onError() { assert.fail(); } });
+    assert.equal(f.overlays[0].options.content.tagName, 'img');
+    assert.match(f.overlays[1].options.content.style.cssText, /border:2\.5px solid #5C3F78/);
+    assert.match(f.overlays[2].options.content.style.cssText, /border:2\.5px solid #B9B5C0/);
+    assert.match(f.overlays[3].options.content.style.cssText, /background-color:#123456/);
+    assert.match(f.overlays[4].options.content.style.cssText, /background-color:#2879ef/);
+    f.map().level = 9; f.events.get('idle')(); assert.deepEqual(levels, [5, 9]);
+    h.send({ ...h.base, markers, myLocation: h.point });
+    assert.equal(h.dots[0].options.content.src, f.overlays[0].options.content.src);
+    assert.equal(h.dots[1].options.content.className, 'dot'); assert.equal(h.dots[1].color, '#5C3F78');
+    assert.equal(h.dots[2].options.content.className, 'dot'); assert.equal(h.dots[2].color, '#B9B5C0');
+    assert.equal(h.dots[3].options.content.className, 'dot dot-filled'); assert.equal(h.dots[3].color, '#123456');
+    assert.equal(h.dots[4].options.content.className, 'dot dot-filled'); assert.equal(h.dots[4].color, '#2879ef');
+    controller.dispose();
 });

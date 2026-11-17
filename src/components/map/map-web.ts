@@ -1,13 +1,14 @@
 import type { KakaoMapProps } from '@/components/KakaoMap';
 import { isRouteMarkerKind, ROUTE_MARKER_ICONS } from '@/components/map/route-marker-icons';
 import { isHexColor, isValidMapLines } from '@/components/map/map-html';
-import { isCoordinate, isMapBounds, type Coordinate, type MapBounds } from '@/utils/home-map';
+import { isCoordinate, isMapBounds, isMapLevel, type Coordinate, type MapBounds } from '@/utils/home-map';
 
 type Point = { getLat(): number; getLng(): number };
 type Overlay = { setMap(map: WebMap | null): void };
 type WebMap = {
     setCenter(point: Point): void;
     getCenter(): Point;
+    getLevel(): number;
     getBounds(): { getSouthWest(): Point; getNorthEast(): Point };
     relayout(): void;
     setBounds?(bounds: unknown, top?: number, right?: number, bottom?: number, left?: number): void;
@@ -110,7 +111,7 @@ export function mapBounds(map: WebMap): MapBounds | null {
 
 /** React와 분리한 웹 지도 수명 주기. 홈의 디바운스에 bounds를 그대로 전달해요. */
 export function createWebMap(container: HTMLElement, sdk: MapSdk, initial: MapState,
-    callbacks: { onRegionChange(bounds: MapBounds): void; onReady(): void; onError(): void }) {
+    callbacks: { onRegionChange(bounds: MapBounds, level: number): void; onReady(): void; onError(): void }) {
     if (!validMapState(initial)) throw new Error('Invalid map state');
     const point = (p: Coordinate) => new sdk.LatLng(p.latitude, p.longitude);
     const map = new sdk.Map(container, { center: point(initial.center), level: 5 });
@@ -120,13 +121,13 @@ export function createWebMap(container: HTMLElement, sdk: MapSdk, initial: MapSt
     let lastRevision: number | undefined;
     let lastFit: number | undefined;
     const clearOverlays = () => { overlays.forEach(overlay => overlay.setMap(null)); overlays = []; };
-    const dot = (p: Coordinate, color: string, mine: boolean) => {
+    const dot = (p: Coordinate, color: string, mine: boolean, filled = mine) => {
         const el = container.ownerDocument.createElement('div');
-        el.style.cssText = `width:16px;height:16px;border:3px solid white;border-radius:50%;box-shadow:0 1px 4px #555;pointer-events:none;background-color:${color}`;
+        el.style.cssText = `${filled ? `width:16px;height:16px;border:3px solid white;background-color:${color}` : `box-sizing:border-box;width:11px;height:11px;border:2.5px solid ${color};background-color:white`};border-radius:50%;box-shadow:0 1px 4px #555;pointer-events:none`;
         overlays.push(new sdk.CustomOverlay({ map, position: point(p), content: el, yAnchor: 0.5, zIndex: mine ? 2 : 1 }));
     };
     const routeMarker = (marker: MapState['markers'][number]) => {
-        if (marker.kind === undefined) { dot(marker, marker.color ?? (marker.isSupported ? '#12a77a' : '#8c93a3'), false); return; }
+        if (marker.kind === undefined) { dot(marker, marker.color ?? (marker.isSupported ? '#5C3F78' : '#B9B5C0'), false, marker.color !== undefined); return; }
         const icon = ROUTE_MARKER_ICONS[marker.kind];
         const el = container.ownerDocument.createElement('img');
         el.src = icon.uri; el.alt = icon.label; el.draggable = false;
@@ -136,7 +137,7 @@ export function createWebMap(container: HTMLElement, sdk: MapSdk, initial: MapSt
     };
     const region = () => {
         if (disposed) return;
-        try { const bounds = mapBounds(map); if (bounds) callbacks.onRegionChange(bounds); }
+        try { const bounds = mapBounds(map); const level = map.getLevel(); if (bounds && isMapLevel(level)) callbacks.onRegionChange(bounds, level); }
         catch { callbacks.onError(); }
     };
     const ready = () => { if (!disposed) callbacks.onReady(); };
