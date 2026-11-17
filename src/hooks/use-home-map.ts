@@ -4,7 +4,7 @@ import { useFocusEffect } from 'expo-router';
 import * as Location from 'expo-location';
 import { getSessionGeneration } from '@/services/auth';
 import { fetchStationsInBounds } from '@/services/station';
-import { resolveLocation, type MapBounds, type LocationResult } from '@/utils/home-map';
+import { isMapBounds, isMapLevel, resolveLocation, shouldShowStations, type MapBounds, type LocationResult } from '@/utils/home-map';
 import type { MapMarker } from '@/components/KakaoMap';
 import type { Station } from '@/types/station';
 
@@ -40,11 +40,12 @@ export function useHomeMap(enabled: boolean, account: string | null) {
     const [stations, setStations] = useState<{ markers: MapMarker[]; items: Station[]; truncated: boolean; account: string | null }>({ markers: [], items: [], truncated: false, account });
     const [locationLoading, setLocationLoading] = useState(false);
     const [centerRevision, setCenterRevision] = useState(0);
+    const [zoomedOut, setZoomedOut] = useState(false);
     const focused = useRef(false);
     const locationId = useRef(0);
     const stationId = useRef(0);
     const debounce = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-    const latestBounds = useRef<MapBounds | null>(null);
+    const latestRegion = useRef<{ bounds: MapBounds; level: number } | null>(null);
     const activeAccount = useRef(account);
 
     const locate = useCallback(async (requestPermission: boolean) => {
@@ -72,11 +73,18 @@ export function useHomeMap(enabled: boolean, account: string | null) {
         } finally { if (valid()) setLocationLoading(false); }
     }, [enabled, account]);
 
-    const onRegionChange = useCallback((bounds: MapBounds) => {
-        latestBounds.current = bounds;
+    const onRegionChange = useCallback((bounds: MapBounds, level: number) => {
+        if (!isMapBounds(bounds) || !isMapLevel(level)) return;
+        latestRegion.current = { bounds, level };
         if (!enabled || !focused.current) return;
         clearTimeout(debounce.current);
         const id = ++stationId.current;
+        const showStations = shouldShowStations(level);
+        setZoomedOut(!showStations);
+        if (!showStations) {
+            setStations({ markers: [], items: EMPTY_STATIONS, truncated: false, account });
+            return;
+        }
         const generation = getSessionGeneration();
         debounce.current = setTimeout(async () => {
             try {
@@ -91,7 +99,7 @@ export function useHomeMap(enabled: boolean, account: string | null) {
         activeAccount.current = account;
         focused.current = true;
         void locate(false);
-        if (latestBounds.current) onRegionChange(latestBounds.current);
+        if (latestRegion.current) onRegionChange(latestRegion.current.bounds, latestRegion.current.level);
         return () => {
             focused.current = false;
             locationId.current++;
@@ -109,7 +117,7 @@ export function useHomeMap(enabled: boolean, account: string | null) {
         stations: stations.account === account ? stations.items : EMPTY_STATIONS,
         locationLoading,
         truncated: stations.account === account && stations.truncated,
-        centerRevision, onRegionChange,
+        zoomedOut, centerRevision, onRegionChange,
         locate: () => { void locate(true); },
     };
 }

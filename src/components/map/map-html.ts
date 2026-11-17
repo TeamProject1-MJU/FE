@@ -1,4 +1,4 @@
-import { isCoordinate, isMapBounds, type MapBounds } from '@/utils/home-map';
+import { isCoordinate, isMapBounds, isMapLevel, type MapBounds } from '@/utils/home-map';
 
 /** 지도로 보내는 메시지 상한. 앱(route-map)이 이 안으로 줄여 보내고, 넘는 메시지는 지도가 통째로 무시해요. */
 export const MAP_LIMITS = { markers: 500, lines: 50, linePoints: 1000, totalPoints: 5000 } as const;
@@ -21,14 +21,14 @@ export function isValidMapLines(lines: unknown): boolean {
     return true;
 }
 
-export type MapMessage = { type: 'ready' } | { type: 'error' } | { type: 'region'; bounds: MapBounds };
+export type MapMessage = { type: 'ready' } | { type: 'error' } | { type: 'region'; bounds: MapBounds; level: number };
 export function parseMapMessage(raw: string): MapMessage | null {
     try {
         const value: unknown = JSON.parse(raw);
         if (!value || typeof value !== 'object') return null;
         const v = value as Record<string, unknown>;
         if (v.type === 'ready' || v.type === 'error') return { type: v.type };
-        if (v.type === 'region' && isMapBounds(v.bounds)) return { type: 'region', bounds: v.bounds };
+        if (v.type === 'region' && isMapBounds(v.bounds) && isMapLevel(v.level)) return { type: 'region', bounds: v.bounds, level: v.level };
     } catch { /* 잘못된 메시지는 무시해요. */ }
     return null;
 }
@@ -51,7 +51,7 @@ export function buildMapHtml(key: string): string {
     const sdkUrl = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(key).replace(/'/g, '%27')}&autoload=false`;
     return `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; form-action 'none'; base-uri 'none'; script-src 'unsafe-inline' 'unsafe-eval' https://*.kakao.com https://*.daum.net https://*.daumcdn.net https://*.kakaocdn.net; style-src 'unsafe-inline'; img-src data: https://*.kakao.com https://*.daumcdn.net https://*.kakaocdn.net https://*.daum.net; connect-src https://*.kakao.com https://*.daum.net https://*.daumcdn.net https://*.kakaocdn.net">
-<style>html,body,#map{margin:0;width:100%;height:100%;overflow:hidden}.dot{width:16px;height:16px;border:3px solid white;border-radius:50%;box-shadow:0 1px 4px #555;pointer-events:none}</style></head>
+<style>html,body,#map{margin:0;width:100%;height:100%;overflow:hidden}.dot{box-sizing:border-box;width:11px;height:11px;background:white;border:2.5px solid #5C3F78;border-radius:50%;box-shadow:0 1px 4px #555;pointer-events:none}.dot-filled{box-sizing:content-box;width:16px;height:16px;border:3px solid white}</style></head>
 <body><div id="map"></div><script>
 (function(){
  var map, overlays=[], polylines=[], mine=null, lastCenter=null, lastFit=null;
@@ -74,7 +74,7 @@ export function buildMapHtml(key: string): string {
  }
  function fit(f){var b=f && f.bounds;return Number.isSafeInteger(f && f.revision) && b && [b.minLng,b.minLat,b.maxLng,b.maxLat].every(function(n){return typeof n==='number' && Number.isFinite(n);}) && b.minLng>=-180 && b.maxLng<=180 && b.minLat>=-90 && b.maxLat<=90 && b.minLng<b.maxLng && b.minLat<b.maxLat;}
  function coordinate(p){return new kakao.maps.LatLng(p.latitude,p.longitude);}
- function dot(p,color){var el=document.createElement('div');el.className='dot';el.style.backgroundColor=color;return new kakao.maps.CustomOverlay({map:map,position:coordinate(p),content:el,yAnchor:0.5});}
+ function dot(p,color,filled){var el=document.createElement('div');el.className=filled?'dot dot-filled':'dot';if(filled)el.style.backgroundColor=color;else el.style.borderColor=color;return new kakao.maps.CustomOverlay({map:map,position:coordinate(p),content:el,yAnchor:0.5});}
  function receive(event){
   try {
    var v=JSON.parse(event.data);
@@ -85,15 +85,15 @@ export function buildMapHtml(key: string): string {
    polylines.forEach(function(o){o.setMap(null);});
    polylines=(v.lines||[]).map(function(l){return new kakao.maps.Polyline({map:map,path:l.points.map(coordinate),strokeWeight:6,strokeColor:l.color,strokeOpacity:0.9,strokeStyle:l.dashed?'shortdash':'solid'});});
    overlays.forEach(function(o){o.setMap(null);});
-   overlays=v.markers.map(function(m){return dot(m,m.color||(m.isSupported?'#12a77a':'#8c93a3'));});
+   overlays=v.markers.map(function(m){return dot(m,m.color||(m.isSupported?'#5C3F78':'#B9B5C0'),!!m.color);});
    // 범위 맞춤은 번호가 바뀔 때만 해요. 사용자가 움직인 지도는 같은 번호의 갱신으로 되돌리지 않아요.
    if(v.fit && lastFit!==v.fit.revision){var b=v.fit.bounds;map.setBounds(new kakao.maps.LatLngBounds(new kakao.maps.LatLng(b.minLat,b.minLng),new kakao.maps.LatLng(b.maxLat,b.maxLng)),40,40,40,40);lastFit=v.fit.revision;}
    if(mine)mine.setMap(null);
-   mine=v.myLocation?dot(v.myLocation,'#2879ef'):null;
+   mine=v.myLocation?dot(v.myLocation,'#2879ef',true):null;
   }catch(e){/* 유효하지 않은 JSON과 타입은 무시 */}
  }
  window.addEventListener('message',receive);document.addEventListener('message',receive);
- function region(){var b=map.getBounds(),sw=b.getSouthWest(),ne=b.getNorthEast();send({type:'region',bounds:{minLng:sw.getLng(),minLat:sw.getLat(),maxLng:ne.getLng(),maxLat:ne.getLat()}});}
+ function region(){var b=map.getBounds(),sw=b.getSouthWest(),ne=b.getNorthEast();send({type:'region',bounds:{minLng:sw.getLng(),minLat:sw.getLat(),maxLng:ne.getLng(),maxLat:ne.getLat()},level:map.getLevel()});}
  var script=document.createElement('script');script.src=${JSON.stringify(sdkUrl)};script.onerror=fail;
  script.onload=function(){try{kakao.maps.load(function(){try{
   map=new kakao.maps.Map(document.getElementById('map'),{center:new kakao.maps.LatLng(37.5665,126.9780),level:5});

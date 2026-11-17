@@ -1,12 +1,13 @@
 import type { KakaoMapProps } from '@/components/KakaoMap';
 import { isHexColor, isValidMapLines } from '@/components/map/map-html';
-import { isCoordinate, isMapBounds, type Coordinate, type MapBounds } from '@/utils/home-map';
+import { isCoordinate, isMapBounds, isMapLevel, type Coordinate, type MapBounds } from '@/utils/home-map';
 
 type Point = { getLat(): number; getLng(): number };
 type Overlay = { setMap(map: WebMap | null): void };
 type WebMap = {
     setCenter(point: Point): void;
     getCenter(): Point;
+    getLevel(): number;
     getBounds(): { getSouthWest(): Point; getNorthEast(): Point };
     relayout(): void;
     setBounds?(bounds: unknown, top?: number, right?: number, bottom?: number, left?: number): void;
@@ -108,7 +109,7 @@ export function mapBounds(map: WebMap): MapBounds | null {
 
 /** React와 분리한 웹 지도 수명 주기. 홈의 디바운스에 bounds를 그대로 전달해요. */
 export function createWebMap(container: HTMLElement, sdk: MapSdk, initial: MapState,
-    callbacks: { onRegionChange(bounds: MapBounds): void; onReady(): void; onError(): void }) {
+    callbacks: { onRegionChange(bounds: MapBounds, level: number): void; onReady(): void; onError(): void }) {
     if (!validMapState(initial)) throw new Error('Invalid map state');
     const point = (p: Coordinate) => new sdk.LatLng(p.latitude, p.longitude);
     const map = new sdk.Map(container, { center: point(initial.center), level: 5 });
@@ -118,14 +119,14 @@ export function createWebMap(container: HTMLElement, sdk: MapSdk, initial: MapSt
     let lastRevision: number | undefined;
     let lastFit: number | undefined;
     const clearOverlays = () => { overlays.forEach(overlay => overlay.setMap(null)); overlays = []; };
-    const dot = (p: Coordinate, color: string, mine: boolean) => {
+    const dot = (p: Coordinate, color: string, mine: boolean, filled = mine) => {
         const el = container.ownerDocument.createElement('div');
-        el.style.cssText = `width:16px;height:16px;border:3px solid white;border-radius:50%;box-shadow:0 1px 4px #555;pointer-events:none;background-color:${color}`;
+        el.style.cssText = `${filled ? `width:16px;height:16px;border:3px solid white;background-color:${color}` : `box-sizing:border-box;width:11px;height:11px;border:2.5px solid ${color};background-color:white`};border-radius:50%;box-shadow:0 1px 4px #555;pointer-events:none`;
         overlays.push(new sdk.CustomOverlay({ map, position: point(p), content: el, yAnchor: 0.5, zIndex: mine ? 2 : 1 }));
     };
     const region = () => {
         if (disposed) return;
-        try { const bounds = mapBounds(map); if (bounds) callbacks.onRegionChange(bounds); }
+        try { const bounds = mapBounds(map); const level = map.getLevel(); if (bounds && isMapLevel(level)) callbacks.onRegionChange(bounds, level); }
         catch { callbacks.onError(); }
     };
     const ready = () => { if (!disposed) callbacks.onReady(); };
@@ -141,7 +142,7 @@ export function createWebMap(container: HTMLElement, sdk: MapSdk, initial: MapSt
             state.lines.forEach(line => overlays.push(new Polyline({ map, path: line.points.map(point), strokeWeight: 6,
                 strokeColor: line.color, strokeOpacity: 0.9, strokeStyle: line.dashed ? 'shortdash' : 'solid' })));
         }
-        state.markers.forEach(marker => dot(marker, marker.color ?? (marker.isSupported ? '#12a77a' : '#8c93a3'), false));
+        state.markers.forEach(marker => dot(marker, marker.color ?? (marker.isSupported ? '#5C3F78' : '#B9B5C0'), false, marker.color !== undefined));
         if (state.myLocation) dot(state.myLocation, '#2879ef', true);
         // 범위 맞춤은 번호가 바뀔 때만 해요. 같은 번호로 다시 오면 사용자가 움직인 지도를 그대로 둬요.
         const fit = state.fitBounds; const revision = state.fitRevision ?? 0;

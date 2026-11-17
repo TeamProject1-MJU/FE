@@ -1,6 +1,4 @@
 import BottomTabBar, { useTabBarHeight } from '@/components/bottom-tab-bar';
-import HomeCongestionCard from '@/components/home-congestion-card';
-import { useHomeCongestion } from '@/hooks/use-home-congestion';
 import { formatStationName } from '@/utils/station-name';
 import { useCallback, useRef, useState } from 'react';
 import {
@@ -14,13 +12,14 @@ import {
     View,
 } from 'react-native';
 import { Text } from '@/components/app-text';
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import KakaoMap from '@/components/KakaoMap';
 import { useHomeMap } from '@/hooks/use-home-map';
+import { STATION_ZOOM_GUIDANCE } from '@/utils/home-map';
 import { getAuthStatus, getSession, useRedirectIfSignedOut } from '@/stores/auth-store';
 import { HOME_UPCOMING_MEETING } from '@/constants/home-mock';
 import { useMock as isMockMode } from '@/services/api/config';
@@ -113,8 +112,6 @@ export default function HomeScreen() {
      */
     const serverMode = !isMockMode();
     const homeMap = useHomeMap(serverMode, currentAccount());
-    const { mock } = useLocalSearchParams<{ mock?: string | string[] }>();
-    const congestion = useHomeCongestion({ serverMode, account: currentAccount(), location: homeMap.myLocation, locationLoading: homeMap.locationLoading, stations: homeMap.stations, mock });
     const requestId = useRef(0);
     const [load, setLoad] = useState<MeetingLoad>({ kind: 'loading' });
 
@@ -197,9 +194,10 @@ export default function HomeScreen() {
                     bottomInset={sheetHeight}
                     onRegionChange={homeMap.onRegionChange}
                 /> : <MockMap />}
-                {serverMode && (homeMap.guidance || homeMap.truncated) && <View pointerEvents="none" style={{ position: 'absolute', top: insets.top + 125, alignSelf: 'center', backgroundColor: '#ffffffee', borderRadius: 8, padding: 8 }}>
+                {serverMode && (homeMap.guidance || homeMap.truncated || homeMap.zoomedOut) && <View pointerEvents="none" style={{ position: 'absolute', top: insets.top + 125, alignSelf: 'center', backgroundColor: '#ffffffee', borderRadius: 8, padding: 8 }}>
                     {!!homeMap.guidance && <Text style={{ color: SECONDARY, fontSize: 12 }}>{homeMap.guidance}</Text>}
-                    {homeMap.truncated && <Text style={{ color: SECONDARY, fontSize: 12 }}>일부 역만 표시했어요. 지도를 확대해 주세요.</Text>}
+                    {homeMap.zoomedOut ? <Text style={{ color: SECONDARY, fontSize: 12 }}>{STATION_ZOOM_GUIDANCE}</Text>
+                        : homeMap.truncated && <Text style={{ color: SECONDARY, fontSize: 12 }}>일부 역만 표시했어요. 지도를 확대해 주세요.</Text>}
                 </View>}
             </View>
 
@@ -253,7 +251,6 @@ export default function HomeScreen() {
                     showsVerticalScrollIndicator={false}
                     bounces={false}
                 >
-                    <HomeCongestionCard state={congestion} onLocate={() => serverMode ? homeMap.locate() : showPreparing('현재 위치')} />
                     <View style={styles.meetingHeader}>
                         <Text style={styles.sectionTitle}>내 약속</Text>
                         <Pressable
