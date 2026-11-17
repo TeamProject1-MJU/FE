@@ -6301,6 +6301,57 @@ async function directionScreen125(params) {
 const OUTPUT125 = 'file:///cache/output.jpg';
 const deletedCount125 = r => r.deleted.filter(uri => uri === OUTPUT125).length;
 
+test('254 사진 선택 취소·권한 거부는 기존 단계와 파일을 유지하고 분석·재시도가 가능해요', async () => {
+    for (const stage of ['idle', 'photo', 'result', 'error']) for (const action of ['cancel', 'deny']) for (const camera of [true, false]) {
+        const r = await directionScreen125();
+        if (stage !== 'idle') await r.press('표지판 촬영');
+        if (stage === 'result' || stage === 'error') {
+            r.respond(stage === 'result' ? async () => jsonResponse({ success: true, data: directionData114() }) : failure125('NETWORK_ERROR'));
+            await r.press('AI로 확인하기');
+        }
+        const before = serialize125(r.render()); const deleted = [...r.deleted]; const saves = r.saves.length;
+        const picker = r.external['expo-image-picker']; let launches = 0;
+        picker.launchCameraAsync = picker.launchImageLibraryAsync = async () => { launches++; return { canceled: true, assets: null }; };
+        if (action === 'deny') r.deny();
+        await r.press(camera ? '표지판 촬영' : '갤러리 선택');
+        assert.deepEqual(serialize125(r.render()), before, `${stage}/${action}/${camera}: 기존 단계와 버튼 잠금 복원`);
+        assert.deepEqual(r.deleted, deleted, '기존 임시 파일 유지'); assert.equal(r.saves.length, saves);
+        assert.equal(launches, action === 'deny' ? 0 : 1); assert.equal(r.alerts.length, action === 'deny' ? 1 : 0);
+        if (stage === 'photo' || stage === 'error') {
+            r.respond(async () => jsonResponse({ success: true, data: directionData114() }));
+            const view = await r.press(stage === 'photo' ? 'AI로 확인하기' : '다시 시도');
+            assert.equal(r.sent.at(-1).photo.uri, OUTPUT125); assert.ok(texts125(view).includes('맞는 방향이에요'));
+        }
+        r.unmount();
+    }
+});
+
+test('254 새 사진은 기존 사진·결과·오류를 교체하고 새 임시 파일은 처리 실패나 이탈 때 정리해요', async () => {
+    for (const stage of ['photo', 'result', 'error']) for (const invalid of [false, true]) {
+        const r = await directionScreen125(); await r.press('표지판 촬영');
+        if (stage !== 'photo') {
+            r.respond(stage === 'result' ? async () => jsonResponse({ success: true, data: directionData114() }) : failure125('NETWORK_ERROR'));
+            await r.press('AI로 확인하기');
+        }
+        const source = 'file:///cache/new-source.heic'; const output = 'file:///cache/new-output.jpg';
+        r.external['expo-image-picker'].launchImageLibraryAsync = async () => ({ canceled: false, assets: [{ uri: source, width: 2000, height: 1000 }] });
+        r.external['expo-image-manipulator'].ImageManipulator.manipulate = uri => {
+            assert.equal(uri, source); assert.ok(r.deleted.includes(OUTPUT125), '변환 전에 기존 파일 정리');
+            assert.equal(r.deleted.includes(source), false, '새 원본은 지우지 않아요');
+            return { resize() {}, release() {}, renderAsync: async () => ({ release() {}, saveAsync: async () => ({ uri: output }) }) };
+        };
+        if (invalid) r.oversized();
+        const view = await r.press('갤러리 선택');
+        assert.equal(texts125(view).includes('맞는 방향이에요'), false);
+        assert.equal(alertText125(view), invalid ? SERVER_ERROR_TEXT125.IMAGE_INVALID : null);
+        assert.equal(photoUri125(view), invalid ? null : output);
+        assert.equal(r.deleted.includes(source), invalid); assert.equal(r.deleted.includes(output), invalid);
+        assert.equal(r.button('다시 시도'), null);
+        if (!invalid) assert.equal(r.button('AI로 확인하기').props.disabled, false);
+        r.unmount(); assert.ok(r.deleted.includes(source)); assert.ok(r.deleted.includes(output));
+    }
+});
+
 test('125 재시도 가능한 오류 4종은 사진을 유지하고 다시 시도는 같은 사진·같은 경로로 한 번만 보내요', async () => {
     for (const code of ['AI_UNAVAILABLE', 'AI_QUOTA_EXCEEDED', 'NETWORK_ERROR', 'UNKNOWN_ERROR']) {
         const r = await directionScreen125(); await r.press('표지판 촬영');
@@ -6326,9 +6377,15 @@ test('125 재시도 오류 뒤 새 사진을 고르면 유지하던 사진과 �
     const r = await directionScreen125(); await r.press('표지판 촬영');
     r.respond(failure125('AI_UNAVAILABLE')); await r.press('AI로 확인하기');
     let permissionAsked = 0; const picker = r.external['expo-image-picker']; const ask = picker.requestMediaLibraryPermissionsAsync;
-    picker.requestMediaLibraryPermissionsAsync = async () => { permissionAsked++; assert.equal(deletedCount125(r), 1, '권한 요청 전에 정리'); return ask(); };
+    picker.requestMediaLibraryPermissionsAsync = async () => { permissionAsked++; assert.equal(deletedCount125(r), 0, '새 사진을 받기 전에는 유지'); return ask(); };
+    const launch = picker.launchImageLibraryAsync;
+    picker.launchImageLibraryAsync = async () => {
+        assert.equal(deletedCount125(r), 0, '선택 중에도 유지');
+        return launch();
+    };
     const view = await r.press('갤러리 선택');
     assert.equal(permissionAsked, 1); assert.equal(alertText125(view), null); assert.equal(photoUri125(view), OUTPUT125);
+    assert.equal(deletedCount125(r), 1, '새 사진을 받은 뒤 기존 파일 정리');
     assert.ok(r.button('AI로 확인하기')); assert.equal(r.button('다시 시도'), null); r.unmount();
 });
 
