@@ -1,3 +1,4 @@
+import { ROUTE_MARKER_ICONS } from '@/components/map/route-marker-icons';
 import { isCoordinate, isMapBounds, isMapLevel, STATION_HIDE_LEVEL, type MapBounds } from '@/utils/home-map';
 import { trainModelSvg, passengerModelSvg, MAP_MODEL_STYLE, MAP_MODEL_LABEL_STYLE } from '@/components/map/map-models';
 
@@ -52,9 +53,9 @@ export function isAllowedMapNavigation(url: string) {
 
 /**
  * 위치·역·경로 데이터는 HTML에 삽입하지 않고 검증된 JSON 메시지로만 전달해요.
- * state 메시지: { type, center, myLocation, markers[{ id, latitude, longitude, isSupported, color? }], revision,
+ * state 메시지: { type, center, myLocation, markers[{ id, latitude, longitude, isSupported, color?, kind? }], revision,
  *   lines?[{ id, color, points[{ latitude, longitude }], dashed? }], fit?{ bounds, revision } }
- * 선택 값(lines, fit, marker.color)이 없으면 홈 지도와 같은 메시지·동작이에요.
+ * 선택 값(lines, fit, marker.color·kind)이 없으면 홈 지도와 같은 메시지·동작이에요.
  */
 export function buildMapHtml(key: string): string {
     const sdkUrl = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(key).replace(/'/g, '%27')}&autoload=false`;
@@ -64,6 +65,8 @@ export function buildMapHtml(key: string): string {
 <body><div id="map"></div><script>
 (function(){
  var map, overlays=[], polylines=[], mine=null, selected=null, state=null, lastCenter=null, lastFit=null;
+ var routeIcons=${JSON.stringify(ROUTE_MARKER_ICONS)};
+ function routeKind(k){return k==='origin' || k==='transfer' || k==='destination';}
  window.open=function(){return null;};
  // 지도는 외부 링크를 열지 않아요(저작권 링크도 앱 밖으로 보내지 않아요).
  document.addEventListener('click',function(e){var el=e.target;while(el && el.tagName!=='A')el=el.parentElement;if(el)e.preventDefault();},true);
@@ -102,11 +105,18 @@ export function buildMapHtml(key: string): string {
   var marker=state.markers.find(function(m){return m.id===state.selectedStationId;});
   if(marker)selected=model(marker,true,state.selectedStationName||'선택한 역',state.selectedStationColor||'#5C3F78');
  }
+ function routeMarker(m){
+  if(m.kind===undefined)return dot(m,m.color||(m.isSupported?'#5C3F78':'#B9B5C0'),!!m.color,state.stationSelection===true);
+  var icon=routeIcons[m.kind],el=document.createElement('img');
+  el.src=icon.uri;el.alt=icon.label;el.draggable=false;
+  el.style.cssText='display:block;width:'+icon.width+'px;height:'+icon.height+'px;border:0;padding:0;pointer-events:none;user-select:none';
+  return new kakao.maps.CustomOverlay({map:map,position:coordinate(m),content:el,xAnchor:icon.xAnchor,yAnchor:icon.yAnchor,zIndex:m.kind==='destination'?4:3});
+ }
  function receive(event){
   try {
    var v=JSON.parse(event.data);
    if(!map || !v || v.type!=='state' || !Number.isSafeInteger(v.revision) || !point(v.center) || !(v.myLocation===null || point(v.myLocation)) || !Array.isArray(v.markers) || v.markers.length>500) return;
-   if(!v.markers.every(function(m){return point(m) && Number.isSafeInteger(m.id) && typeof m.isSupported==='boolean' && (m.color===undefined || color(m.color));})) return;
+   if(!v.markers.every(function(m){return point(m) && Number.isSafeInteger(m.id) && typeof m.isSupported==='boolean' && (m.color===undefined || color(m.color)) && (m.kind===undefined || routeKind(m.kind));})) return;
    if(!(v.lines===undefined || lines(v.lines)) || !(v.fit===undefined || fit(v.fit))) return;
    if(!(v.stationSelection===undefined || typeof v.stationSelection==='boolean') || !(v.selectedStationId===undefined || v.selectedStationId===null || (Number.isSafeInteger(v.selectedStationId)&&v.selectedStationId>0)) || !(v.selectedStationName===undefined || typeof v.selectedStationName==='string') || !(v.selectedStationColor===undefined || color(v.selectedStationColor))) return;
    state=v;
@@ -114,7 +124,7 @@ export function buildMapHtml(key: string): string {
    polylines.forEach(function(o){o.setMap(null);});
    polylines=(v.lines||[]).map(function(l){return new kakao.maps.Polyline({map:map,path:l.points.map(coordinate),strokeWeight:6,strokeColor:l.color,strokeOpacity:0.9,strokeStyle:l.dashed?'shortdash':'solid'});});
    overlays.forEach(function(o){o.setMap(null);});
-   overlays=v.markers.map(function(m){return dot(m,m.color||(m.isSupported?'#5C3F78':'#B9B5C0'),!!m.color,v.stationSelection===true);});
+   overlays=v.markers.map(routeMarker);
    // 범위 맞춤은 번호가 바뀔 때만 해요. 사용자가 움직인 지도는 같은 번호의 갱신으로 되돌리지 않아요.
    if(v.fit && lastFit!==v.fit.revision){var b=v.fit.bounds;map.setBounds(new kakao.maps.LatLngBounds(new kakao.maps.LatLng(b.minLat,b.minLng),new kakao.maps.LatLng(b.maxLat,b.maxLng)),40,40,40,40);lastFit=v.fit.revision;}
    if(mine)mine.setMap(null);
