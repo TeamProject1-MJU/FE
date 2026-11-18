@@ -172,11 +172,13 @@ type Props = {
     expanded: boolean;
     showDates?: boolean;
     badgeLabels?: string[];
+    /** 도착 시각·약속 시각 기준 검색이면 접힌 카드에 서버 출발 시각을 굵게 보여 줘요. */
+    highlightDeparture?: boolean;
     onPress: () => void;
     onStart: () => void;
 };
 
-export default function RouteCard({ route, expanded, badgeLabels = [], onPress, onStart, showDates = false }: Props) {
+export default function RouteCard({ route, expanded, badgeLabels = [], highlightDeparture = false, onPress, onStart, showDates = false }: Props) {
     const { summary } = route;
     const subwaySteps = route.steps.filter(step => step.type === 'SUBWAY');
     const firstSlot = subwaySteps[0]?.stations?.[0];
@@ -184,6 +186,7 @@ export default function RouteCard({ route, expanded, badgeLabels = [], onPress, 
     const departure = summary.departureAt ? formatRouteRelativeDateTime(summary.departureAt) : '';
     const firstTrainInfo = summary.noService && departure ? `${departure} 출발 ~`
         : firstSlot?.firstTrain ? `첫차 ${formatSlot(firstSlot)} 기준` : '';
+    const showDeparture = highlightDeparture && !!departure && !summary.noService;
     const totalSec = route.steps.reduce((sum, step) => sum + Math.max(step.durationSec, 0), 0);
     const lastStop = subwaySteps.at(-1)?.stops.at(-1)?.name ?? '';
 
@@ -195,7 +198,8 @@ export default function RouteCard({ route, expanded, badgeLabels = [], onPress, 
                 </View>
                 <CongestionMark congestion={summary.congestion} />
             </View>
-            <View style={[styles.headline, styles.headlineGap]}>
+            {showDeparture && <Text style={styles.highlightDeparture}>{departure} 출발</Text>}
+            <View style={[styles.headline, showDeparture ? styles.headlineGapTight : styles.headlineGap]}>
                 <Text style={styles.time} accessibilityLabel={`총 소요 시간 ${formatTotalTime(summary)}`}>{formatDurationMinutes(routeDurationSec(summary) / 60)}</Text>
                 {!!arrival && <Text style={styles.arrival}>{arrival} 도착</Text>}
             </View>
@@ -355,6 +359,17 @@ const styles = StyleSheet.create({
 
     headlineGap: {
         marginTop: 10,
+    },
+
+    headlineGapTight: {
+        marginTop: 2,
+    },
+
+    highlightDeparture: {
+        marginTop: 10,
+        color: LV_MAIN,
+        fontSize: 17,
+        fontWeight: '800',
     },
 
     timePrefix: {

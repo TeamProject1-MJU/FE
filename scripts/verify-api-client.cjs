@@ -11155,3 +11155,109 @@ test('261 홈 역 터치·3D 모형과 경로 아이콘을 전환해도 이전 �
     assert.equal(active().filter(el => el.className === 'station-hit').length, 2);
     controller.dispose(); assert.ok(f.overlays.every(item => item.detached));
 });
+
+/* ---------- #267 도착·약속 시각 기준 경로 카드의 출발 시각 강조 ---------- */
+
+/** 큰 소요 시간 줄: 도착 문구 Text 를 바로 아래 자식으로 가진 View */
+function headline267(view, arrival) {
+    return findElement(view, element => element.type === 'View' && [element.props.children].flat().some(child => child?.type === 'Text' && textOf(child) === arrival));
+}
+
+function card267({ departureAt = '2026-11-14T23:35:00+09:00', noService = false } = {}) {
+    const r = clock152(createRuntime(serverEnv));
+    const route = r.load('src/services/route.ts').__parseRouteSearch(data152()).routes[0];
+    if (departureAt === null) delete route.summary.departureAt; else route.summary.departureAt = departureAt;
+    route.summary.noService = noService;
+    const Card = r.load('src/components/route/RouteCard.tsx').default;
+    const relative = r.load('src/utils/route-time.ts').formatRouteRelativeDateTime;
+    const render = props => Card({ route, expanded: false, onPress() {}, onStart() {}, ...props });
+    return { r, route, render, relative, departure: route.summary.departureAt ? `${relative(route.summary.departureAt)} 출발` : null, arrival: `${relative(route.summary.arrivalAt)} 도착` };
+}
+
+test('267 highlightDeparture 가 true 이고 출발 시각이 있으면 접힌 카드의 도착 문구보다 먼저 서버 출발 시각을 굵게 보여요', () => {
+    const c = card267(); const original = JSON.stringify(c.route);
+    assert.equal(c.departure, '오후 11:35 출발');
+    const view = c.render({ highlightDeparture: true });
+    const line = findText(view, c.departure); assert.ok(line);
+    const style = Object.assign({}, ...[line.props.style].flat());
+    assert.deepEqual({ color: style.color, fontSize: style.fontSize, fontWeight: style.fontWeight, marginTop: style.marginTop }, { color: '#5C3F78', fontSize: 17, fontWeight: '800', marginTop: 10 });
+    const texts = texts146(view);
+    assert.equal(texts.filter(text => text === c.departure).length, 1);
+    assert.ok(texts.indexOf(c.departure) >= 0 && texts.indexOf(c.departure) < texts.indexOf(c.arrival), '출발 시각이 도착 문구보다 먼저예요');
+    const headline = headline267(view, c.arrival);
+    assert.ok(findElement(headline, node => node.props?.accessibilityLabel?.startsWith('총 소요 시간')));
+    assert.equal(Object.assign({}, ...[headline.props.style].flat()).marginTop, 2);
+    // 자정을 넘기면 "내일" 이 붙은 서버 값 그대로예요.
+    const next = card267({ departureAt: '2026-11-15T00:05:00+09:00' });
+    assert.ok(findText(next.render({ highlightDeparture: true }), '내일 오전 12:05 출발'));
+    assert.equal(JSON.stringify(c.route), original, '카드는 route 를 바꾸지 않아요');
+});
+
+test('267 highlightDeparture 가 없거나 false 면 접힌 카드는 지금처럼 출발 시각 없이 소요 시간 여백 10 을 유지해요', () => {
+    const c = card267();
+    for (const props of [{}, { highlightDeparture: false }]) {
+        const view = c.render(props);
+        assert.equal(findText(view, c.departure), null); assert.ok(findText(view, c.arrival));
+        const headline = headline267(view, c.arrival);
+        assert.equal(Object.assign({}, ...[headline.props.style].flat()).marginTop, 10);
+        assert.deepEqual(texts146(view), texts146(c.render({})));
+    }
+});
+
+test('267 출발 시각이 없으면 새 줄이 없고, 운행 없음이면 기존 "출발 ~" 안내만 한 번 보여요', () => {
+    const none = card267({ departureAt: null });
+    assert.deepEqual(texts146(none.render({ highlightDeparture: true })), texts146(none.render({})));
+    assert.equal(findTextIncluding(none.render({ highlightDeparture: true }), '출발'), null);
+    const closed = card267({ departureAt: '2026-11-15T05:36:00+09:00', noService: true });
+    const view = closed.render({ highlightDeparture: true });
+    assert.equal(findText(view, closed.departure), null);
+    assert.ok(findText(view, `${closed.departure} ~`));
+    assert.deepEqual(texts146(view), texts146(closed.render({})));
+});
+
+test('267 펼친 카드는 새 줄이 있어도 타임라인의 출발·도착 예정 문구를 그대로 보여요', () => {
+    const c = card267();
+    for (const highlightDeparture of [false, true]) {
+        const view = c.render({ expanded: true, highlightDeparture });
+        const steps = findElement(view, element => element.type === 'View' && findText(element, `${c.relative(c.route.summary.arrivalAt)} 도착 예정`));
+        assert.ok(findText(steps, c.departure), '타임라인 맨 위 출발 시각');
+        assert.equal(texts146(view).filter(text => text === c.departure).length, highlightDeparture ? 2 : 1);
+    }
+});
+
+test('267 개인 검색은 도착 시각 지정만, 약속방은 약속 시각 기준만 카드 출발 시각을 강조해요', async () => {
+    const r = await screen152();
+    for (const [value, expected] of [[null, false], [{ mode: 'departure', at: DEPART152 }, false], [{ mode: 'arrival', at: ARRIVE152 }, true], [{ mode: 'now' }, false]]) {
+        if (value) { r.selector152().props.onChange(value); await pump152(r); }
+        const card = r.card152(); assert.equal(card.props.highlightDeparture, expected, value?.mode ?? 'now');
+        const view = card.type(card.props); const departure = `${r.load('src/utils/route-time.ts').formatRouteRelativeDateTime(card.props.route.summary.departureAt)} 출발`;
+        assert.equal(!!findText(view, departure), expected);
+    }
+    r.unmount();
+
+    for (const [label, options, expected] of [['약속 시각', {}, true], ['약속 없는 방', { appointmentAt: null }, false],
+        ['지난 약속', { appointmentAt: '2026-01-01T19:00:00+09:00', passed: true }, false], ['확인 못 함', { cache: false, detail: 'fail' }, false]]) {
+        const { appointmentAt = APPOINTMENT172, passed = false, cache = true, detail = 'ok' } = options;
+        const room = { ...roomQueryDetail(), appointmentAt };
+        const s = routeScreenRuntime({ departure: '강남', destination: '사당', roomId: room.id });
+        s.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_ME, nickname: '서버 나' });
+        const roomCache = s.load('src/services/room-cache.ts');
+        if (cache) roomCache.cacheRoomDetail({ ...room, memberCount: room.members.length }, roomCache.getRoomCacheScope());
+        const data = data152(); data.appointmentPassed = passed;
+        s.context.fetch = async url => {
+            if (url.endsWith('/routes/search')) return ok(data);
+            if (url.endsWith(`/rooms/${room.id}`)) return detail === 'fail' ? jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR' } }, 500) : ok(room);
+            return ok(stationSearchData([url.includes(encodeURIComponent('강남')) ? serverRouteStation(88001, '강남') : serverRouteStation(99002, '사당')]));
+        };
+        for (let i = 0; i < 6; i++) { s.render(); await settle(); }
+        const card = findElement(s.render(), element => element.type === s.load('src/components/route/RouteCard.tsx').default);
+        assert.ok(card, label); assert.equal(card.props.highlightDeparture, expected, label);
+        const before = JSON.stringify(card.props.route);
+        const relative = s.load('src/utils/route-time.ts').formatRouteRelativeDateTime;
+        assert.equal(!!findText(card.type(card.props), `${relative(data.routes[0].summary.departureAt)} 출발`), expected, label);
+        assert.equal(JSON.stringify(card.props.route), before, label);
+        card.props.onStart();
+        assert.equal(s.load('src/stores/route-store.ts').getSelectedRoute().timeBasis, { '약속 시각': 'appointment', '약속 없는 방': 'now', '지난 약속': 'now', '확인 못 함': 'unknown' }[label]);
+        s.unmount();
+    }
+});
