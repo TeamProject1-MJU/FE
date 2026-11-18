@@ -4881,7 +4881,7 @@ test('120/121 room recommendation route navigation carries roomId', async () => 
     assert.equal(pushes[0].params.roomId, ROOM_QUERY_ID); r.unmount();
 });
 
-test('추천 화면(서버): 빈 기록은 입력 보기, 계산 버튼 연타는 8.1 한 번, 결과의 혼잡도 null 은 점·라벨·문구만 숨겨요', async () => {
+test('추천 화면(서버): 빈 기록은 입력 보기, 계산 버튼 연타는 8.1 한 번, 결과의 혼잡도 null 은 정보 없음으로 표시해요', async () => {
     const r = recoScreen();
     let resolveCreate;
     let created = null; // 실서버처럼 8.1 이 끝나면 8.2 도 그 실행을 돌려줘요(화면은 실행 뒤 8.2 를 다시 불러요).
@@ -4901,11 +4901,12 @@ test('추천 화면(서버): 빈 기록은 입력 보기, 계산 버튼 연타�
     const rows = [];
     findElement(view, element => { if (typeof element.type === 'function' && element.type.name === 'ParticipantRow') rows.push(element); return false; });
     assert.equal(rows.length, 2);
-    const opened = rows.map(row => row.type({ ...row.props, opened: true }));
+    const opened = rows.map(row => deep125(row.type({ ...row.props, opened: true })));
     assert.ok(findText(opened[0], '보통'));
     assert.ok(findTextIncluding(opened[0], '기준 혼잡도'));
     assert.equal(findText(opened[1], '보통'), null);
-    assert.equal(findTextIncluding(opened[1], '혼잡도'), null);
+    assert.ok(findText(opened[1], '혼잡도')); assert.ok(findText(opened[1], '정보 없음'));
+    assert.equal(findTextIncluding(opened[1], '기준 혼잡도'), null);
     // #153: 계산 근거 문구는 source 로 나눠요(이 참여자는 TIMETABLE). 이전의 '다익스트라 추정치예요'는 TIMETABLE 에 틀린 말이라 바꿨어요.
     assert.ok(findTextIncluding(opened[1], '열차 시각표 기준이에요'));
     assert.equal(findTextIncluding(opened[1], '다익스트라'), null);
@@ -8984,8 +8985,9 @@ async function reco153Screen(run) {
     const box = findElement(view, element => element.props?.accessibilityLabel === '내 이동');
     const rows = []; findElement(view, element => { if (typeof element.type === 'function' && element.type.name === 'ParticipantRow') rows.push(element); return false; });
     const mineRow = rows.find(row => row.props.mine);
-    const detail = mineRow ? findAll125(mineRow.type({ ...mineRow.props, opened: true }), element => element.type === 'Text').map(textOf) : [];
-    return { r, view, box: box ? findAll125(box, element => element.type === 'Text').map(textOf) : null, detail };
+    const detailView = mineRow ? deep125(mineRow.type({ ...mineRow.props, opened: true })) : null;
+    const detail = detailView ? findAll125(detailView, element => element.type === 'Text').map(textOf) : [];
+    return { r, view, box: box ? findAll125(box, element => element.type === 'Text').map(textOf) : null, detail, detailView };
 }
 
 test('153 문구 함수: 여유(양수·0·음수·null), 탑승 열차, 열차 구간, 환승 도보·대기(0 생략), 계산 근거', () => {
@@ -8995,12 +8997,12 @@ test('153 문구 함수: 여유(양수·0·음수·null), 탑승 열차, 열차 
         assert.equal(trip.formatSlack(sec), text, String(sec));
     }
     const t = reco153Timetable();
-    assert.equal(trip.formatBoardingTrain(t.boardingTrain), '강남역 18:38 · 2호선 성수행(내선)');
-    assert.equal(trip.formatBoardingTrain(t.boardingTrain, true), '강남역 18:38 · 2호선 성수행(내선) · 열차 2314');
-    assert.equal(trip.formatBoardingTrain({ ...t.boardingTrain, terminal: null, direction: null }), '강남역 18:38 · 2호선');
+    assert.equal(trip.formatBoardingTrain(t.boardingTrain), '강남역 18:38 / 2호선 성수행(내선)');
+    assert.equal(trip.formatBoardingTrain(t.boardingTrain, true), '강남역 18:38 / 2호선 성수행(내선) / 열차 2314');
+    assert.equal(trip.formatBoardingTrain({ ...t.boardingTrain, terminal: null, direction: null }), '강남역 18:38 / 2호선');
     assert.equal(trip.formatLeg(t.legs[0]), '강남역 18:38 → 교대역 18:42 (2개 역)');
-    assert.equal(trip.formatLegTrain(t.legs[1]), '3호선 대화행(하행) · 열차 S3101');
-    assert.equal(trip.formatLegTransfer(t.legs[1]), '환승 도보 3분 · 열차 대기 2분');
+    assert.equal(trip.formatLegTrain(t.legs[1]), '3호선 대화행(하행) / 열차 S3101');
+    assert.equal(trip.formatLegTransfer(t.legs[1]), '환승 도보 3분 / 열차 대기 2분');
     assert.equal(trip.formatLegTransfer({ ...t.legs[1], walkSec: 0 }), '열차 대기 2분');
     assert.equal(trip.formatLegTransfer({ ...t.legs[1], transferWaitSec: 0 }), '환승 도보 3분');
     assert.equal(trip.formatLegTransfer({ ...t.legs[1], walkSec: 20, transferWaitSec: 0 }), '환승 도보 1분'); // #146 최소 1분
@@ -9008,8 +9010,8 @@ test('153 문구 함수: 여유(양수·0·음수·null), 탑승 열차, 열차 
     assert.equal(trip.sourceNote('TIMETABLE'), '열차 시각표 기준이에요');
     assert.equal(trip.sourceNote('ESTIMATE'), '고정 소요시간으로 계산한 예상값이에요');
     assert.equal(trip.sourceNote(null), '이전 계산 결과라 열차 정보가 없어요');
-    assert.equal(trip.stalePlanText(['APPOINTMENT_CHANGED']), '약속·멤버가 바뀌기 전 계획이에요 (약속 시각이 바뀌었어요)');
-    assert.equal(trip.staleReasonText(['APPOINTMENT_CHANGED', 'MEMBERS_CHANGED']), '약속 시각이 바뀌었어요 · 참여자나 출발역이 바뀌었어요');
+    assert.equal(trip.stalePlanText(['APPOINTMENT_CHANGED']), '약속 / 멤버가 바뀌기 전 계획이에요 (약속 시각이 바뀌었어요)');
+    assert.equal(trip.staleReasonText(['APPOINTMENT_CHANGED', 'MEMBERS_CHANGED']), '약속 시각이 바뀌었어요 / 참여자나 출발역이 바뀌었어요');
 });
 
 test('153 출발·도착: 도착 없으면 출발만, 자정을 넘으면 "다음 날", 약속과 다른 날 출발이면 날짜', () => {
@@ -9069,13 +9071,14 @@ test('153 파서: TIMETABLE·ESTIMATE·이전 실행·일부 잘못된 모양 �
 });
 
 test('153 화면 TIMETABLE: 내 출발→도착·여유·탑승 열차(번호는 상세만)·legs 승하차·환승 도보·대기', async () => {
-    const { r, box, detail } = await reco153Screen(reco153Run(reco153Timetable()));
-    assert.deepEqual(box, ['내 이동', '18:33 출발 → 18:52 도착', '약속 8분 전 도착', '강남역 18:38 · 2호선 성수행(내선)', '열차 시각표 기준이에요']);
+    const { r, box, detail, detailView } = await reco153Screen(reco153Run(reco153Timetable()));
+    assert.deepEqual(box, ['내 이동', '18:33 출발 → 18:52 도착', '약속 8분 전 도착', '강남역 18:38 / 2호선 성수행(내선)', '열차 시각표 기준이에요']);
     assert.ok(!box.some(text => text.includes('2314')));
-    for (const text of ['18:33 출발 → 18:52 도착, 약속 8분 전 도착', '탑승 강남역 18:38 · 2호선 성수행(내선) · 열차 2314', '강남역 18:38 → 교대역 18:42 (2개 역)',
-        '2호선 성수행(내선) · 열차 2314', '환승 도보 3분 · 열차 대기 2분', '교대역 18:47 → 고속터미널역 18:52 (1개 역)', '3호선 대화행(하행) · 열차 S3101']) {
+    for (const text of ['18:33', '18:52', '약속 8분 전 도착', '강남역', '18:38', '교대역', '18:42', '18:47', '고속터미널역',
+        '2호선 성수행(내선) / 열차 2314 / 2개 역', '환승 도보 3분 / 열차 대기 2분', '3호선 대화행(하행) / 열차 S3101 / 1개 역']) {
         assert.ok(detail.includes(text), text);
     }
+    assert.ok(findElement(detailView, e => e.props?.accessibilityLabel === '18:33 출발 → 18:52 도착'));
     assert.ok(detail.some(text => text.includes('열차 시각표 기준이에요')));
     assert.ok(!detail.some(text => text.includes('다익스트라')));
     r.unmount();
@@ -9089,12 +9092,12 @@ test('153 화면 TIMETABLE: 내 출발→도착·여유·탑승 열차(번호는
 test('153 화면 ESTIMATE·이전 실행: 오류 없이 탑승 열차 없음, 도착·여유를 만들지 않음, 문구 구분', async () => {
     const estimate = await reco153Screen(reco153Run(reco153Estimate()));
     assert.deepEqual(estimate.box, ['내 이동', '18:38 출발 → 19:00 도착', '약속 시각에 딱 맞춰 도착', '고정 소요시간으로 계산한 예상값이에요']);
-    assert.ok(estimate.detail.some(text => text.includes('서버 역 88001 → 서버 추천역'))); // legs 가 없으면 기존 segments
+    assert.ok(estimate.detail.some(text => text.includes('서버 역 88001'))); assert.ok(estimate.detail.includes('서버 추천역')); // legs 가 없으면 기존 segments
     estimate.r.unmount();
     const past = await reco153Screen(reco153Run(reco153Past));
     assert.deepEqual(past.box, ['내 이동', '18:38 출발', '이전 계산 결과라 열차 정보가 없어요']);
     assert.ok(!past.box.some(text => /도착|0분/.test(text)));
-    assert.ok(past.detail.includes('18:38 출발'), JSON.stringify(past.detail));
+    assert.ok(past.detail.includes('18:38'), JSON.stringify(past.detail));
     assert.ok(findElement(past.view, element => element.props?.label === '평균 예상 시간')); // "예상" 라벨 유지
     past.r.unmount();
     // 약속 시각이 없으면(slack null) 여유를 표시하지 않아요.
@@ -9105,8 +9108,8 @@ test('153 화면 ESTIMATE·이전 실행: 오류 없이 탑승 열차 없음, �
 
 test('153 stale 이면 출발·도착 근처에 바뀌기 전 계획 안내(배너와 같은 이유 문구)', async () => {
     const { r, box, detail, view } = await reco153Screen(reco153Run(reco153Timetable(), { isStale: true, staleReasons: ['APPOINTMENT_CHANGED'] }));
-    assert.ok(box.includes('약속·멤버가 바뀌기 전 계획이에요 (약속 시각이 바뀌었어요)'));
-    assert.ok(detail.includes('약속·멤버가 바뀌기 전 계획이에요 (약속 시각이 바뀌었어요)'));
+    assert.ok(box.includes('약속 / 멤버가 바뀌기 전 계획이에요 (약속 시각이 바뀌었어요)'));
+    assert.ok(detail.includes('약속 / 멤버가 바뀌기 전 계획이에요 (약속 시각이 바뀌었어요)'));
     assert.ok(findText(view, '약속 시각이 바뀌었어요')); // 기존 배너도 그대로
     r.unmount();
     const fresh = await reco153Screen(reco153Run(reco153Timetable()));
@@ -11268,4 +11271,215 @@ test('265 mock 분석 오류도 예시 사진을 유지하고 같은 사진으�
     assert.ok(action('다시 시도')); assert.equal(findElement(r.render(), e => e.type?.name === 'SignPlate').props.sign, sample);
     action('다시 시도').props.onPress(); r.advance(1500); await settle();
     assert.ok(action('다시 시도')); assert.equal(findElement(r.render(), e => e.type?.name === 'SignPlate').props.sign, sample); r.unmount();
+});
+
+
+/* ---------- #271 추천 결과 가독성·대안역 묶음·구분자 ---------- */
+const alternative271 = (id, lineId, overrides = {}) => ({ station: { id, name: '을지로4가' }, lineId,
+    relation: 'NEXT', relationLabel: '최적역에서 1정거장', maxMinutes: 35, totalFareWon: 3300, ...overrides });
+const nearbyCards271 = view => findAll125(view, e => e.props?.testID?.startsWith?.('nearby-station-'));
+const nearby271Run = (alternatives, overrides = {}) => reco153Run(reco153Timetable(), { results: ['TIME', 'FARE', 'DISTANCE'].map((criterion, i) => ({
+    ...recoResult(criterion, 77001 + i), nearbyAlternatives: alternatives,
+})), ...overrides });
+
+test('271 대안역은 ID로 한 카드에 묶으며 노선 순서와 시간·요금·관계를 보존하고 입력을 바꾸지 않아요', () => {
+    const group = createRuntime().load('src/utils/recommendation-display.ts').groupNearbyAlternatives;
+    const items = [alternative271(88001, 2), alternative271(88002, 3, { station: { id: 88002, name: '종로3가' } }),
+        alternative271(88001, 5, { maxMinutes: 38, totalFareWon: 3500, relation: 'PREV', relationLabel: '이전 역' })];
+    const before = JSON.stringify(items);
+    items.forEach(item => { Object.freeze(item.station); Object.freeze(item); }); Object.freeze(items);
+    const actual = group(items);
+    assert.deepEqual(plain(actual.map(item => [item.station.id, item.lineIds])), [[88001, [2, 5]], [88002, [3]]]);
+    assert.deepEqual(plain(actual[0].alternatives), [plain(items[0]), plain(items[2])]);
+    assert.equal(JSON.stringify(items), before); assert.deepEqual(plain(group([])), []);
+});
+
+test('271 이름이 같아도 ID가 다르면 다른 카드이며 완전히 같은 대안만 중복 제거해요', () => {
+    const group = createRuntime().load('src/utils/recommendation-display.ts').groupNearbyAlternatives;
+    const one = alternative271(88001, 2);
+    const changes = [{ relation: 'PREV' }, { relationLabel: '다른 관계' }, { maxMinutes: 36 }, { totalFareWon: 3400 }, { lineId: 5 }];
+    const items = [one, { ...one, station: { ...one.station } }, ...changes.map(change => ({ ...one, ...change })), alternative271(88002, 2)];
+    const actual = group(items);
+    assert.equal(actual.length, 2, '같은 이름의 별도 ID를 합치지 않아요');
+    assert.equal(actual[0].alternatives.length, 6, '관계·노선·시간·요금이 달라지면 각각 보존해요');
+    assert.deepEqual(plain(actual[0].lineIds), [2, 5]); assert.equal(actual[1].station.id, 88002);
+});
+
+test('271 서버 화면은 같은 대안역 이름을 한 번 표시하고 2·5호선 배지와 각각의 수치를 유지해요', async () => {
+    const alternatives = [alternative271(88001, 2), alternative271(88001, 5, { maxMinutes: 38, totalFareWon: 3500, relation: 'PREV', relationLabel: '이전 역' })];
+    const run = nearby271Run(alternatives); const before = JSON.stringify(run);
+    const { r, view } = await reco153Screen(run); const cards = nearbyCards271(view);
+    assert.equal(cards.length, 1); assert.equal(findAll125(cards[0], e => e.type === 'Text' && textOf(e) === '을지로4가역').length, 1);
+    const badges = findAll125(cards[0], e => e.type?.name === 'LineDot');
+    assert.deepEqual(badges.map(badge => badge.props.name), ['2호선', '5호선']);
+    for (const text of ['최대 35분', '예상 3,300원', '최대 38분', '예상 3,500원', '최적역에서 1정거장', '이전 역']) assert.ok(findText(cards[0], text), text);
+    assert.equal(textOf(cards[0]).includes('·'), false); assert.equal(JSON.stringify(run), before);
+    assert.deepEqual(r.calls.filter(call => call.url.includes('/stations/')).map(call => call.url.split('/').at(-1)).sort(), ['77001', '77002', '77003']);
+    assert.equal(r.calls.some(call => call.options.method === 'POST'), false, '표시를 위해 새 추천 요청을 보내지 않아요'); r.unmount();
+});
+
+test('271 기준 탭 전환은 해당 기준의 대안역만 표시하고 추가 서버 요청·원본 응답 변경이 없어요', async () => {
+    const run = nearby271Run([alternative271(88001, 2), alternative271(88001, 5)]);
+    run.results[1].nearbyAlternatives = [alternative271(88002, 3, { station: { id: 88002, name: '종로3가' } })];
+    const { r } = await reco153Screen(run); const before = JSON.stringify(run); const calls = r.calls.length;
+    findElement(r.render(), e => e.props?.accessibilityRole === 'tab' && !!findText(e, '요금 기준')).props.onPress();
+    let cards = nearbyCards271(r.render()); assert.equal(cards.length, 1); assert.ok(findText(cards[0], '종로3가역')); assert.equal(findText(cards[0], '을지로4가역'), null);
+    findElement(r.render(), e => e.props?.accessibilityRole === 'tab' && !!findText(e, '시간 기준')).props.onPress();
+    cards = nearbyCards271(r.render()); assert.ok(findText(cards[0], '을지로4가역')); assert.equal(r.calls.length, calls); assert.equal(JSON.stringify(run), before); r.unmount();
+});
+
+test('271 대안역이 없으면 섹션을 숨기고 알 수 없는 노선도 번호·수치를 잃지 않아요', async () => {
+    const empty = await reco153Screen(nearby271Run([])); assert.equal(nearbyCards271(empty.view).length, 0); assert.equal(findText(empty.view, '이런 역도 있어요'), null); empty.r.unmount();
+    const other = await reco153Screen(nearby271Run([alternative271(88001, 99, { maxMinutes: 0, totalFareWon: 0 })]));
+    const card = nearbyCards271(other.view)[0]; assert.ok(findText(card, '99호선')); assert.ok(findText(card, '최대 0분')); assert.ok(findText(card, '예상 0원'));
+    assert.ok(findElement(card, e => e.type?.name === 'LineDot' && e.props.name === '99호선')); other.r.unmount();
+});
+
+test('271 참여자 상세는 출도착·여유·열차번호·환승·요금·거리를 유지하고 길어도 한 줄로 자르지 않아요', async () => {
+    const mine = reco153Timetable({ nickname: '아주 긴 참여자 이름을 사용하는 사람', departureStation: { id: 88001, name: '동대문역사문화공원' } });
+    const { r, view } = await reco153Screen(reco153Run(mine));
+    const row = findElement(view, e => e.type?.name === 'ParticipantRow' && e.props.mine); const expanded = deep125(row.type({ ...row.props, opened: true }));
+    for (const text of [mine.nickname, '동대문역사문화공원역', '18:33', '18:52', '약속 8분 전 도착']) assert.ok(findText(expanded, text), text);
+    for (const label of ['환승 1회', '예상 1,650원']) assert.ok(findElement(expanded, e => e.props?.accessibilityLabel === label));
+    assert.ok(findTextIncluding(expanded, '열차 2314')); assert.ok(findTextIncluding(expanded, '열차 S3101')); assert.ok(findTextIncluding(expanded, 'km'));
+    assert.ok(findText(expanded, '환승 도보 3분 / 열차 대기 2분'));
+    for (const node of findAll125(expanded, e => e.type === 'Text')) {
+        assert.equal(node.props.numberOfLines, undefined, '상세와 참여자 이름은 말줄임하지 않아요');
+        const style = flattenStyle125(node.props.style); if (node.props.children !== '나') { assert.ok(style.fontSize >= 14); assert.ok(style.lineHeight >= 21); }
+    }
+    const detail = findElement(expanded, e => e.props?.style?.backgroundColor === '#F7F5FA'); assert.equal(detail.props.style.marginLeft, undefined);
+    assert.ok(detail.props.style.gap >= 12); assert.ok(detail.props.style.padding >= 16);
+    const calls = r.calls.length; row.props.onPress(); assert.equal(findElement(r.render(), e => e.type?.name === 'ParticipantRow' && e.props.mine).props.opened, true);
+    findElement(r.render(), e => e.type?.name === 'ParticipantRow' && e.props.mine).props.onPress(); assert.equal(findElement(r.render(), e => e.type?.name === 'ParticipantRow' && e.props.mine).props.opened, false);
+    assert.equal(r.calls.length, calls); r.unmount();
+});
+
+test('271 큰 글꼴에서도 탭·지표·버튼은 고정 높이로 자르지 않고 측정한 하단 버튼 높이만큼 여백을 남겨요', async () => {
+    const { r, view } = await reco153Screen(reco153Run(reco153Timetable()));
+    const metrics = findAll125(view, e => e.type?.name === 'Metric'); assert.equal(metrics.length, 3);
+    r.native.useWindowDimensions = () => ({ width: 320, height: 568, scale: 1, fontScale: 2 });
+    const metric = metrics[0].type(metrics[0].props); const metricStyle = flattenStyle125(metric.props.style);
+    assert.equal(metricStyle.flexBasis, 220); assert.equal(metricStyle.flexShrink, 1); assert.equal(metricStyle.height, undefined);
+    const tab = findElement(view, e => e.props?.accessibilityRole === 'tab'); const tabStyle = flattenStyle125(tab.props.style);
+    assert.equal(tabStyle.height, 'auto'); assert.ok(tabStyle.minHeight >= 44);
+    const footer = findElement(view, e => typeof e.props?.onLayout === 'function' && flattenStyle125(e.props.style).position === 'absolute'); assert.ok(footer);
+    const buttons = findAll125(footer, e => e.type === 'Pressable');
+    for (const button of buttons) { const style = flattenStyle125(button.props.style({ pressed: false })); assert.equal(style.height, undefined); assert.ok(style.minHeight >= 56); }
+    footer.props.onLayout({ nativeEvent: { layout: { height: 210 } } });
+    const scroll = findElement(r.render(), e => !!e.props?.contentContainerStyle); const padding = flattenStyle125(scroll.props.contentContainerStyle).paddingBottom;
+    assert.ok(padding >= 226); r.unmount();
+});
+
+test('271 조건 바꾸기와 조건 입력·기존 추천 요청 형식은 유지해요', async () => {
+    const { r } = await reco153Screen(reco153Run(reco153Timetable()));
+    const original = r.calls.length;
+    findElement(r.render(), e => e.props?.accessibilityLabel === '조건 바꾸기').props.onPress();
+    let input = findElement(r.render(), e => e.props?.accessibilityLabel === '이동 조건 입력'); assert.ok(input);
+    assert.equal(input.props.multiline, true); assert.equal(input.props.maxLength, 200);
+    input.props.onChangeText('모두 40분 이내');
+    r.recoRespond(() => ok(reco153Run(reco153Timetable())));
+    findElement(r.render(), e => e.type === 'Pressable' && !!findText(e, '다시 추천받기')).props.onPress(); await pumpScreen(r);
+    const requests = r.calls.slice(original).filter(call => call.options.method === 'POST'); assert.equal(requests.length, 1);
+    assert.deepEqual(JSON.parse(requests[0].options.body), { conditionText: '모두 40분 이내' }); r.unmount();
+});
+
+test('271 mock 결과도 서버 연결 없이 같은 역을 묶고 참여자 상세·기존 후보 버튼을 유지해요', async () => {
+    const r = createScreenRuntime({}, 'src/app/rooms/[roomId]/recommendations.tsx');
+    r.external.react.useCallback = (callback, dependencies) => {
+        const ref = r.external.react.useRef(null);
+        if (!ref.current || dependencies.some((value, index) => value !== ref.current.dependencies[index])) ref.current = { callback, dependencies };
+        return ref.current.callback;
+    };
+    r.external['expo-router'].useFocusEffect = callback => r.external.react.useEffect(callback, [callback]);
+    r.native.ScrollView = 'ScrollView';
+    const realtime = r.load('src/services/realtime.ts'); realtime.subscribeRoomEvents = () => () => {};
+    realtime.subscribeRealtimeState = () => () => {}; realtime.getRealtimeState = () => 'closed';
+    r.external['expo-router'].useLocalSearchParams = () => ({ roomId: 'room-2' }); let calls = 0;
+    r.context.fetch = () => { calls++; throw Error('mock 화면은 서버를 호출하지 않아요'); };
+    const service = r.load('src/services/recommendation.ts');
+    service.fetchLatestRecommendation = async () => nearby271Run([alternative271(104, 2), alternative271(104, 5)], { appliedConstraints: {} });
+    const view = await pumpScreen(r); const cards = nearbyCards271(view);
+    assert.equal(cards.length, 1); assert.ok(findText(cards[0], '을지로4가역')); assert.equal(calls, 0);
+    assert.ok(findText(view, '누가 얼마나 걸리나요')); assert.ok(findText(view, '경로 자세히 보기')); assert.ok(findText(view, '후보로 제안'));
+    assert.ok(findElement(view, e => e.props?.accessibilityLabel === '조건 바꾸기')); r.unmount();
+});
+
+
+/* ---------- #271 참여자 상세의 큰 시각·세로 경로·요약 표 ---------- */
+function tripDetail271(overrides = {}, dimensions = { width: 393, height: 852, scale: 1, fontScale: 1 }, appointmentAt = '2026-11-20T19:00:00+09:00') {
+    const r = createRuntime(); r.native.useWindowDimensions = () => dimensions;
+    const participant = { ...recoParticipant(), ...reco153Timetable(), ...overrides };
+    const Component = r.load('src/components/rooms/participant-trip-detail.tsx').default;
+    const view = deep125(Component({ participant, appointmentAt, stalePlan: null }));
+    return { r, participant, view };
+}
+
+test('271 새 상세는 큰 출발·도착 시각과 환승 경로의 승하차 시각·열차번호를 실제 값대로 표시해요', () => {
+    const { view } = tripDetail271();
+    for (const text of ['18:33', '18:52', '강남역', '18:38', '교대역', '18:42', '18:47', '고속터미널역', '약속 8분 전 도착']) assert.ok(findText(view, text), text);
+    assert.ok(findText(view, '환승 도보 3분 / 열차 대기 2분'));
+    for (const value of ['열차 2314', '열차 S3101', '2개 역', '1개 역']) assert.ok(findTextIncluding(view, value), value);
+    const hero = findElement(view, e => e.props?.accessibilityLabel === '18:33 출발 → 18:52 도착');
+    const clocks = findAll125(hero, e => e.type === 'Text' && ['18:33', '18:52'].includes(textOf(e)));
+    assert.equal(clocks.length, 2); assert.ok(clocks.every(clock => flattenStyle125(clock.props.style).fontSize === 28));
+    for (const label of ['환승 1회', '예상 1,650원', '거리 9.8km', '혼잡도 보통']) assert.ok(findElement(view, e => e.props?.accessibilityLabel === label), label);
+    assert.equal(textOf(view).includes('·'), false); assert.equal(findTextIncluding(view, '탑승 강남역'), null, '이미 첫 구간에 표시한 탑승 정보는 중복하지 않아요');
+});
+
+test('271 예상값 경로는 역·호선·역 수와 요약만 표시하며 구간별 열차 시각·번호를 만들지 않아요', () => {
+    const { view } = tripDetail271({ ...reco153Estimate(), transferCount: 0,
+        segments: [{ lineId: 2, lineName: '2호선', color: '#00A84D', fromStationName: '강남', toStationName: '동대문역사문화공원', stationCount: 9 }] });
+    for (const value of ['18:38', '19:00', '강남역', '동대문역사문화공원역', '2호선 / 9개 역', '약속 시각에 딱 맞춰 도착']) assert.ok(findText(view, value), value);
+    assert.ok(findTextIncluding(view, '고정 소요시간으로 계산한 예상값이에요'));
+    assert.equal(findTextIncluding(view, '열차 2314'), null); assert.equal(findTextIncluding(view, '환승 도보'), null);
+    const onlyTimes = findAll125(view, e => e.type === 'Text' && /^\d{2}:\d{2}$/.test(textOf(e)));
+    assert.deepEqual(onlyTimes.map(textOf), ['18:38', '19:00'], '전체 출도착 이외에 임의의 열차 시각이 없어요');
+});
+
+test('271 도착 시각·혼잡도가 없으면 칸에 정보 없음을 표시하고 시각·수치를 만들지 않아요', () => {
+    const { view } = tripDetail271({ ...reco153Past, congestion: null });
+    assert.ok(findText(view, '18:38')); assert.ok(findText(view, '도착')); assert.ok(findText(view, '혼잡도'));
+    assert.ok(findElement(view, e => e.type === 'Ionicons' && e.props.name === 'arrow-forward'));
+    const missing = findAll125(view, e => e.type === 'Text' && textOf(e) === '정보 없음');
+    assert.equal(missing.length, 2); assert.ok(missing.every(node => flattenStyle125(node.props.style).color === '#8A8491'));
+    assert.equal(findTextIncluding(view, '지원하지 않아요'), null); assert.equal(findTextIncluding(view, '미정'), null);
+    assert.equal(findText(view, '00:00'), null);
+    assert.equal(findAll125(view, e => e.props?.accessible === true && /^(환승 |예상 |거리 |혼잡도 )/.test(e.props.accessibilityLabel ?? '')).length, 4);
+    assert.equal(findTextIncluding(view, '기준 혼잡도'), null);
+});
+
+test('271 이전 날짜 출발·자정 이후 도착은 날짜와 다음 날 표기를 보존해요', () => {
+    const { view } = tripDetail271({ ...reco153Estimate(), departureAt: '2026-11-19T23:50:00+09:00', arriveAt: '2026-11-20T00:20:00+09:00' },
+        undefined, '2026-11-20T00:30:00+09:00');
+    assert.ok(findTextIncluding(view, '11.19')); assert.ok(findText(view, '23:50')); assert.ok(findText(view, '00:20')); assert.ok(findText(view, '다음 날 도착'));
+    assert.ok(findElement(view, e => e.props?.accessibilityLabel === '11.19 23:50 출발 → 다음 날 00:20 도착'));
+});
+
+test('271 첫 구간이 없거나 탑승 열차 값이 다르면 기존 탑승 정보를 별도로 남겨요', () => {
+    const noLegs = tripDetail271({ legs: [] }); assert.ok(findTextIncluding(noLegs.view, '탑승 강남역 18:38 / 2호선 성수행(내선) / 열차 2314'));
+    const timetable = reco153Timetable(); const changed = tripDetail271({ boardingTrain: { ...timetable.boardingTrain, trainCode: 'OTHER2314' } });
+    assert.ok(findTextIncluding(changed.view, '열차 OTHER2314')); assert.ok(findTextIncluding(changed.view, '열차 2314'));
+});
+
+test('271 작은 화면·큰 글꼴에서는 요약 표를 2열로 바꾸고 시각·경로를 고정 높이로 자르지 않아요', () => {
+    for (const dimensions of [{ width: 320, height: 568, scale: 1, fontScale: 1 }, { width: 393, height: 852, scale: 1, fontScale: 2 }]) {
+        const { view } = tripDetail271({}, dimensions);
+        const cells = findAll125(view, e => e.props?.accessible === true && /^(환승 |예상 |거리 |혼잡도 )/.test(e.props.accessibilityLabel ?? ''));
+        assert.equal(cells.length, 4); assert.ok(cells.every(cell => flattenStyle125(cell.props.style).flexBasis === '50%'));
+        for (const node of findAll125(view, e => e.type === 'Text')) { assert.equal(node.props.numberOfLines, undefined); assert.equal(flattenStyle125(node.props.style).height, undefined); }
+        assert.ok(findText(view, '18:33')); assert.ok(findText(view, '18:52')); assert.ok(findText(view, '고속터미널역'));
+        if (dimensions.fontScale > 1.4) {
+            const hero = findElement(view, e => e.props?.accessibilityLabel === '18:33 출발 → 18:52 도착');
+            assert.equal(flattenStyle125(hero.props.style).flexDirection, 'column');
+            assert.ok(findElement(hero, e => e.type === 'Ionicons' && e.props.name === 'arrow-down'));
+        }
+    }
+});
+
+test('271 참여자는 한 명씩 펼치고 다른 참여자를 열면 이전 상세는 닫혀요', async () => {
+    const { r } = await reco153Screen(reco153Run(reco153Timetable()));
+    let rows = findAll125(r.render(), e => e.type?.name === 'ParticipantRow'); assert.ok(rows.length >= 2);
+    rows[0].props.onPress(); rows = findAll125(r.render(), e => e.type?.name === 'ParticipantRow'); assert.equal(rows.filter(row => row.props.opened).length, 1);
+    assert.equal(rows[0].props.opened, true); rows[1].props.onPress(); rows = findAll125(r.render(), e => e.type?.name === 'ParticipantRow');
+    assert.equal(rows[0].props.opened, false); assert.equal(rows[1].props.opened, true); assert.equal(rows.filter(row => row.props.opened).length, 1); r.unmount();
 });
