@@ -4881,6 +4881,40 @@ test('120/121 room recommendation route navigation carries roomId', async () => 
     assert.equal(pushes[0].params.roomId, ROOM_QUERY_ID); r.unmount();
 });
 
+test('273 추천 입력은 조건·칩 없이 기준만 선택하고 8.1은 빈 body, 결과의 조건 해석은 그대로 보여요', async () => {
+    for (const label of ['시간', '요금', '거리']) {
+        const r = recoScreen(); let created = null;
+        r.recoRespond(async (_url, options) => {
+            if (options.method === 'POST') created = recoRun({ conditionText: '채팅에서 요청한 조건', appliedConstraints: { maxMinutes: 30 } });
+            return ok(created);
+        });
+        let view = await pumpScreen(r);
+        assert.equal(findElement(view, node => node.type === 'TextInput' || node.props?.accessibilityLabel === '이동 조건 입력'), null);
+        assert.equal(findElement(view, node => node.props?.accessibilityLabel === 'AI가 조건을 해석해요'), null);
+        for (const text of ['조건 선택', 'AI', '시간 비슷하게', '환승 적게', '30분 이내', '2,000원 이내']) assert.equal(findText(view, text), null);
+        assert.equal(findTextIncluding(view, '조건을 비우면 제약 없이 추천해요.'), null);
+        assert.ok(findText(view, '추천 기준'));
+        assert.ok(findText(view, 'LR'));
+        assert.ok(findText(view, '원하는 조건이 있으면 채팅에서 @링크로에게 말해 보세요.'));
+        assert.ok(findElement(view, node => node.props?.accessibilityLabel === '내 출발역 설정'));
+        const criterion = () => findElement(r.render(), node => node.type === 'Pressable' && findText(node.props.children, label));
+        criterion().props.onPress(); assert.equal(criterion().props.accessibilityState.selected, true);
+        const calculate = findElement(r.render(), node => node.type === 'Pressable' && findText(node.props.children, '중간역 계산하기'));
+        assert.ok(calculate); assert.equal(calculate.props.disabled, false); calculate.props.onPress();
+        view = await pumpScreen(r);
+        const posts = r.calls.filter(call => call.options.method === 'POST'); assert.equal(posts.length, 1);
+        assert.equal(posts[0].url, `https://example.test/api/v1/rooms/${ROOM_QUERY_ID}/recommendations`);
+        const body = JSON.parse(posts[0].options.body);
+        assert.deepEqual(body, {}); assert.equal(Object.hasOwn(body, 'conditionText'), false); assert.equal(Object.hasOwn(body, 'filter'), false);
+        assert.ok(findText(view, '이렇게 이해했어요')); assert.ok(findText(view, '"채팅에서 요청한 조건"')); assert.ok(findText(view, '모두 30분 이내'));
+        assert.equal(findText(view, '원하는 조건이 있으면 채팅에서 @링크로에게 말해 보세요.'), null);
+        findElement(view, node => node.props?.accessibilityLabel === '조건 바꾸기').props.onPress();
+        view = r.render();
+        const recent = findElement(view, node => node.type === 'Pressable' && findText(node.props.children, '최근 추천 결과 보기'));
+        assert.ok(recent); recent.props.onPress(); assert.ok(findText(r.render(), '이렇게 이해했어요')); r.unmount();
+    }
+});
+
 test('추천 화면(서버): 빈 기록은 입력 보기, 계산 버튼 연타는 8.1 한 번, 결과의 혼잡도 null 은 점·라벨·문구만 숨겨요', async () => {
     const r = recoScreen();
     let resolveCreate;

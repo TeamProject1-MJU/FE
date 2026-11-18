@@ -13,7 +13,7 @@ import {
     StyleSheet,
     View,
 } from 'react-native';
-import { Text, TextInput } from '@/components/app-text';
+import { Text } from '@/components/app-text';
 import { StatusBar } from 'expo-status-bar';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -47,7 +47,6 @@ import {
     type AppliedConstraints,
     type ParticipantTime,
     type RecommendationCriterion,
-    type RecommendationFilter,
     type RecommendationResult,
     type RecommendationRun,
 } from '@/types/recommendation';
@@ -74,7 +73,6 @@ const LV_DISABLED = '#CFC6DA';
 const LV_WARN = '#6F6B78';
 const LV_ERROR = '#C2415B';
 const LV_ERROR_SOFT = '#FBECEF';
-const LV_PLACEHOLDER = '#B3AFBA';
 /* 결과 보기 라벤더 톤 (#206, design-ref 시안 08 추천 중간역) */
 const LV_SUBTEXT = '#4A4553';
 const LV_BAR = '#B89BC7';
@@ -93,14 +91,6 @@ const CRITERIA: { key: RecommendationCriterion; label: string; short: string; ic
     { key: 'DISTANCE', label: '거리 기준', short: '거리', icon: 'map-outline' },
 ];
 
-/** 빠른 조건 칩: filter 항목이 있는 건 filter 로, 없는 건 자연어에 붙여 AI 해석으로 보냅니다 (명세 8.1) */
-const QUICK_CHIPS: { key: string; label: string; filter?: RecommendationFilter; text?: string }[] = [
-    { key: 'fair', label: '시간 비슷하게', text: '모두 이동 시간이 비슷했으면 좋겠어' },
-    { key: 'transfer', label: '환승 적게', filter: { maxTransfers: 1 } },
-    { key: 'min30', label: '30분 이내', filter: { maxMinutes: 30 } },
-    { key: 'fare2000', label: '2,000원 이내', filter: { maxFareWon: 2000 } },
-];
-
 const CONGESTION_COLOR: Record<string, string> = { COMFORTABLE: '#2bcf9a', RELAXED: '#8fd14f', NORMAL: '#f2b705', CROWDED: '#f28c28', VERY_CROWDED: '#e5484d' };
 
 type Params = { roomId: string; runId?: string; mock?: 'error' | 'latest-error' };
@@ -110,7 +100,7 @@ type LoadError = 'ROOM_NOT_FOUND' | 'NOT_ROOM_MEMBER' | 'RUN_NOT_FOUND' | 'UNKNO
  * 중간역 추천 화면 (#49, 설계서 그림 30·33·34·37, 명세 8.1~8.3)
  *
  * 한 라우트에 두 보기가 있어요.
- * - 입력 보기(그림 30): 모두의 출발역 → 추천 기준 → 자연어 조건·필터 → "중간역 계산하기"(8.1)
+ * - 입력 보기(그림 30): 모두의 출발역 → 추천 기준 → "중간역 계산하기"(8.1, 조건 없이 실행)
  * - 결과 보기(그림 33·34): 최신 여부 안내(isStale) → 기준 탭 → 추천 카드(예상 시간·요금, 멤버별 이동, AI 이유) → 후보 제안·경로 확인 → 주변 대안역
  *
  * - 방 진입(포커스)마다 8.2 를 다시 조회해 isStale·staleReasons 를 갱신해요. 실행 기록이 없으면 입력 보기.
@@ -123,7 +113,6 @@ type LoadError = 'ROOM_NOT_FOUND' | 'NOT_ROOM_MEMBER' | 'RUN_NOT_FOUND' | 'UNKNO
  *   결과가 있는 상태에서 내 출발역을 바꾸면 isStale: true(MEMBERS_CHANGED) 안내 + 다시 추천받기
  *   /rooms/room-4/recommendations?mock=error           → 첫 계산 실패(NETWORK_ERROR), 다시 시도하면 성공
  *   /rooms/room-4/recommendations?mock=latest-error    → 첫 8.2 조회 실패, 다시 시도하면 성공
- *   조건에 "5분" 처럼 아주 짧은 시간을 넣으면 "조건에 맞는 역 없음"(results: []) 을 볼 수 있어요
  *
  * 서버 모드(#99): services/recommendation.ts 가 8.1~8.3 을 불러요. ?mock= 은 무시돼요.
  * - 인증 오류(TOKEN_*·401)는 A-1 공통 처리에 맡기고 이 화면에서 따로 안내하지 않아요.
@@ -153,8 +142,6 @@ export default function RoomRecommendationsScreen() {
     const [view, setView] = useState<'input' | 'result'>('result');
     const [criterion, setCriterion] = useState<RecommendationCriterion>('TIME');
     const [stationNameWidth, setStationNameWidth] = useState(0);
-    const [conditionText, setConditionText] = useState('');
-    const [chips, setChips] = useState<Set<string>>(new Set());
     const [running, setRunning] = useState(false);
     /** 상태 반영 전에 버튼이 두 번 눌려도 8.1 을 한 번만 보내도록 바로 바뀌는 값으로 막아요. */
     const runningRef = useRef(false);
@@ -337,27 +324,6 @@ export default function RoomRecommendationsScreen() {
 
     const goBack = () => (router.canGoBack() ? router.back() : router.replace({ pathname: '/rooms/[roomId]', params: { roomId } }));
 
-    const toggleChip = (key: string) => {
-        setChips(prev => {
-            const next = new Set(prev);
-            if (next.has(key)) next.delete(key);
-            else next.add(key);
-            return next;
-        });
-    };
-
-    const buildRequest = () => {
-        const filter: RecommendationFilter = {};
-        const texts: string[] = [];
-        for (const chip of QUICK_CHIPS) {
-            if (!chips.has(chip.key)) continue;
-            if (chip.filter) Object.assign(filter, chip.filter);
-            if (chip.text) texts.push(chip.text);
-        }
-        const text = [conditionText.trim(), ...texts].filter(Boolean).join('. ');
-        return { conditionText: text || undefined, filter: Object.keys(filter).length ? filter : undefined };
-    };
-
     /** 8.1 실행 (처음 계산 · 다시 추천받기 둘 다 같은 호출) */
     const runRecommendation = async () => {
         if (!detail || running || runningRef.current || blockReason) return;
@@ -372,7 +338,7 @@ export default function RoomRecommendationsScreen() {
         try {
             const fail = createFailNext.current;
             createFailNext.current = false; // 다시 시도하면 성공하도록
-            const created = await createRecommendation(detail.id, buildRequest(), fail ? 'error' : undefined);
+            const created = await createRecommendation(detail.id, {}, fail ? 'error' : undefined);
             if (!context.active || scope !== roomEventsScope()) return;
             runRef.current = created;
             setNewRecommendation(false);
@@ -620,33 +586,10 @@ export default function RoomRecommendationsScreen() {
                             })}
                         </View>
 
-                        {/* ❻ 이동 조건 입력 */}
-                        <View style={[lv.sectionHead, lv.sectionGap]}>
-                            <Text style={lv.sectionTitle}>조건 <Text style={lv.optional}>선택</Text></Text>
-                            <View style={lv.aiTag} accessible accessibilityLabel="AI가 조건을 해석해요"><Text style={lv.aiTagText}>AI</Text></View>
+                        <View style={lv.chatHint}>
+                            <View style={lv.chatIcon} accessible={false}><Text style={lv.chatIconText}>LR</Text></View>
+                            <Text style={lv.chatHintText}>원하는 조건이 있으면 채팅에서 <Text style={lv.chatMention}>@링크로</Text>에게 말해 보세요.</Text>
                         </View>
-                        <TextInput
-                            style={lv.conditionInput}
-                            value={conditionText}
-                            onChangeText={setConditionText}
-                            placeholder="예: 다들 40분 안쪽이고 환승은 한 번 이하였으면 좋겠어"
-                            placeholderTextColor={LV_PLACEHOLDER}
-                            multiline
-                            maxLength={200}
-                            accessibilityLabel="이동 조건 입력"
-                        />
-                        <View style={lv.quickRow}>
-                            {QUICK_CHIPS.map(chip => {
-                                const on = chips.has(chip.key);
-                                return (
-                                    <Pressable key={chip.key} style={[lv.quickChip, on && lv.quickChipOn]} onPress={() => toggleChip(chip.key)} accessibilityRole="button" accessibilityState={{ selected: on }}>
-                                        {on && <Ionicons name="checkmark" size={13} color={WHITE} />}
-                                        <Text style={[lv.quickText, on && lv.quickTextOn]}>{chip.label}</Text>
-                                    </Pressable>
-                                );
-                            })}
-                        </View>
-                        <Text style={lv.hint}>조건을 비우면 제약 없이 추천해요. 자연어와 필터 칩에 같은 항목이 있으면 필터가 우선이에요.</Text>
 
                         {/* 안내: 출발역 미설정, 인원 부족, 실행 실패 */}
                         {blockReason && (
@@ -1213,7 +1156,6 @@ const lv = StyleSheet.create({
     sectionGap: { marginTop: 22 },
     sectionTitle: { fontSize: 15, fontWeight: '700', color: LV_TEXT },
     sectionSub: { fontSize: 12.5, color: LV_GRAY, marginTop: 2, marginBottom: 8, paddingHorizontal: ROOM_CARD_PADDING },
-    optional: { fontSize: 13, fontWeight: '400', color: LV_GRAY },
     counter: { fontSize: 13, fontWeight: '600', color: LV_WARN },
     counterDone: { color: LV_PURPLE },
 
@@ -1237,15 +1179,11 @@ const lv = StyleSheet.create({
     segmentText: { fontSize: 13, fontWeight: '500', color: LV_GRAY },
     segmentTextOn: { fontWeight: '700', color: LV_TEXT },
 
-    aiTag: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, backgroundColor: LV_SEGMENT },
-    aiTagText: { fontSize: 11.5, fontWeight: '700', color: LV_PURPLE },
-    conditionInput: { minHeight: 72, borderWidth: 1, borderColor: LV_FIELD_BORDER, borderRadius: 14, backgroundColor: WHITE, paddingVertical: 12, paddingHorizontal: 14, fontSize: 14.5, lineHeight: 22, color: LV_TEXT, textAlignVertical: 'top', ...Platform.select({ web: { outlineStyle: 'none' } as object }) },
-    quickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
-    quickChip: { flexDirection: 'row', alignItems: 'center', gap: 4, height: 34, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: LV_FIELD_BORDER, backgroundColor: WHITE },
-    quickChipOn: { backgroundColor: LV_PURPLE, borderColor: LV_PURPLE },
-    quickText: { fontSize: 13, fontWeight: '600', color: LV_PURPLE },
-    quickTextOn: { color: WHITE },
-    hint: { fontSize: 12, lineHeight: 18, color: LV_GRAY, marginTop: 6, paddingHorizontal: ROOM_CARD_PADDING },
+    chatHint: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14, paddingVertical: 12, paddingHorizontal: 14, borderRadius: 14, borderWidth: 1, borderColor: LV_CARD_BORDER, backgroundColor: WHITE },
+    chatIcon: { width: 26, height: 26, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: LV_PURPLE },
+    chatIconText: { fontSize: 11.5, fontWeight: '800', color: WHITE },
+    chatHintText: { flex: 1, fontSize: 12, lineHeight: 18, color: LV_TEXT },
+    chatMention: { fontWeight: '700', color: LV_PURPLE },
 
     warnBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingVertical: 8, paddingHorizontal: 10, borderRadius: 10, backgroundColor: '#F4F1F7', marginTop: 14 },
     warnText: { flex: 1, fontSize: 12, lineHeight: 18, fontWeight: '600', color: '#6F6B78' },
