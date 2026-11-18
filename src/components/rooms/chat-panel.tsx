@@ -1,4 +1,5 @@
 import MemberAvatar, { memberTone } from '@/components/rooms/member-avatar';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { router } from 'expo-router';
 import {
@@ -16,7 +17,7 @@ import { Text, TextInput } from '@/components/app-text';
 import type { useRoomChat } from '@/hooks/use-room-chat';
 import { parseChatEmphasis, toChatDisplayContent } from '@/services/chat';
 import { useMock as isMockMode } from '@/services/api/config';
-import type { PendingChatMessage } from '@/types/chat';
+import type { ChatMessageMeta, PendingChatMessage } from '@/types/chat';
 import type { RoomMember } from '@/types/room';
 
 const NAVY = '#25212D';
@@ -43,6 +44,7 @@ type Row = {
     content: string;
     createdAt: string;
     pending?: PendingChatMessage;
+    meta?: ChatMessageMeta;
 };
 
 function dateLabel(value: string, dateOnly = false) {
@@ -55,6 +57,7 @@ function dateLabel(value: string, dateOnly = false) {
 
 export default function RoomChatPanel({
                                           controller,
+                                          roomId,
                                           myUserId,
                                           members,
                                           ownerId,
@@ -62,6 +65,7 @@ export default function RoomChatPanel({
                                           onInputFocus,
                                       }: {
     controller: ReturnType<typeof useRoomChat>;
+    roomId: string;
     myUserId: string;
     members: RoomMember[];
     ownerId?: string;
@@ -135,6 +139,7 @@ export default function RoomChatPanel({
                             : nickname,
                 content: toChatDisplayContent(message.content),
                 createdAt: message.createdAt,
+                meta: message.meta,
             };
         });
 
@@ -457,6 +462,18 @@ export default function RoomChatPanel({
                                                     ))
                                                     : message.content}
                                             </Text>
+                                            {message.kind === 'ai' && message.meta?.type === 'RECOMMENDATION' && (
+                                                <Pressable
+                                                    style={styles.recommendationButton}
+                                                    accessibilityRole="button"
+                                                    accessibilityLabel="상세보기"
+                                                    onPress={() => router.push({ pathname: '/rooms/[roomId]/recommendations', params: { roomId, runId: message.meta!.runId } })}
+                                                >
+                                                    <Ionicons name="train-outline" size={16} color={MINT} />
+                                                    <Text style={styles.recommendationButtonText}>상세보기</Text>
+                                                    <Ionicons name="chevron-forward" size={16} color={MINT} />
+                                                </Pressable>
+                                            )}
                                         </View>
 
                                         {message.pending?.status ===
@@ -788,6 +805,8 @@ const styles = StyleSheet.create({
     mineText: {
         color: '#fff',
     },
+    recommendationButton: { marginTop: 10, minHeight: 44, paddingHorizontal: 12, borderRadius: 22, backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', gap: 6 },
+    recommendationButtonText: { flex: 1, color: MINT, fontSize: 14, lineHeight: 21, fontWeight: '700' },
     failure: {
         alignItems: 'flex-end',
         gap: 6,

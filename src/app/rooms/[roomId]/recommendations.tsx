@@ -76,7 +76,6 @@ const LV_ERROR_SOFT = '#FBECEF';
 const LV_SUBTEXT = '#4A4553';
 const LV_BAR = '#B89BC7';
 const LV_BAR_TRACK = '#F4F1F7';
-const LV_CHIP_BORDER = '#D9CCE4';
 const LV_ROW_BORDER = '#EFEBF3';
 const LV_CHEVRON = '#B4AFBC';
 const LV_STALE_SOFT = '#F4F1F7';
@@ -647,9 +646,7 @@ export default function RoomRecommendationsScreen() {
             : sharing ? '후보로 올리는 중' : '후보로 제안';
     const summary = [
         `${members.length}명`,
-        appointmentAt ? `${formatMonthDay(appointmentAt)} ${formatTime(appointmentAt)} 약속` : '약속 시각 미정',
-        CRITERIA.find(c => c.key === criterion)?.label ?? '',
-        constraintSummary(run.appliedConstraints),
+        appointmentAt ? `약속 시각 ${formatMonthDay(appointmentAt)} ${formatTime(appointmentAt)}` : '약속 시각 미정',
     ].filter(Boolean).join(', ');
     /** 시안 "다른 기준 결과": 지금 실행(run.results)에 들어 있는 다른 기준만. 누르면 기준 탭만 바꿔요(새 요청 없음). */
     const otherResults = result ? run.results.filter(item => item.criterion !== result.criterion) : [];
@@ -714,17 +711,17 @@ export default function RoomRecommendationsScreen() {
                         </Text>
                     </View>
                 )}
-                {run.isStale === false && (
-                    <View style={styles.freshRow}><Ionicons name="checkmark-circle" size={15} color={LV_PURPLE} /><Text style={styles.freshText}>지금 약속 시각, 참여자 기준 최신 결과예요, {formatMonthDay(createdAt)} {formatTime(createdAt)} 실행</Text></View>
-                )}
 
                 {/* 이렇게 이해했어요 (conditionText → appliedConstraints) */}
                 {(run.conditionText || Object.keys(run.appliedConstraints).length > 0 || understoodMessage) && (
                     <View style={styles.understoodBox}>
-                        <Text style={styles.understoodTitle}>이렇게 이해했어요</Text>
+                        <View style={styles.understoodHeading}>
+                            <View style={styles.understoodBadge}><Text style={styles.understoodBadgeText}>LR</Text></View>
+                            <Text style={styles.understoodTitle}>이렇게 이해했어요</Text>
+                        </View>
                         {!!run.conditionText && <Text style={styles.understoodQuote}>&quot;{run.conditionText}&quot;</Text>}
                         <View style={styles.constraintRow}>
-                            {constraintChips(run.appliedConstraints, members).map(label => <View key={label} style={styles.constraintChip}><Text style={styles.constraintText}>{label}</Text></View>)}
+                            {constraintChips(run.appliedConstraints, members).map(label => <View key={label} style={styles.constraintChip}><Text style={styles.constraintCheck}>✓</Text><Text style={styles.constraintText}>{label}</Text></View>)}
                             {Object.keys(run.appliedConstraints).length === 0 && <Text style={styles.constraintNone}>적용된 제약 없음</Text>}
                         </View>
                         {!!understoodMessage && <View style={styles.understoodNotice}><Ionicons name="information-circle-outline" size={16} color={LV_PURPLE} /><Text style={styles.understoodMessage}>{understoodMessage}</Text></View>}
@@ -988,14 +985,6 @@ function constraintChips(c: AppliedConstraints, members: RoomMember[]) {
     return chips;
 }
 
-function constraintSummary(c: AppliedConstraints) {
-    const parts: string[] = [];
-    if (c.maxMinutes !== undefined) parts.push(`${c.maxMinutes}분 이내`);
-    if (c.maxTransfers !== undefined) parts.push(`환승 ${c.maxTransfers}회 이하`);
-    if (c.maxFareWon !== undefined) parts.push(`${c.maxFareWon.toLocaleString()}원 이내`);
-    return parts.join(', ');
-}
-
 /* ───────────────────────── 스타일 ───────────────────────── */
 
 /* 결과 보기 전용 (#206, design-ref 시안 08 추천 중간역). 입력 보기 스타일(lv)과 같은 라벤더 톤이에요. */
@@ -1026,14 +1015,16 @@ const styles = StyleSheet.create({
     smallButton: { minHeight: 44, paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10, backgroundColor: LV_PURPLE, alignItems: 'center', justifyContent: 'center' },
     smallButtonOff: { backgroundColor: LV_DISABLED },
     smallButtonText: { fontSize: 14, lineHeight: 21, fontWeight: '600', color: WHITE, textAlign: 'center' },
-    freshRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, marginTop: 12, paddingHorizontal: ROOM_CARD_PADDING },
-    freshText: { flexShrink: 1, fontSize: 14, lineHeight: 21, color: LV_SUBTEXT },
 
-    understoodBox: { marginTop: 12, padding: 14, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, gap: 8 },
+    understoodBox: { marginTop: 12, padding: 14, borderRadius: 16, backgroundColor: '#EDE8F3', gap: 8 },
+    understoodHeading: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+    understoodBadge: { width: 24, height: 24, borderRadius: 7, backgroundColor: LV_PURPLE, alignItems: 'center', justifyContent: 'center' },
+    understoodBadgeText: { color: WHITE, fontSize: 10, fontWeight: '800' },
     understoodTitle: { fontSize: 14, lineHeight: 21, fontWeight: '700', color: LV_PURPLE },
     understoodQuote: { fontSize: 15, lineHeight: 23, color: LV_TEXT, fontStyle: 'italic' },
     constraintRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
-    constraintChip: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1, borderColor: LV_CHIP_BORDER },
+    constraintChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 20, backgroundColor: WHITE },
+    constraintCheck: { fontSize: 14, color: LV_PURPLE },
     constraintText: { fontSize: 14, lineHeight: 21, fontWeight: '600', color: LV_PURPLE },
     constraintNone: { fontSize: 14, lineHeight: 21, color: LV_SUBTEXT },
     understoodNotice: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, backgroundColor: '#F4F1F7', borderRadius: 10, paddingVertical: 8, paddingHorizontal: 10 },

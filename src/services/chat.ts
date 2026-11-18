@@ -5,6 +5,8 @@ import { useMock as isMockMode } from '@/services/api/config';
 import { removeCachedRoom, assertRoomCacheScope, getRoomCacheScope, readCachedRoomDetail, subscribeRoomCacheReset } from '@/services/room-cache';
 import { RoomError, type RoomDetail } from '@/types/room';
 import { subscribeRoomMockChanges } from '@/stores/room-mock-events';
+import { createRecommendation } from '@/services/recommendation';
+import { RecommendationError } from '@/types/recommendation';
 import type {
     ChatMessage,
     ChatMessagePage,
@@ -91,10 +93,12 @@ const invalidResponse = (): never => { throw new ApiError('UNKNOWN_ERROR'); };
 export function parseChatMessage(value: unknown): ChatMessage {
     if (!record(value) || !uuid(value.id) || typeof value.senderType !== 'string' || !['USER', 'AI', 'SYSTEM'].includes(value.senderType)
         || typeof value.content !== 'string' || typeof value.createdAt !== 'string' || !Number.isFinite(Date.parse(value.createdAt))
-        || value.meta !== null || !(value.nickname === null || typeof value.nickname === 'string')
+        || !(value.nickname === null || typeof value.nickname === 'string')
         || (value.senderType === 'USER' ? !uuid(value.senderId) : value.senderId !== null || value.nickname !== null)) return invalidResponse();
     return { id: value.id, senderType: value.senderType as ChatMessage['senderType'], senderId: value.senderId as string | null,
-        nickname: value.nickname, content: value.content, createdAt: value.createdAt, meta: null };
+        nickname: value.nickname, content: value.content, createdAt: value.createdAt,
+        meta: record(value.meta) && value.meta.type === 'RECOMMENDATION' && typeof value.meta.runId === 'string' && value.meta.runId.trim()
+            ? { type: 'RECOMMENDATION', runId: value.meta.runId } : null };
 }
 
 function parseChatPage(value: unknown): ChatMessagePage {
@@ -205,7 +209,7 @@ function newMessage(
     };
 }
 
-function getMessages(detail: RoomDetail, mock?: ChatMockScenario) {
+async function getMessages(detail: RoomDetail, mock?: ChatMockScenario) {
     const key = storeKey(detail.id, mock);
     const cached = messagesByRoom.get(key);
 
@@ -290,6 +294,20 @@ function getMessages(detail: RoomDetail, mock?: ChatMockScenario) {
     }
 
     messagesByRoom.set(key, items);
+    // 출발역이 모두 있는 mock 방(기본 room-2)에 실제 mock 실행을 연결해요.
+    // 고정된 가짜 runId로 상세보기가 RUN_NOT_FOUND가 되지 않도록 해요.
+    if (mock !== 'chat-empty' && detail.members.length >= 2 && detail.members.every(member => member.departureStation)) {
+        try {
+            const run = await createRecommendation(detail.id, { conditionText: '모두 40분 이내, 환승 1회 이하' });
+            if (messagesByRoom.get(key) === items) items.push({
+                ...newMessage('AI', '출발역과 조건을 바탕으로 중간역을 찾아봤어요. 상세보기에서 추천 결과를 확인해 보세요.'),
+                meta: { type: 'RECOMMENDATION', runId: run.runId },
+            });
+        } catch (error) {
+            // mock 방의 출발역이 미지원 등으로 계산 불가여도 기존 채팅은 열려요.
+            if (!(error instanceof RecommendationError)) throw error;
+        }
+    }
     return items;
 }
 
@@ -335,7 +353,7 @@ export async function fetchChatMessages(
         );
     }
 
-    const messages = getMessages(detail, options.mock);
+    const messages = await getMessages(detail, options.mock);
 
     const end = options.cursor
         ? messages.findIndex(message => message.id === options.cursor)
@@ -366,6 +384,7 @@ async function finishMockAi(
     key: string,
     messages: ChatMessage[],
     fail: boolean,
+    content: string,
 ) {
     try {
         await wait(1800);
@@ -383,6 +402,16 @@ async function finishMockAi(
                     '@linkro가 지금 답변하지 못했어요. 잠시 후 다시 질문해 주세요.',
                 ),
             );
+        } else if (roomId === 'room-2' && content.includes('추천')) {
+            const run = await createRecommendation(roomId, {
+                conditionText: '모두 40분 이내, 환승 1회 이하',
+            });
+            await requireChatMember(roomId);
+            if (messagesByRoom.get(key) !== messages) return;
+            messages.push({
+                ...newMessage('AI', '모두 40분 이내, 환승 1회 이하 조건으로 중간역을 추천했어요. 상세보기에서 확인해 보세요.'),
+                meta: { type: 'RECOMMENDATION', runId: run.runId },
+            });
         } else {
             const departures = detail.members
                 .map(
@@ -504,7 +533,7 @@ export async function sendChatMessage(
         member => member.userId === getMyUserId(),
     )!;
 
-    const messages = getMessages(detail, options.mock);
+    const messages = await getMessages(detail, options.mock);
     const message = newMessage('USER', content, me.userId, me.nickname);
 
     messages.push(message);
@@ -520,7 +549,7 @@ export async function sendChatMessage(
         pendingAiByRoom.set(key, (pendingAiByRoom.get(key) ?? 0) + 1);
 
         const fail = shouldFail(roomId, options.mock, 'chat-ai-error');
-        void finishMockAi(roomId, key, messages, fail);
+        void finishMockAi(roomId, key, messages, fail, content);
     }
 
     notify(roomId);
