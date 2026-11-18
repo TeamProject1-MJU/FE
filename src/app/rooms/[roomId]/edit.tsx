@@ -28,15 +28,22 @@ import {
 import { ApiError, isAuthError } from '@/services/api/errors';
 import { RoomError, type RoomDetail } from '@/types/room';
 
-const NAVY = '#0f1c3f';
-const MINT = '#2bcf9a';
-const MINT_DEEP = '#12a77a';
-const WHITE = '#ffffff';
-const BG = '#f3f5f8';
-const SECONDARY = '#6b7488';
-const BORDER = '#e6e9ef';
-const RED = '#d6455d';
-const ORANGE = '#c77a00';
+// 라벤더 디자인 ("새 약속방" 화면과 같은 색)
+const BG = '#F7F5FA';
+const WHITE = '#FFFFFF';
+const TEXT = '#25212D';
+const SECONDARY = '#83808B';
+const SUB = '#4A4553';
+const MAIN = '#5C3F78';
+const SOFT = '#EDE8F3';
+const BORDER = '#E8E4ED';
+const PLACEHOLDER = '#A8A3B0';
+const DISABLED = '#CFC6DA';
+const RED = '#C64F65';
+const PINK = '#F8EAF0';
+const PINK_TEXT = '#8C4C62';
+const GRABBER = '#DCD7E3';
+const DIM = 'rgba(37,33,45,0.42)';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const toDateValue = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -222,14 +229,16 @@ export default function RoomEditScreen() {
 
     const header = (
         <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
-            <Pressable style={styles.backButton} onPress={cancel} accessibilityRole="button" accessibilityLabel="취소하고 돌아가기" hitSlop={8}>
-                <Ionicons name="chevron-back" size={26} color={NAVY} />
-            </Pressable>
+            <View style={styles.headerSide}>
+                <Pressable style={styles.backButton} onPress={cancel} accessibilityRole="button" accessibilityLabel="취소하고 돌아가기" hitSlop={8}>
+                    <Ionicons name="chevron-back" size={25} color={TEXT} />
+                </Pressable>
+            </View>
             <Text style={styles.headerTitle}>방 정보 수정</Text>
-            <View style={styles.headerRight}>
+            <View style={[styles.headerSide, styles.headerRight]}>
                 {detail?.myRole === 'OWNER' && !loadError && (
                     <View style={styles.ownerChip}>
-                        <Ionicons name="key-outline" size={12} color={MINT_DEEP} />
+                        <Ionicons name="key-outline" size={12} color={MAIN} />
                         <Text style={styles.ownerChipText}>방장</Text>
                     </View>
                 )}
@@ -243,7 +252,7 @@ export default function RoomEditScreen() {
                 <StatusBar style="dark" />
                 {header}
                 <View style={styles.center}>
-                    <ActivityIndicator color={NAVY} />
+                    <ActivityIndicator color={MAIN} />
                     <Text style={styles.centerHint}>약속방 정보를 불러오고 있어요</Text>
                 </View>
             </View>
@@ -263,7 +272,7 @@ export default function RoomEditScreen() {
                 {header}
                 <View style={styles.center}>
                     <View style={styles.centerIcon}>
-                        <Ionicons name={copy.icon} size={30} color={SECONDARY} />
+                        <Ionicons name={copy.icon} size={30} color={MAIN} />
                     </View>
                     <Text style={styles.centerTitle}>{copy.title}</Text>
                     <Text style={styles.centerBody}>{copy.body}</Text>
@@ -318,7 +327,7 @@ export default function RoomEditScreen() {
                             value={name}
                             onChangeText={value => { setName(value); setFieldError(prev => ({ ...prev, name: undefined })); setSaveError(''); }}
                             placeholder="약속 이름을 입력하세요"
-                            placeholderTextColor="#a1a8b8"
+                            placeholderTextColor={PLACEHOLDER}
                             returnKeyType="done"
                             editable={!saving && !saved}
                             accessibilityLabel="약속 이름"
@@ -339,7 +348,7 @@ export default function RoomEditScreen() {
                                     accessibilityLabel="약속 시각 해제"
                                     hitSlop={6}
                                 >
-                                    <Ionicons name="close-circle" size={15} color={SECONDARY} />
+                                    <Ionicons name="close-circle" size={15} color={MAIN} />
                                     <Text style={styles.clearText}>해제</Text>
                                 </Pressable>
                             )}
@@ -352,7 +361,7 @@ export default function RoomEditScreen() {
                                 accessibilityRole="button"
                                 accessibilityLabel="약속 날짜 선택"
                             >
-                                <Ionicons name="calendar-outline" size={18} color={NAVY} />
+                                <Ionicons name="calendar-outline" size={20} color={MAIN} />
                                 <Text style={[styles.pickText, !date && styles.placeholder]}>{date ? formatAppointmentDateLabel(date) : '날짜'}</Text>
                             </Pressable>
                             <Pressable
@@ -362,7 +371,7 @@ export default function RoomEditScreen() {
                                 accessibilityRole="button"
                                 accessibilityLabel="약속 시간 선택"
                             >
-                                <Ionicons name="time-outline" size={18} color={NAVY} />
+                                <Ionicons name="time-outline" size={20} color={MAIN} />
                                 <Text style={[styles.pickText, !time && styles.placeholder]}>{time ? formatAppointmentTimeLabel(time) : '시간'}</Text>
                             </Pressable>
                         </View>
@@ -372,9 +381,9 @@ export default function RoomEditScreen() {
 
                         {/* 설계 ❷: 시각이 바뀌면 이전 추천 결과는 최신이 아니게 됩니다. 저장만으로 자동 재추천하지 않아요 */}
                         <View style={styles.staleNote}>
-                            <Ionicons name="alert-circle-outline" size={16} color={ORANGE} />
+                            <Ionicons name="information-circle-outline" size={17} color={MAIN} />
                             <Text style={styles.staleText}>
-                                약속 시각을 바꾸면 이전 추천 결과는 &apos;최신이 아님&apos;으로 표시돼요. 추천·후보·확정 약속역은 그대로 남고, 자동으로 다시 추천하지 않아요.
+                                약속 시각을 바꾸면 이전 추천 결과는 &apos;최신이 아님&apos;으로 표시돼요. 추천, 후보, 확정 약속역은 그대로 남고, 자동으로 다시 추천하지 않아요.
                             </Text>
                         </View>
                     </View>
@@ -391,7 +400,7 @@ export default function RoomEditScreen() {
                 <View style={[styles.footer, { paddingBottom: insets.bottom + 14 }]}>
                     {saved ? (
                         <View style={styles.savedBanner}>
-                            <Ionicons name="checkmark-circle" size={18} color={MINT_DEEP} />
+                            <Ionicons name="checkmark-circle" size={18} color={MAIN} />
                             <Text style={styles.savedText}>저장했어요. 약속방으로 돌아갈게요.</Text>
                         </View>
                     ) : (
@@ -440,7 +449,7 @@ function ChangeTag({ text, tone = 'info' }: { text: string; tone?: 'info' | 'war
     const warn = tone === 'warn';
     return (
         <View style={[styles.changeTag, warn && styles.changeTagWarn]}>
-            <Ionicons name={warn ? 'remove-circle-outline' : 'sync-outline'} size={13} color={warn ? ORANGE : MINT_DEEP} />
+            <Ionicons name={warn ? 'remove-circle-outline' : 'sync-outline'} size={13} color={warn ? PINK_TEXT : MAIN} />
             <Text style={[styles.changeTagText, warn && styles.changeTagTextWarn]}>{text}</Text>
         </View>
     );
@@ -453,42 +462,41 @@ const styles = StyleSheet.create({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 12,
-        paddingBottom: 10,
-        backgroundColor: WHITE,
-        borderBottomWidth: 1,
-        borderBottomColor: BORDER,
+        paddingHorizontal: 16,
+        paddingBottom: 15,
+        backgroundColor: BG,
     },
-    backButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-    headerTitle: { flex: 1, textAlign: 'center', fontSize: 18, fontWeight: '800', color: NAVY, letterSpacing: -0.3 },
-    headerRight: { width: 64, alignItems: 'flex-end' },
-    ownerChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 9, paddingVertical: 5, borderRadius: 999, backgroundColor: '#e6f8f1' },
-    ownerChipText: { fontSize: 11, fontWeight: '800', color: MINT_DEEP },
+    headerSide: { width: 64 },
+    backButton: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+    headerTitle: { flex: 1, textAlign: 'center', fontSize: 15, fontWeight: '600', color: TEXT },
+    headerRight: { alignItems: 'flex-end' },
+    ownerChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 9, paddingVertical: 5, borderRadius: 999, backgroundColor: SOFT },
+    ownerChipText: { fontSize: 11, fontWeight: '700', color: MAIN },
 
     content: { padding: 20, gap: 22 },
 
-    currentCard: { backgroundColor: NAVY, borderRadius: 18, padding: 16, gap: 4 },
-    currentLabel: { fontSize: 11, fontWeight: '800', color: MINT, letterSpacing: 0.3 },
-    currentName: { fontSize: 18, fontWeight: '800', color: WHITE, letterSpacing: -0.3 },
-    currentTime: { fontSize: 13, fontWeight: '500', color: '#b7c0d6' },
+    currentCard: { backgroundColor: SOFT, borderRadius: 18, padding: 16, gap: 4 },
+    currentLabel: { fontSize: 11.5, fontWeight: '700', color: MAIN, letterSpacing: 0 },
+    currentName: { fontSize: 18, fontWeight: '800', color: TEXT, letterSpacing: -0.3 },
+    currentTime: { fontSize: 13, fontWeight: '500', color: SUB },
 
-    field: { gap: 8 },
+    field: { gap: 9 },
     rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    fieldLabel: { fontSize: 14, fontWeight: '800', color: NAVY },
-    optional: { fontSize: 12, fontWeight: '600', color: SECONDARY },
-    counter: { fontSize: 12, fontWeight: '600', color: SECONDARY },
+    fieldLabel: { fontSize: 13, fontWeight: '700', color: TEXT },
+    optional: { fontSize: 13, fontWeight: '400', color: SECONDARY },
+    counter: { fontSize: 12, fontWeight: '600', color: PLACEHOLDER },
     counterOver: { color: RED },
 
     input: {
-        height: 54,
-        paddingHorizontal: 16,
-        borderRadius: 16,
+        height: 52,
+        paddingHorizontal: 14,
+        borderRadius: 14,
         backgroundColor: WHITE,
-        borderWidth: 1.5,
+        borderWidth: 1,
         borderColor: BORDER,
         fontSize: 16,
-        fontWeight: '600',
-        color: NAVY,
+        fontWeight: '400',
+        color: TEXT,
         ...Platform.select({ web: { outlineStyle: 'none' } as object }),
     },
     inputError: { borderColor: RED },
@@ -497,55 +505,55 @@ const styles = StyleSheet.create({
     pickRow: { flexDirection: 'row', gap: 10 },
     pickBox: {
         flex: 1,
-        height: 54,
+        height: 52,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: 9,
         paddingHorizontal: 14,
-        borderRadius: 16,
+        borderRadius: 14,
         backgroundColor: WHITE,
-        borderWidth: 1.5,
+        borderWidth: 1,
         borderColor: BORDER,
     },
-    pickText: { fontSize: 15, fontWeight: '700', color: NAVY },
-    placeholder: { color: '#a1a8b8', fontWeight: '600' },
+    pickText: { fontSize: 15.5, fontWeight: '600', color: TEXT },
+    placeholder: { color: PLACEHOLDER, fontWeight: '400' },
     clearLink: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    clearText: { fontSize: 12.5, fontWeight: '700', color: SECONDARY },
+    clearText: { fontSize: 12.5, fontWeight: '700', color: MAIN },
 
-    changeTag: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 5, borderRadius: 8, backgroundColor: '#e6f8f1' },
-    changeTagWarn: { backgroundColor: '#fff4e0' },
-    changeTagText: { fontSize: 12, fontWeight: '700', color: MINT_DEEP },
-    changeTagTextWarn: { color: ORANGE },
+    changeTag: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 9, paddingVertical: 5, borderRadius: 8, backgroundColor: SOFT },
+    changeTagWarn: { backgroundColor: PINK },
+    changeTagText: { fontSize: 12, fontWeight: '700', color: MAIN },
+    changeTagTextWarn: { color: PINK_TEXT },
 
-    staleNote: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 12, backgroundColor: '#fff4e0', marginTop: 4 },
-    staleText: { flex: 1, fontSize: 12.5, lineHeight: 19, fontWeight: '500', color: '#7a4e00' },
+    staleNote: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, paddingVertical: 12, paddingHorizontal: 14, borderRadius: 14, backgroundColor: SOFT, marginTop: 4 },
+    staleText: { flex: 1, fontSize: 12.5, lineHeight: 19, fontWeight: '400', color: MAIN },
 
-    saveError: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderRadius: 12, backgroundColor: '#fdecef' },
+    saveError: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderRadius: 14, backgroundColor: PINK },
     saveErrorText: { flex: 1, fontSize: 13, fontWeight: '600', color: RED },
 
-    footer: { paddingHorizontal: 20, paddingTop: 12, gap: 10, backgroundColor: BG, borderTopWidth: 1, borderTopColor: BORDER },
-    footerHint: { textAlign: 'center', fontSize: 12.5, fontWeight: '600', color: SECONDARY },
+    footer: { paddingHorizontal: 20, paddingTop: 12, gap: 10, backgroundColor: BG },
+    footerHint: { textAlign: 'center', fontSize: 12.5, fontWeight: '500', color: SECONDARY },
     savedBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 4 },
-    savedText: { fontSize: 13, fontWeight: '700', color: MINT_DEEP },
+    savedText: { fontSize: 13, fontWeight: '700', color: MAIN },
 
-    primaryButton: { height: 54, borderRadius: 16, backgroundColor: NAVY, alignItems: 'center', justifyContent: 'center' },
-    primaryDisabled: { backgroundColor: '#b9c0cf' },
+    primaryButton: { height: 54, borderRadius: 16, backgroundColor: MAIN, alignItems: 'center', justifyContent: 'center' },
+    primaryDisabled: { backgroundColor: DISABLED },
     dangerButton: { backgroundColor: RED },
-    primaryText: { fontSize: 15, fontWeight: '800', color: WHITE },
+    primaryText: { fontSize: 16, fontWeight: '700', color: WHITE },
     secondaryButton: { height: 50, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1, borderColor: BORDER, alignItems: 'center', justifyContent: 'center' },
-    secondaryText: { fontSize: 15, fontWeight: '700', color: NAVY },
+    secondaryText: { fontSize: 15, fontWeight: '600', color: TEXT },
     pressed: { opacity: 0.85 },
 
     center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 36, paddingBottom: 60, gap: 8 },
     centerHint: { marginTop: 8, fontSize: 13, fontWeight: '600', color: SECONDARY },
-    centerIcon: { width: 72, height: 72, borderRadius: 24, backgroundColor: WHITE, borderWidth: 1, borderColor: BORDER, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
-    centerTitle: { fontSize: 17, fontWeight: '800', color: NAVY, textAlign: 'center', letterSpacing: -0.3 },
+    centerIcon: { width: 72, height: 72, borderRadius: 24, backgroundColor: SOFT, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+    centerTitle: { fontSize: 17, fontWeight: '800', color: TEXT, textAlign: 'center', letterSpacing: -0.3 },
     centerBody: { fontSize: 13.5, lineHeight: 20, fontWeight: '500', color: SECONDARY, textAlign: 'center' },
     centerActions: { alignSelf: 'stretch', gap: 10, marginTop: 18 },
 
-    dim: { flex: 1, backgroundColor: 'rgba(15,28,63,0.42)' },
+    dim: { flex: 1, backgroundColor: DIM },
     sheet: { backgroundColor: WHITE, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 12, gap: 12 },
-    grabber: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#d9dde4', alignSelf: 'center', marginBottom: 6 },
-    sheetTitle: { fontSize: 18, fontWeight: '800', color: NAVY, letterSpacing: -0.3 },
+    grabber: { width: 40, height: 4, borderRadius: 2, backgroundColor: GRABBER, alignSelf: 'center', marginBottom: 6 },
+    sheetTitle: { fontSize: 18, fontWeight: '800', color: TEXT, letterSpacing: -0.3 },
     sheetBody: { fontSize: 14, lineHeight: 21, fontWeight: '500', color: SECONDARY, marginBottom: 6 },
 });

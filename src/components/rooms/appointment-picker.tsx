@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
     Modal,
     Pressable,
@@ -9,13 +9,13 @@ import {
 import { Text } from '@/components/app-text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import WebModalFrame from '@/components/web-modal-frame';
+import { TimeWheel } from '@/components/time-wheel/date-time-wheel';
 
 const NAVY = '#25212D';
 const MINT = '#5C3F78';
 const SECONDARY = '#83808B';
 const BORDER = '#D9CCE4';
 const WHITE = '#ffffff';
-const ROW = 44;
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
 /** Display only; picker values and request payloads remain YYYY-MM-DD / HH:mm. */
@@ -171,72 +171,11 @@ type TimePickerProps = {
     onConfirm: (time: string) => void;
 };
 
-function Wheel({
-                   count,
-                   value,
-                   onChange,
-                   label,
-               }: {
-    count: number;
-    value: number;
-    onChange: (value: number) => void;
-    label: string;
-}) {
-    const scrollRef = useRef<ScrollView>(null);
-
-    useEffect(() => {
-        const timer = setTimeout(() => {
-            scrollRef.current?.scrollTo({ y: value * ROW, animated: false });
-        }, 80);
-        return () => clearTimeout(timer);
-        // 처음 표시한 뒤 선택 위치로 스크롤하기 위한 효과입니다.
-    }, [value]);
-
-    const handleEnd = (offset: number) => {
-        const next = Math.min(count - 1, Math.max(0, Math.round(offset / ROW)));
-        onChange(next);
-    };
-
-    return (
-        <View style={styles.wheelColumn}>
-            <Text style={styles.wheelLabel}>{label}</Text>
-            <View style={styles.wheelFrame}>
-                <View pointerEvents="none" style={styles.wheelSelection} />
-                <ScrollView
-                    ref={scrollRef}
-                    style={styles.wheelScroll}
-                    contentContainerStyle={styles.wheelContent}
-                    showsVerticalScrollIndicator={false}
-                    snapToInterval={ROW}
-                    decelerationRate="fast"
-                    onMomentumScrollEnd={(event) => handleEnd(event.nativeEvent.contentOffset.y)}
-                    onScrollEndDrag={(event) => handleEnd(event.nativeEvent.contentOffset.y)}
-                    nestedScrollEnabled
-                >
-                    {Array.from({ length: count }, (_, item) => (
-                        <Pressable
-                            key={item}
-                            style={styles.wheelItem}
-                            onPress={() => {
-                                onChange(item);
-                                scrollRef.current?.scrollTo({ y: item * ROW, animated: true });
-                            }}
-                        >
-                            <Text style={[styles.wheelText, item === value && styles.wheelSelectedText]}>
-                                {String(item).padStart(2, '0')}
-                            </Text>
-                        </Pressable>
-                    ))}
-                </ScrollView>
-            </View>
-        </View>
-    );
-}
-
 export function TimeWheelModal({ visible, value = '19:00', title = '약속 시간', onClose, onConfirm }: TimePickerProps) {
     const insets = useSafeAreaInsets();
     const [hour, setHour] = useState(19);
     const [minute, setMinute] = useState(0);
+    const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 
     useEffect(() => {
         if (visible) {
@@ -246,6 +185,12 @@ export function TimeWheelModal({ visible, value = '19:00', title = '약속 시�
         }
     }, [visible, value]);
 
+    // 휠은 HH:MM 으로 알려 줘요. 시와 분 상태로 나눠 담아 열 때 맞추는 동작은 그대로 둬요.
+    const changeTime = (next: string) => {
+        const [h, m] = next.split(':').map(Number);
+        if (Number.isInteger(h) && h >= 0 && h < 24 && Number.isInteger(m) && m >= 0 && m < 60) { setHour(h); setMinute(m); }
+    };
+
     return (
         <Modal transparent animationType="fade" visible={visible} onRequestClose={onClose}>
             <WebModalFrame>
@@ -254,16 +199,10 @@ export function TimeWheelModal({ visible, value = '19:00', title = '약속 시�
                     <View style={[styles.dialog, { paddingBottom: insets.bottom + 20 }]}>
                         <View style={styles.grabber} />
                         <Text style={styles.modalTitle}>{title}</Text>
-                        <Text style={styles.modalHint}>위아래로 스크롤해 시·분을 선택하세요.</Text>
-                        {visible && (
-                            <View style={styles.wheels}>
-                                <Wheel key={`hour-${value}`} label="시" count={24} value={hour} onChange={setHour} />
-                                <Text style={styles.colon}>:</Text>
-                                <Wheel key={`minute-${value}`} label="분" count={60} value={minute} onChange={setMinute} />
-                            </View>
-                        )}
+                        <Text style={styles.modalHint}>위아래로 스크롤해 시간을 선택하세요.</Text>
+                        {visible && <TimeWheel time={time} onChange={changeTime} />}
                         <Text style={styles.timePreview}>
-                            선택: {formatAppointmentTimeLabel(`${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`)}
+                            선택: {formatAppointmentTimeLabel(time)}
                         </Text>
                         <View style={styles.modalActions}>
                             <Pressable style={styles.cancelButton} onPress={onClose}>
@@ -272,7 +211,7 @@ export function TimeWheelModal({ visible, value = '19:00', title = '약속 시�
                             <Pressable
                                 style={styles.confirmButton}
                                 onPress={() => {
-                                    onConfirm(`${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`);
+                                    onConfirm(time);
                                     onClose();
                                 }}
                             >
@@ -329,24 +268,5 @@ const styles = StyleSheet.create({
     cancelText: { color: MINT, fontWeight: '700' },
     confirmButton: { flex: 1, height: 52, justifyContent: 'center', alignItems: 'center', borderRadius: 26, backgroundColor: MINT },
     confirmText: { color: WHITE, fontWeight: '700' },
-    wheels: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, marginTop: 10 },
-    wheelColumn: { width: 100, alignItems: 'center' },
-    wheelLabel: { color: SECONDARY, fontSize: 12, fontWeight: '700', marginBottom: 6 },
-    wheelFrame: { height: ROW * 3, width: 90, overflow: 'hidden' },
-    wheelSelection: {
-        position: 'absolute',
-        top: ROW,
-        left: 0,
-        right: 0,
-        height: ROW,
-        borderRadius: 12,
-        backgroundColor: '#EDE8F3',
-    },
-    wheelScroll: { flex: 1 },
-    wheelContent: { paddingVertical: ROW },
-    wheelItem: { height: ROW, justifyContent: 'center', alignItems: 'center' },
-    wheelText: { color: SECONDARY, fontSize: 20, fontWeight: '500' },
-    wheelSelectedText: { color: NAVY, fontWeight: '800' },
-    colon: { fontSize: 23, color: NAVY, fontWeight: '800', marginTop: 19 },
-    timePreview: { color: NAVY, textAlign: 'center', fontSize: 14, fontWeight: '700', marginTop: 16 },
+    timePreview: { color: MINT, textAlign: 'center', fontSize: 15, fontWeight: '700', marginTop: 10 },
 });

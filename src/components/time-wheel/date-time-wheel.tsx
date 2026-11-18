@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Platform, Pressable, StyleSheet, View } from 'react-native';
 import type { AccessibilityActionEvent, LayoutChangeEvent, NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
 import { Text } from '@/components/app-text';
-import { dateRange, dayLabel, fromTwelveHour, shiftWheelValue, toTwelveHour } from '@/components/time-wheel/labels';
+import { dateRange, dayLabel, fromTwelveHour, shiftDayTime, shiftWheelValue, toTwelveHour } from '@/components/time-wheel/labels';
 
 // 휠 시안(time-picker 2a) — 한 칸 44, 한 번에 5칸, 위아래 2칸(88) 비워서 첫·끝 칸도 가운데에 와요.
 const ITEM = 44;
@@ -223,8 +223,46 @@ export function DateTimeWheel({ date, time, minDate, maxDate, onChange, viewport
     );
 }
 
+type TimeProps = {
+    /** HH:MM (24시간) */
+    time: string;
+    onChange: (time: string) => void;
+    viewportHeight?: number;
+};
+
+/** 날짜 없이 시각만 고르는 휠(오전/오후, 시, 분). 칸, 모양, 자리 올림은 DateTimeWheel 과 같고, 하루 안에서 돌아가요. */
+export function TimeWheel({ time, onChange, viewportHeight = ITEM * VISIBLE }: TimeProps) {
+    const parts = toTwelveHour(time) ?? { pm: false, hour: 12, minute: 0 };
+    // DateTimeWheel 과 같아요: 이 휠이 알린 값이 돌아오면 자리 올림 결과라 옆 칸이 부드럽게 움직여요.
+    const emitted = useRef<string | null>(null);
+    const animate = emitted.current === time;
+    const emit = (next: string) => {
+        emitted.current = next;
+        onChange(next);
+    };
+    // 분과 시 칸은 움직인 칸 수만큼 더하거나 빼서 시, 오전/오후까지 이어서 바꿔요(23:59 다음은 00:00).
+    const shift = (deltaMinutes: number) => {
+        const next = shiftDayTime(time, deltaMinutes);
+        if (next !== time) emit(next);
+    };
+
+    return (
+        <View style={[styles.box, styles.timeBox, { height: viewportHeight }]}>
+            <View style={[styles.band, { top: (viewportHeight - ITEM) / 2 }]} pointerEvents="none" />
+            <WheelColumn viewportHeight={viewportHeight} items={MERIDIEMS} index={parts.pm ? 1 : 0} flex={0.9} animate={animate} label="오전 오후" value={parts.pm ? '오후' : '오전'}
+                         onSelect={i => emit(fromTwelveHour(i === 1, parts.hour, parts.minute))} />
+            <WheelColumn viewportHeight={viewportHeight} items={HOURS} index={parts.hour - 1} flex={0.6} cyclic animate={animate} label="시" value={`${parts.hour}시`}
+                         onSelect={(_i, moved) => shift(moved * 60)} />
+            <View style={[styles.colon, { height: viewportHeight }]} pointerEvents="none"><Text style={styles.colonText}>:</Text></View>
+            <WheelColumn viewportHeight={viewportHeight} items={MINUTES} index={parts.minute} flex={0.6} cyclic animate={animate} label="분" value={`${parts.minute}분`}
+                         onSelect={(_i, moved) => shift(moved)} />
+        </View>
+    );
+}
+
 const styles = StyleSheet.create({
     box: { flexDirection: 'row', gap: 4, height: ITEM * VISIBLE, marginTop: 12, paddingHorizontal: 4 },
+    timeBox: { paddingHorizontal: 44 },
     band: { position: 'absolute', left: 0, right: 0, top: PAD, height: ITEM, borderRadius: 12, backgroundColor: W_BAND },
     column: { minWidth: 0, height: ITEM * VISIBLE },
     columnContent: { paddingVertical: PAD },
