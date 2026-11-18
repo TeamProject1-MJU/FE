@@ -1,5 +1,6 @@
 import { formatDurationMinutes } from '@/components/route/format';
 import { formatStationName } from '@/utils/station-name';
+import { groupNearbyAlternatives } from '@/utils/recommendation-display';
 import { ApiError, isAuthError } from '@/services/api/errors';
 import { useMock as isMockMode } from '@/services/api/config';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -11,6 +12,7 @@ import {
     Pressable,
     ScrollView,
     StyleSheet,
+    useWindowDimensions,
     View,
 } from 'react-native';
 import { Text } from '@/components/app-text';
@@ -20,21 +22,18 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { openStationPicker, type Station } from '@/app/station-search';
 import Passenger, { type PassengerTone } from '@/components/passenger';
+import ParticipantTripDetail from '@/components/rooms/participant-trip-detail';
 import TrainBlock from '@/components/train-block';
 import LineBadge from '@/components/route/LineBadge';
 import { formatMonthDay, formatTime } from '@/constants/home-mock';
 import {
     formatBoardingTrain,
-    formatLeg,
-    formatLegTrain,
-    formatLegTransfer,
     formatSlack,
     formatTripLine,
     sourceNote,
     stalePlanText,
     staleReasonText,
 } from '@/utils/recommendation-trip';
-import { formatSeoulTime } from '@/utils/seoul-time';
 import {
     createRecommendation,
     fetchLatestRecommendation,
@@ -91,7 +90,6 @@ const CRITERIA: { key: RecommendationCriterion; label: string; short: string; ic
     { key: 'DISTANCE', label: '거리 기준', short: '거리', icon: 'map-outline' },
 ];
 
-const CONGESTION_COLOR: Record<string, string> = { COMFORTABLE: '#2bcf9a', RELAXED: '#8fd14f', NORMAL: '#f2b705', CROWDED: '#f28c28', VERY_CROWDED: '#e5484d' };
 
 type Params = { roomId: string; runId?: string; mock?: 'error' | 'latest-error' };
 type LoadError = 'ROOM_NOT_FOUND' | 'NOT_ROOM_MEMBER' | 'RUN_NOT_FOUND' | 'UNKNOWN';
@@ -142,6 +140,7 @@ export default function RoomRecommendationsScreen() {
     const [view, setView] = useState<'input' | 'result'>('result');
     const [criterion, setCriterion] = useState<RecommendationCriterion>('TIME');
     const [stationNameWidth, setStationNameWidth] = useState(0);
+    const [footerHeight, setFooterHeight] = useState(0);
     const [running, setRunning] = useState(false);
     /** 상태 반영 전에 버튼이 두 번 눌려도 8.1 을 한 번만 보내도록 바로 바뀌는 값으로 막아요. */
     const runningRef = useRef(false);
@@ -309,7 +308,7 @@ export default function RoomRecommendationsScreen() {
     const result = run?.results.find(item => item.criterion === criterion) ?? run?.results[0] ?? null;
     const stationName = formatStationName(result?.recommendedStation.name);
     const stationNameFontSize = stationNameWidth > 0
-        ? Math.max(20, Math.min(34, Math.floor(stationNameWidth / (stationName.length * 0.98))))
+        ? Math.max(24, Math.min(34, Math.floor(stationNameWidth / (stationName.length * 0.98))))
         : 34;
     const appointmentAt = detail?.appointmentAt ? new Date(detail.appointmentAt) : null;
     const me = members.find(member => member.userId === myUserId);
@@ -655,6 +654,7 @@ export default function RoomRecommendationsScreen() {
     /** 시안 "다른 기준 결과": 지금 실행(run.results)에 들어 있는 다른 기준만. 누르면 기준 탭만 바꿔요(새 요청 없음). */
     const otherResults = result ? run.results.filter(item => item.criterion !== result.criterion) : [];
     const showFooter = run.results.length > 0 && !!result;
+    const nearbyGroups = groupNearbyAlternatives(result?.nearbyAlternatives ?? []);
 
     return (
         <View style={styles.container}>
@@ -669,7 +669,7 @@ export default function RoomRecommendationsScreen() {
                     <Ionicons name="options-outline" size={21} color={LV_TEXT} />
                 </Pressable>
             </View>
-            <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + (showFooter ? 110 : 32) }]} showsVerticalScrollIndicator={false}>
+            <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + (showFooter ? Math.max(110, footerHeight + 16) : 32) }]} showsVerticalScrollIndicator={false}>
                 {newRecommendation && (
                     <View style={styles.newBox}>
                         <Text style={styles.newTitle}>새 추천이 있어요</Text>
@@ -746,8 +746,8 @@ export default function RoomRecommendationsScreen() {
                                 const has = run.results.some(r => r.criterion === item.key);
                                 const on = criterion === item.key;
                                 return (
-                                    <Pressable key={item.key} style={[lv.segmentItem, on && lv.segmentItemOn, !has && styles.tabOff]} onPress={() => { setCriterion(item.key); setOpenedParticipant(null); }} disabled={!has} accessibilityRole="tab" accessibilityState={{ selected: on }}>
-                                        <Text style={[lv.segmentText, on && lv.segmentTextOn]}>{item.label}</Text>
+                                    <Pressable key={item.key} style={[lv.segmentItem, styles.resultTabItem, on && lv.segmentItemOn, !has && styles.tabOff]} onPress={() => { setCriterion(item.key); setOpenedParticipant(null); }} disabled={!has} accessibilityRole="tab" accessibilityState={{ selected: on }}>
+                                        <Text style={[lv.segmentText, styles.resultTabText, on && lv.segmentTextOn]}>{item.label}</Text>
                                     </Pressable>
                                 );
                             })}
@@ -757,7 +757,7 @@ export default function RoomRecommendationsScreen() {
                         <View style={styles.stationRow}>
                             <View style={styles.flex} onLayout={({ nativeEvent }) => setStationNameWidth(nativeEvent.layout.width)}>
                                 <Text style={styles.stationBadge}>{CRITERIA.find(c => c.key === result.criterion)?.label} 최적 중간역</Text>
-                                <Text style={[styles.stationName, { fontSize: stationNameFontSize }]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}>{stationName}</Text>
+                                <Text style={[styles.stationName, { fontSize: stationNameFontSize }]}>{stationName}</Text>
                             </View>
                             {!!result.recommendedStation.lines?.length && (
                                 <View style={styles.trainRow} accessible accessibilityLabel={result.recommendedStation.lines.map(line => line.lineName).join(', ')}>
@@ -831,16 +831,28 @@ export default function RoomRecommendationsScreen() {
                                 <Text style={styles.subSectionTitle}>이런 역도 있어요</Text>
                                 <Text style={styles.sectionSub}>최적 중간역 근처에서 함께 고려해볼 만한 역이에요</Text>
                                 <View style={styles.nearbyRow}>
-                                    {result.nearbyAlternatives.map(alt => (
-                                        <View key={`${alt.station.id}-${alt.relation}`} style={styles.nearbyChip}>
+                                    {nearbyGroups.map(group => (
+                                        <View key={group.station.id} style={styles.nearbyChip} testID={`nearby-station-${group.station.id}`}>
                                             <View style={styles.nearbyMain}>
-                                                <LineDot color={result.recommendedStation.lines?.find(l => l.lineId === alt.lineId)?.color ?? LV_GRAY} name={`${alt.lineId}호선`} size={16} />
-                                                <View style={styles.nearbyBody}>
-                                                    <Text style={styles.nearbyName}>{formatStationName(alt.station.name)}</Text>
-                                                    <Text style={styles.nearbyTag}>{alt.relationLabel}</Text>
+                                                <Text style={styles.nearbyName}>{formatStationName(group.station.name)}</Text>
+                                                <View style={styles.nearbyLines}>
+                                                    {group.lineIds.map(lineId => (
+                                                        <LineDot key={lineId} color={result.recommendedStation.lines?.find(l => l.lineId === lineId)?.color ?? LV_GRAY} name={`${lineId}호선`} size={24} />
+                                                    ))}
                                                 </View>
                                             </View>
-                                            <Text style={styles.nearbyMeta}>최대 {formatDurationMinutes(alt.maxMinutes)} · 예상 {alt.totalFareWon.toLocaleString()}원</Text>
+                                            {group.alternatives.map((alt, index) => (
+                                                <View key={`${alt.lineId}-${alt.relation}-${index}`} style={[styles.nearbyOption, index > 0 && styles.nearbyDivider]}>
+                                                    <View style={styles.nearbyOptionHeading}>
+                                                        <Text style={styles.nearbyLine}>{alt.lineId}호선</Text>
+                                                        <Text style={styles.nearbyTag}>{alt.relationLabel}</Text>
+                                                    </View>
+                                                    <View style={styles.nearbyMetrics}>
+                                                        <Text style={styles.nearbyMeta}>최대 {formatDurationMinutes(alt.maxMinutes)}</Text>
+                                                        <Text style={styles.nearbyMeta}>예상 {alt.totalFareWon.toLocaleString()}원</Text>
+                                                    </View>
+                                                </View>
+                                            ))}
                                         </View>
                                     ))}
                                 </View>
@@ -859,7 +871,7 @@ export default function RoomRecommendationsScreen() {
                                         accessibilityRole="button"
                                     >
                                         <Text style={styles.otherLabel}>{CRITERIA.find(c => c.key === item.criterion)?.label}</Text>
-                                        <Text style={styles.otherStation} numberOfLines={1}>{formatStationName(item.recommendedStation.name)}</Text>
+                                        <Text style={styles.otherStation}>{formatStationName(item.recommendedStation.name)}</Text>
                                         <Text style={styles.otherMax}>최대 {formatDurationMinutes(item.metrics.maxMinutes)}</Text>
                                         <Ionicons name="chevron-forward" size={16} color={LV_CHEVRON} />
                                     </Pressable>
@@ -886,12 +898,15 @@ export default function RoomRecommendationsScreen() {
 
             {/* ❺ 아래 고정 두 버튼 (시안 08): 경로 자세히 보기 + 후보 올리기 */}
             {showFooter && result && (
-                <View style={[styles.footer, { paddingBottom: insets.bottom + 14 }]}>
+                <View style={[styles.footer, { paddingBottom: insets.bottom + 14 }]} onLayout={({ nativeEvent }) => {
+                    const height = nativeEvent.layout.height;
+                    setFooterHeight(previous => previous === height ? previous : height);
+                }}>
                     <Pressable style={({ pressed }) => [styles.footerSecondary, !me?.departureStation && styles.secondaryOff, pressed && styles.pressed]} onPress={() => openRoute(result)} disabled={!me?.departureStation} accessibilityRole="button">
-                        <Text style={styles.footerSecondaryText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>경로 자세히 보기</Text>
+                        <Text style={styles.footerSecondaryText}>경로 자세히 보기</Text>
                     </Pressable>
                     <Pressable style={({ pressed }) => [styles.footerPrimary, shareDisabled && styles.footerPrimaryOff, pressed && styles.pressed]} onPress={() => shareAsCandidate(result)} disabled={shareDisabled} accessibilityLabel={shareLabel === '후보에 있어요' ? '이미 약속역 후보에 있어요' : shareLabel} accessibilityRole="button" accessibilityState={{ disabled: shareDisabled, busy: sharing }}>
-                        <Text style={styles.footerPrimaryText} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.75}>{shareLabel}</Text>
+                        <Text style={styles.footerPrimaryText}>{shareLabel}</Text>
                     </Pressable>
                 </View>
             )}
@@ -901,7 +916,7 @@ export default function RoomRecommendationsScreen() {
 
 /* ───────────────────────── 보조 컴포넌트 ───────────────────────── */
 
-function LineDot({ color, name, size = 18 }: { color: string; name: string; size?: number }) {
+function LineDot({ color, name, size = 24 }: { color: string; name: string; size?: number }) {
     return (
         <View style={[styles.lineDot, { backgroundColor: color, minWidth: size, height: size, borderRadius: size / 2 }]} accessibilityLabel={name}>
             <Text style={[styles.lineDotText, { fontSize: Math.round(size * 0.55) }]}>{name.replace(/호선$/, '').slice(0, 2)}</Text>
@@ -910,8 +925,9 @@ function LineDot({ color, name, size = 18 }: { color: string; name: string; size
 }
 
 function Metric({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+    const { fontScale } = useWindowDimensions();
     return (
-        <View style={styles.metric}>
+        <View style={[styles.metric, { flexBasis: 110 * Math.max(1, fontScale) }]}>
             <Text style={styles.metricLabel}>{label}</Text>
             <Text style={[styles.metricValue, accent && styles.metricAccent]}>{value}</Text>
         </View>
@@ -920,71 +936,33 @@ function Metric({ label, value, accent }: { label: string; value: string; accent
 
 /** 그림 33 참여자 막대(시안 08 "누가 얼마나 걸리나요") + 그림 37 상세(탭) */
 function ParticipantRow({ participant: p, tone, maxMinutes, averageMinutes, mine, appointmentAt, stalePlan, opened, onPress }: { participant: ParticipantTime; tone: PassengerTone; maxMinutes: number; averageMinutes: number; mine: boolean; appointmentAt: string | null; stalePlan: string | null; opened: boolean; onPress: () => void }) {
-    const slack = formatSlack(p.slackSeconds);
     // 시안처럼 가장 긴 시간의 1.1배를 막대 끝으로 두고, 평균 위치에 세로선을 그려요.
     const scale = Math.max(maxMinutes, 1) * 1.1;
     const width = Math.min(100, Math.max(3, (p.travelMinutes / scale) * 100));
     const averageLeft = Math.min(100, Math.max(0, (averageMinutes / scale) * 100));
     const longest = p.travelMinutes >= maxMinutes;
-    // 서버는 혼잡도 데이터가 없으면 congestion: null 이에요. 이때는 점·라벨과 안내의 혼잡도 부분만 숨겨요.
-    const congestionColor = p.congestion ? CONGESTION_COLOR[p.congestion.level] ?? LV_GRAY : LV_GRAY;
     return (
         <Pressable style={styles.participant} onPress={onPress} accessibilityRole="button" accessibilityState={{ expanded: opened }} accessibilityLabel={`${p.nickname} 예상 ${formatDurationMinutes(p.travelMinutes)}`}>
             <View style={styles.participantRow}>
-                <Passenger tone={tone} size={26} />
+                <Passenger tone={tone} size={32} />
                 <View style={styles.participantWho}>
                     <View style={styles.participantNameRow}>
-                        <Text style={styles.participantName} numberOfLines={1}>{p.nickname}</Text>
-                        {mine && <Text style={lv.meTag}>나</Text>}
+                        <Text style={styles.participantName}>{p.nickname}</Text>
+                        {mine && <Text style={[lv.meTag, styles.resultMeTag]}>나</Text>}
                     </View>
-                    <Text style={styles.participantDep} numberOfLines={1}>{formatStationName(p.departureStation.name)}</Text>
-                </View>
-                <View style={styles.bar}>
-                    <View style={[styles.barFill, { width: `${width}%`, backgroundColor: longest ? LV_PURPLE : LV_BAR }]} />
-                    <View style={[styles.barAverage, { left: `${averageLeft}%` }]} />
+                    <Text style={styles.participantDep}>{formatStationName(p.departureStation.name)}</Text>
                 </View>
                 <View style={styles.participantRight}>
                     <Text style={styles.participantMinutes}>{formatDurationMinutes(p.travelMinutes)}</Text>
                     <Text style={styles.participantTransfer}>{p.transferCount === 0 ? '환승 없음' : `환승 ${p.transferCount}회`}</Text>
                 </View>
-                <Ionicons name={opened ? 'chevron-up' : 'chevron-down'} size={13} color={LV_CHEVRON} />
+                <Ionicons name={opened ? 'chevron-up' : 'chevron-down'} size={18} color={LV_CHEVRON} />
             </View>
-            {opened && (
-                <View style={styles.participantDetail}>
-                    <Text style={styles.detailTitle}>{p.nickname}님의 경로, {formatStationName(p.departureStation.name)} 출발</Text>
-                    {/* #153: 출발 → 도착(서울 기준), 여유, 탑승 열차(열차 번호는 상세에서만) */}
-                    <Text style={styles.detailTrip}>{formatTripLine(p, appointmentAt)}{slack ? `, ${slack}` : ''}</Text>
-                    {p.boardingTrain && <Text style={styles.segmentText}>탑승 {formatBoardingTrain(p.boardingTrain, true)}</Text>}
-                    {!!stalePlan && <Text style={styles.myTripStale}>{stalePlan}</Text>}
-                    {p.legs.length > 0
-                        ? p.legs.map((leg, i) => {
-                            const transfer = i > 0 ? formatLegTransfer(leg) : null;
-                            return (
-                                <View key={i}>
-                                    {!!transfer && <Text style={styles.legTransfer}>{transfer}</Text>}
-                                    <View style={styles.segmentRow}>
-                                        <LineDot color={p.segments.find(seg => seg.lineId === leg.lineId)?.color ?? LV_GRAY} name={leg.lineName} />
-                                        <View style={styles.flex}>
-                                            <Text style={styles.segmentText}>{formatLeg(leg)}</Text>
-                                            <Text style={styles.legTrain}>{formatLegTrain(leg)}</Text>
-                                        </View>
-                                    </View>
-                                </View>
-                            );
-                        })
-                        : p.segments.map((seg, i) => (
-                            <View key={i} style={styles.segmentRow}>
-                                <LineDot color={seg.color} name={seg.lineName} />
-                                <Text style={styles.segmentText}>{seg.fromStationName} → {seg.toStationName}, {seg.stationCount}개 역</Text>
-                            </View>
-                        ))}
-                    <View style={styles.detailMeta}>
-                        <Text style={styles.detailMetaText}>환승 {p.transferCount}회, 예상 {p.fareWon.toLocaleString()}원, {(p.distanceM / 1000).toFixed(1)}km</Text>
-                        {p.congestion && <View style={styles.congestion}><View style={[styles.congestionDot, { backgroundColor: congestionColor }]} /><Text style={[styles.congestionText, { color: congestionColor }]}>{p.congestion.levelLabel}</Text></View>}
-                    </View>
-                    <Text style={styles.detailHint}>출발 예정 {formatSeoulTime(p.departureAt)}{p.congestion ? ' 기준 혼잡도' : ''}, {sourceNote(p.source)}</Text>
-                </View>
-            )}
+            <View style={styles.bar}>
+                <View style={[styles.barFill, { width: `${width}%`, backgroundColor: longest ? LV_PURPLE : LV_BAR }]} />
+                <View style={[styles.barAverage, { left: `${averageLeft}%` }]} />
+            </View>
+            {opened && <ParticipantTripDetail participant={p} appointmentAt={appointmentAt} stalePlan={stalePlan} />}
         </Pressable>
     );
 }
@@ -1014,128 +992,123 @@ const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: LV_BG },
     flex: { flex: 1 },
     pressed: { opacity: 0.85 },
-    headerTitle: { flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '700', color: LV_TEXT, letterSpacing: -0.3 },
+    headerTitle: { flex: 1, textAlign: 'center', fontSize: 20, lineHeight: 28, fontWeight: '700', color: LV_TEXT, letterSpacing: -0.3 },
     content: { paddingTop: 4, paddingHorizontal: 20 },
 
     // #224 글자 줄 맞춤: 카드 밖 글자 줄은 카드 안쪽 여백만큼 들여요.
-    sectionTitle: { fontSize: 15, fontWeight: '700', color: LV_TEXT, marginTop: 22, marginBottom: 10, paddingHorizontal: ROOM_CARD_PADDING },
-    subSectionTitle: { fontSize: 14, fontWeight: '700', color: LV_TEXT, marginTop: 20, paddingHorizontal: ROOM_CARD_PADDING },
-    sectionSub: { fontSize: 12, color: LV_GRAY, marginTop: 2, marginBottom: 8, paddingHorizontal: ROOM_CARD_PADDING },
+    sectionTitle: { fontSize: 18, lineHeight: 26, fontWeight: '700', color: LV_TEXT, marginTop: 24, marginBottom: 12, paddingHorizontal: ROOM_CARD_PADDING },
+    subSectionTitle: { fontSize: 17, lineHeight: 25, fontWeight: '700', color: LV_TEXT, marginTop: 24, paddingHorizontal: ROOM_CARD_PADDING },
+    sectionSub: { fontSize: 14, lineHeight: 21, color: LV_SUBTEXT, marginTop: 6, marginBottom: 12, paddingHorizontal: ROOM_CARD_PADDING },
 
     lineDot: { paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
     lineDotText: { color: WHITE, fontWeight: '700' },
 
-    summary: { fontSize: 12.5, color: LV_GRAY, marginTop: 6, paddingHorizontal: ROOM_CARD_PADDING },
+    summary: { fontSize: 14, lineHeight: 21, color: LV_SUBTEXT, marginTop: 8, paddingHorizontal: ROOM_CARD_PADDING },
     newBox: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10, paddingVertical: 10, paddingLeft: 14, paddingRight: 10, borderRadius: 12, backgroundColor: LV_SOFT },
-    newTitle: { flex: 1, fontSize: 13, fontWeight: '600', color: LV_PURPLE },
-    prevBox: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, paddingVertical: 11, paddingHorizontal: 14, borderRadius: 12, backgroundColor: LV_SOFT },
-    prevText: { flex: 1, fontSize: 12.5, lineHeight: 18, color: LV_GRAY },
-    prevLink: { fontSize: 12.5, fontWeight: '700', color: LV_PURPLE },
-    staleBox: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10, paddingVertical: 11, paddingLeft: 14, paddingRight: 10, borderRadius: 12, backgroundColor: LV_STALE_SOFT },
-    staleTitle: { fontSize: 13, lineHeight: 19.5, fontWeight: '600', color: LV_STALE_TEXT },
-    staleBody: { fontSize: 12, lineHeight: 18, color: LV_STALE_TEXT, marginTop: 2 },
-    smallButton: { height: 34, paddingHorizontal: 12, borderRadius: 10, backgroundColor: LV_PURPLE, alignItems: 'center', justifyContent: 'center' },
+    newTitle: { flex: 1, fontSize: 15, lineHeight: 22, fontWeight: '600', color: LV_PURPLE },
+    prevBox: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginTop: 12, paddingVertical: 14, paddingHorizontal: 14, borderRadius: 12, backgroundColor: LV_SOFT },
+    prevText: { flex: 1, fontSize: 14, lineHeight: 21, color: LV_SUBTEXT },
+    prevLink: { fontSize: 14, lineHeight: 21, fontWeight: '700', color: LV_PURPLE },
+    staleBox: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12, marginTop: 12, padding: 14, borderRadius: 12, backgroundColor: LV_STALE_SOFT },
+    staleTitle: { fontSize: 15, lineHeight: 23, fontWeight: '600', color: LV_STALE_TEXT },
+    staleBody: { fontSize: 14, lineHeight: 21, color: LV_STALE_TEXT, marginTop: 6 },
+    smallButton: { minHeight: 44, paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10, backgroundColor: LV_PURPLE, alignItems: 'center', justifyContent: 'center' },
     smallButtonOff: { backgroundColor: LV_DISABLED },
-    smallButtonText: { fontSize: 12.5, fontWeight: '600', color: WHITE },
-    freshRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 8, paddingHorizontal: ROOM_CARD_PADDING },
-    freshText: { flexShrink: 1, fontSize: 12, color: LV_GRAY },
+    smallButtonText: { fontSize: 14, lineHeight: 21, fontWeight: '600', color: WHITE, textAlign: 'center' },
+    freshRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, marginTop: 12, paddingHorizontal: ROOM_CARD_PADDING },
+    freshText: { flexShrink: 1, fontSize: 14, lineHeight: 21, color: LV_SUBTEXT },
 
     understoodBox: { marginTop: 12, padding: 14, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, gap: 8 },
-    understoodTitle: { fontSize: 11.5, fontWeight: '700', color: LV_PURPLE },
-    understoodQuote: { fontSize: 13.5, lineHeight: 20, color: LV_TEXT, fontStyle: 'italic' },
+    understoodTitle: { fontSize: 14, lineHeight: 21, fontWeight: '700', color: LV_PURPLE },
+    understoodQuote: { fontSize: 15, lineHeight: 23, color: LV_TEXT, fontStyle: 'italic' },
     constraintRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
     constraintChip: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1, borderColor: LV_CHIP_BORDER },
-    constraintText: { fontSize: 12, fontWeight: '600', color: LV_PURPLE },
-    constraintNone: { fontSize: 12, color: LV_GRAY },
+    constraintText: { fontSize: 14, lineHeight: 21, fontWeight: '600', color: LV_PURPLE },
+    constraintNone: { fontSize: 14, lineHeight: 21, color: LV_SUBTEXT },
     understoodNotice: { flexDirection: 'row', alignItems: 'flex-start', gap: 7, backgroundColor: '#F4F1F7', borderRadius: 10, paddingVertical: 8, paddingHorizontal: 10 },
-    understoodMessage: { flex: 1, fontSize: 12, lineHeight: 18, fontWeight: '600', color: '#6F6B78' },
+    understoodMessage: { flex: 1, fontSize: 14, lineHeight: 21, fontWeight: '600', color: LV_SUBTEXT },
 
     emptyBox: { alignItems: 'center', paddingVertical: 48, paddingHorizontal: 10, gap: 6 },
 
     tabs: { marginTop: 14 },
+    resultTabItem: { height: 'auto', minHeight: 44, paddingVertical: 10, paddingHorizontal: 4 },
+    resultTabText: { fontSize: 15, lineHeight: 22 },
+    resultMeTag: { fontSize: 12, lineHeight: 18 },
     tabOff: { opacity: 0.4 },
 
     stationRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 20 },
-    stationBadge: { fontSize: 12.5, fontWeight: '600', color: LV_PURPLE },
-    stationName: { fontSize: 34, fontWeight: '800', letterSpacing: -1, color: LV_TEXT, marginTop: 2 },
-    trainRow: { flexDirection: 'row', gap: 2 },
+    stationBadge: { fontSize: 14, lineHeight: 21, fontWeight: '600', color: LV_PURPLE },
+    stationName: { fontSize: 34, fontWeight: '800', letterSpacing: -1, color: LV_TEXT, marginTop: 4, flexShrink: 1 },
+    trainRow: { flexDirection: 'row', flexShrink: 0, gap: 2 },
 
-    myTrip: { marginTop: 14, paddingVertical: 12, paddingHorizontal: 14, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, gap: 4 },
-    myTripLabel: { color: LV_PURPLE, fontSize: 11.5, fontWeight: '700' },
-    myTripTime: { color: LV_TEXT, fontSize: 17, fontWeight: '700' },
-    myTripSlack: { color: LV_PURPLE, fontSize: 13, fontWeight: '600' },
+    myTrip: { marginTop: 16, padding: 16, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, gap: 8 },
+    myTripLabel: { color: LV_PURPLE, fontSize: 14, lineHeight: 21, fontWeight: '700' },
+    myTripTime: { color: LV_TEXT, fontSize: 18, lineHeight: 27, fontWeight: '700' },
+    myTripSlack: { color: LV_PURPLE, fontSize: 15, lineHeight: 23, fontWeight: '600' },
     myTripLate: { color: LV_ERROR },
     myTripTrain: { flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' },
-    myTripTrainText: { flexShrink: 1, color: LV_TEXT, fontSize: 13 },
-    myTripNote: { color: LV_GRAY, fontSize: 11.5 },
-    myTripStale: { color: LV_WARN, fontSize: 12, fontWeight: '600' },
+    myTripTrainText: { flexShrink: 1, color: LV_TEXT, fontSize: 15, lineHeight: 23 },
+    myTripNote: { color: LV_SUBTEXT, fontSize: 14, lineHeight: 21 },
+    myTripStale: { color: LV_WARN, fontSize: 14, lineHeight: 21, fontWeight: '600' },
 
-    metrics: { flexDirection: 'row', gap: 1, marginTop: 14, borderRadius: 16, borderWidth: 1, borderColor: LV_CARD_BORDER, backgroundColor: LV_CARD_BORDER, overflow: 'hidden' },
-    metric: { flex: 1, padding: 12, backgroundColor: WHITE },
-    metricLabel: { fontSize: 11.5, color: LV_GRAY },
-    metricValue: { fontSize: 18, fontWeight: '700', color: LV_TEXT, marginTop: 3 },
+    metrics: { flexDirection: 'row', flexWrap: 'wrap', gap: 1, marginTop: 16, borderRadius: 16, borderWidth: 1, borderColor: LV_CARD_BORDER, backgroundColor: LV_CARD_BORDER, overflow: 'hidden' },
+    metric: { flexGrow: 1, flexShrink: 1, minWidth: 0, padding: 14, backgroundColor: WHITE },
+    metricLabel: { fontSize: 14, lineHeight: 21, color: LV_SUBTEXT },
+    metricValue: { fontSize: 22, lineHeight: 30, fontWeight: '700', color: LV_TEXT, marginTop: 6 },
     metricAccent: { color: LV_PURPLE },
-    estimateNote: { fontSize: 11.5, lineHeight: 16, color: LV_GRAY, marginTop: 6, paddingHorizontal: ROOM_CARD_PADDING },
+    estimateNote: { fontSize: 14, lineHeight: 21, color: LV_SUBTEXT, marginTop: 10, paddingHorizontal: ROOM_CARD_PADDING },
 
-    participants: { backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, borderRadius: 18, paddingTop: 12, paddingHorizontal: 14, paddingBottom: 6 },
-    participant: { paddingVertical: 8 },
-    participantRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    participantWho: { width: 72 },
-    participantNameRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    participantName: { flexShrink: 1, fontSize: 13.5, fontWeight: '600', color: LV_TEXT },
-    participantDep: { fontSize: 11, color: LV_GRAY },
-    bar: { flex: 1, height: 22, borderRadius: 6, backgroundColor: LV_BAR_TRACK },
+    participants: { backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 8 },
+    participant: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: LV_ROW_BORDER },
+    participantRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    participantWho: { flex: 1, minWidth: 0, gap: 4 },
+    participantNameRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 },
+    participantName: { flexShrink: 1, fontSize: 16, lineHeight: 24, fontWeight: '600', color: LV_TEXT },
+    participantDep: { fontSize: 14, lineHeight: 21, color: LV_SUBTEXT },
+    bar: { marginTop: 12, height: 10, borderRadius: 6, backgroundColor: LV_BAR_TRACK },
     barFill: { position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: 6 },
     barAverage: { position: 'absolute', top: -3, bottom: -3, width: 2, marginLeft: -1, backgroundColor: LV_TEXT, opacity: 0.35 },
-    participantRight: { width: 58, alignItems: 'flex-end' },
-    participantMinutes: { fontSize: 14, fontWeight: '700', color: LV_TEXT },
-    participantTransfer: { fontSize: 10.5, color: LV_GRAY },
-    legend: { fontSize: 11, color: LV_GRAY, paddingTop: 4, paddingBottom: 6 },
-    participantDetail: { marginTop: 8, marginLeft: 34, padding: 12, borderRadius: 12, backgroundColor: LV_BG, gap: 8 },
-    detailTitle: { fontSize: 13, fontWeight: '700', color: LV_TEXT },
-    detailTrip: { color: LV_TEXT, fontSize: 13, fontWeight: '600', marginBottom: 4 },
-    segmentRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    segmentText: { fontSize: 12.5, color: LV_TEXT },
-    legTransfer: { color: LV_GRAY, fontSize: 12, marginLeft: 26, marginVertical: 2 },
-    legTrain: { color: LV_GRAY, fontSize: 11.5 },
-    detailMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-    detailMetaText: { fontSize: 12, color: LV_GRAY, flexShrink: 1 },
-    congestion: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    congestionDot: { width: 8, height: 8, borderRadius: 4 },
-    congestionText: { fontSize: 12, fontWeight: '700' },
-    detailHint: { fontSize: 11, color: LV_GRAY },
+    participantRight: { maxWidth: '42%', flexShrink: 1, alignItems: 'flex-end', gap: 3 },
+    participantMinutes: { fontSize: 18, lineHeight: 26, fontWeight: '700', color: LV_TEXT, textAlign: 'right' },
+    participantTransfer: { fontSize: 14, lineHeight: 21, color: LV_SUBTEXT, textAlign: 'right' },
+    legend: { fontSize: 14, lineHeight: 21, color: LV_SUBTEXT, paddingTop: 6, paddingBottom: 8 },
 
     reasonBox: { marginTop: 12, padding: 14, borderRadius: 16, backgroundColor: LV_SEGMENT },
-    reasonTitle: { fontSize: 11.5, fontWeight: '700', color: LV_PURPLE },
-    reasonText: { fontSize: 14.5, lineHeight: 22.5, color: LV_TEXT, marginTop: 6 },
-    reasonSource: { fontSize: 11, color: LV_GRAY, marginTop: 8 },
+    reasonTitle: { fontSize: 15, lineHeight: 23, fontWeight: '700', color: LV_PURPLE },
+    reasonText: { fontSize: 16, lineHeight: 25, color: LV_TEXT, marginTop: 8 },
+    reasonSource: { fontSize: 14, lineHeight: 21, color: LV_SUBTEXT, marginTop: 10 },
 
-    nearbyRow: { alignSelf: 'stretch', gap: 8 },
-    nearbyChip: { alignSelf: 'stretch', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 14, backgroundColor: WHITE, borderWidth: 1, borderColor: '#EEEAF2', gap: 8 },
-    nearbyMain: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 6 },
-    nearbyBody: { flex: 1, minWidth: 0, gap: 3 },
-    nearbyName: { fontSize: 13.5, fontWeight: '700', color: LV_TEXT },
-    nearbyMeta: { fontSize: 12, fontWeight: '600', color: '#6F6B78', textAlign: 'right' },
-    nearbyTag: { fontSize: 11, color: '#83808B' },
+    nearbyLines: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+    nearbyOption: { gap: 8 },
+    nearbyDivider: { borderTopWidth: 1, borderTopColor: LV_ROW_BORDER, paddingTop: 12 },
+    nearbyOptionHeading: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
+    nearbyLine: { fontSize: 14, lineHeight: 21, fontWeight: '600', color: LV_TEXT },
+    nearbyMetrics: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 10 },
+    nearbyRow: { alignSelf: 'stretch', gap: 12 },
+    nearbyChip: { alignSelf: 'stretch', padding: 16, borderRadius: 14, backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, gap: 12 },
+    nearbyMain: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 10 },
+    nearbyName: { flexShrink: 1, fontSize: 17, lineHeight: 25, fontWeight: '700', color: LV_TEXT },
+    nearbyMeta: { fontSize: 15, lineHeight: 23, fontWeight: '600', color: LV_SUBTEXT, flexShrink: 1 },
+    nearbyTag: { flexShrink: 1, fontSize: 14, lineHeight: 21, color: LV_SUBTEXT },
 
     otherTitle: { marginBottom: 4 },
-    otherRow: { flexDirection: 'row', alignItems: 'center', gap: 10, height: 48, paddingHorizontal: ROOM_CARD_PADDING, borderBottomWidth: 1, borderBottomColor: LV_ROW_BORDER },
-    otherLabel: { width: 64, fontSize: 12.5, color: LV_GRAY },
-    otherStation: { flex: 1, fontSize: 15, fontWeight: '600', color: LV_TEXT },
-    otherMax: { fontSize: 13, color: LV_SUBTEXT },
+    otherRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 10, minHeight: 56, paddingVertical: 12, paddingHorizontal: ROOM_CARD_PADDING, borderBottomWidth: 1, borderBottomColor: LV_ROW_BORDER },
+    otherLabel: { width: 72, fontSize: 14, lineHeight: 21, color: LV_SUBTEXT },
+    otherStation: { flex: 1, minWidth: 80, fontSize: 16, lineHeight: 24, fontWeight: '600', color: LV_TEXT },
+    otherMax: { fontSize: 14, lineHeight: 21, color: LV_SUBTEXT },
 
     historyBox: { marginTop: 20, paddingVertical: 12, paddingHorizontal: 14, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1, borderColor: LV_CARD_BORDER, gap: 4 },
-    historyTitle: { fontSize: 12.5, fontWeight: '700', color: LV_GRAY },
+    historyTitle: { fontSize: 15, lineHeight: 23, fontWeight: '700', color: LV_SUBTEXT },
     historyRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8 },
-    historyText: { flex: 1, fontSize: 13.5, color: LV_TEXT },
+    historyText: { flex: 1, fontSize: 15, lineHeight: 23, color: LV_TEXT },
 
     footer: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', gap: 8, paddingTop: 12, paddingHorizontal: 16, backgroundColor: LV_BG },
-    footerSecondary: { flex: 1, height: 52, paddingHorizontal: 10, borderRadius: 14, borderWidth: 1, borderColor: LV_FIELD_BORDER, backgroundColor: WHITE, alignItems: 'center', justifyContent: 'center' },
+    footerSecondary: { flex: 1, minHeight: 56, paddingHorizontal: 10, paddingVertical: 14, borderRadius: 14, borderWidth: 1, borderColor: LV_FIELD_BORDER, backgroundColor: WHITE, alignItems: 'center', justifyContent: 'center' },
     secondaryOff: { opacity: 0.5 },
-    footerSecondaryText: { fontSize: 15, fontWeight: '600', color: LV_TEXT },
-    footerPrimary: { flex: 1.3, height: 52, paddingHorizontal: 10, borderRadius: 14, backgroundColor: LV_PURPLE, alignItems: 'center', justifyContent: 'center' },
+    footerSecondaryText: { fontSize: 15, lineHeight: 23, fontWeight: '600', color: LV_TEXT, textAlign: 'center' },
+    footerPrimary: { flex: 1.3, minHeight: 56, paddingHorizontal: 10, paddingVertical: 14, borderRadius: 14, backgroundColor: LV_PURPLE, alignItems: 'center', justifyContent: 'center' },
     footerPrimaryOff: { backgroundColor: LV_DISABLED },
-    footerPrimaryText: { fontSize: 15, fontWeight: '600', color: WHITE },
+    footerPrimaryText: { fontSize: 15, lineHeight: 23, fontWeight: '600', color: WHITE, textAlign: 'center' },
 });
 
 /* 입력 보기·계산 중·불러오기 실패 화면 전용 (#204). 결과 보기 위쪽·세그먼트·안내 상자에서도 같이 써요(#206). */

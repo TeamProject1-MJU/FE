@@ -30,10 +30,10 @@ function trainLabel(train: Pick<BoardingTrain, 'lineName' | 'terminal' | 'direct
     return `${train.lineName}${terminal}${direction}`;
 }
 
-/** 탑승 열차 "강남역 18:38 · 2호선 성수행(내선)". 열차 번호는 상세에서만(withCode) */
+/** 탑승 열차 "강남역 18:38 / 2호선 성수행(내선)". 열차 번호는 상세에서만(withCode) */
 export function formatBoardingTrain(train: BoardingTrain, withCode = false) {
-    const code = withCode && train.trainCode ? ` · 열차 ${train.trainCode}` : '';
-    return `${formatStationName(train.stationName)} ${formatSeoulTime(train.departureAt)} · ${trainLabel(train)}${code}`;
+    const code = withCode && train.trainCode ? ` / 열차 ${train.trainCode}` : '';
+    return `${formatStationName(train.stationName)} ${formatSeoulTime(train.departureAt)} / ${trainLabel(train)}${code}`;
 }
 
 /** 열차 한 구간 "강남역 18:38 → 교대역 18:42 (2개 역)" */
@@ -43,16 +43,16 @@ export function formatLeg(leg: TrainLeg) {
 
 /** 열차 한 구간의 노선 표시 "2호선 성수행(내선)" (+ 상세의 열차 번호) */
 export function formatLegTrain(leg: TrainLeg) {
-    return `${trainLabel(leg)}${leg.trainCode ? ` · 열차 ${leg.trainCode}` : ''}`;
+    return `${trainLabel(leg)}${leg.trainCode ? ` / 열차 ${leg.trainCode}` : ''}`;
 }
 
-/** 이전 하차와 이 승차 사이 "환승 도보 N분 · 열차 대기 N분". 0 인 값은 빼고, 둘 다 0 이면 null */
+/** 이전 하차와 이 승차 사이 "환승 도보 N분 / 열차 대기 N분". 0 인 값은 빼고, 둘 다 0 이면 null */
 export function formatLegTransfer(leg: TrainLeg) {
     const parts = [
         leg.walkSec > 0 ? `환승 도보 ${stepMinutes(leg.walkSec)}분` : '',
         leg.transferWaitSec > 0 ? `열차 대기 ${stepMinutes(leg.transferWaitSec)}분` : '',
     ].filter(Boolean);
-    return parts.length ? parts.join(' · ') : null;
+    return parts.length ? parts.join(' / ') : null;
 }
 
 /** 계산 근거 문구 */
@@ -62,16 +62,16 @@ export function sourceNote(source: RecommendationSource | null) {
     return '이전 계산 결과라 열차 정보가 없어요';
 }
 
-/** stale 배너와 같은 이유 문구 "약속 시각이 바뀌었어요 · 참여자나 출발역이 바뀌었어요" */
+/** stale 배너와 같은 이유 문구 "약속 시각이 바뀌었어요 / 참여자나 출발역이 바뀌었어요" */
 export function staleReasonText(reasons: StaleReason[] | null) {
     return [reasons?.includes('APPOINTMENT_CHANGED') && '약속 시각이 바뀌었어요', reasons?.includes('MEMBERS_CHANGED') && '참여자나 출발역이 바뀌었어요']
-        .filter(Boolean).join(' · ');
+        .filter(Boolean).join(' / ');
 }
 
 /** 출발·도착 근처의 이전 계획 안내 */
 export function stalePlanText(reasons: StaleReason[] | null) {
     const reason = staleReasonText(reasons);
-    return `약속·멤버가 바뀌기 전 계획이에요${reason ? ` (${reason})` : ''}`;
+    return `약속 / 멤버가 바뀌기 전 계획이에요${reason ? ` (${reason})` : ''}`;
 }
 
 /** "18:38 출발 → 19:00 도착". 도착 시각이 없으면 "18:38 출발"만 */
