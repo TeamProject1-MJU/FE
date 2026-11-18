@@ -11504,3 +11504,107 @@ test('269 나눈 구간과 나누지 않은 구간이 섞여도 선 id 는 모�
     assert.deepEqual(map.routeLines.map(l => l.id), [2, 4, 7]);
     assert.deepEqual(map.bounds, { minLng: 126.99, minLat: 37.49, maxLng: 127.014, maxLat: 37.514 });
 });
+
+/* ---------- #272 방 정보 수정 화면 라벤더 디자인 ---------- */
+
+const EDIT272 = 'src/app/rooms/[roomId]/edit.tsx';
+const OLD_COLORS272 = ['#0f1c3f', '#2bcf9a', '#12a77a', '#f3f5f8', '#6b7488', '#e6e9ef', '#d6455d', '#c77a00', '#e6f8f1', '#fff4e0', '#7a4e00', '#fdecef', '#b9c0cf', '#a1a8b8', '#b7c0d6', '#d9dde4', 'rgba(15,28,63,0.42)'];
+/** 수정 화면 안의 ChangeTag 만 펼쳐요(달력·시간 모달처럼 훅을 쓰는 컴포넌트는 그대로 둬요). */
+function deep272(node) {
+    if (Array.isArray(node)) return node.map(deep272);
+    if (!node || typeof node !== 'object') return node;
+    if (typeof node.type === 'function' && node.type.name === 'ChangeTag') return deep272(node.type(node.props));
+    return { ...node, props: { ...node.props, children: deep272(node.props?.children) } };
+}
+const texts272 = view => findAll125(deep272(view), element => element.type === 'Text').map(textOf);
+const style272 = element => {
+    const style = typeof element.props.style === 'function' ? element.props.style({ pressed: false }) : element.props.style;
+    return Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
+};
+async function edit272({ detail = roomQueryDetail(), patch = () => jsonResponse({ success: true, data: null }), load = null } = {}) {
+    const r = roomQueryScreen(EDIT272, { roomId: ROOM_QUERY_ID }); r.patches272 = [];
+    r.context.fetch = async (_url, options) => {
+        if (options.method === 'PATCH') { r.patches272.push(JSON.parse(options.body)); return patch(); }
+        return load ? load() : jsonResponse({ success: true, data: detail });
+    };
+    r.render(); await settle(); r.view = r.render();
+    r.pick = (date, time) => {
+        findElement(r.view, element => element.type?.name === 'CalendarModal').props.onConfirm(date);
+        findElement(r.view, element => element.type?.name === 'TimeWheelModal').props.onConfirm(time);
+        r.view = r.render();
+    };
+    r.label = label => findElement(r.view, element => element.props?.accessibilityLabel === label);
+    return r;
+}
+const noMiddleDot272 = (view, label) => { for (const text of texts272(view)) assert.equal(text.includes('·'), false, `${label}: ${text}`); };
+
+test('272 수정 화면 파일에 옛 남색 디자인 색이 하나도 남아 있지 않아요', () => {
+    const source = fs.readFileSync(path.join(root, EDIT272), 'utf8').toLowerCase();
+    for (const color of OLD_COLORS272) assert.equal(source.includes(color.toLowerCase()), false, color);
+    for (const color of ['#F7F5FA', '#25212D', '#83808B', '#5C3F78', '#EDE8F3', '#E8E4ED', '#A8A3B0', '#CFC6DA', '#C64F65', '#F8EAF0', '#8C4C62']) assert.ok(source.includes(color.toLowerCase()), color);
+});
+
+test('272 수정 화면의 모든 상태에서 그려지는 글자에 가운데 점이 없고 안내 문구는 쉼표로 바뀌어요', async () => {
+    const r = await edit272();
+    noMiddleDot272(r.view, '기본');
+    assert.ok(texts272(r.view).includes("약속 시각을 바꾸면 이전 추천 결과는 '최신이 아님'으로 표시돼요. 추천, 후보, 확정 약속역은 그대로 남고, 자동으로 다시 추천하지 않아요."));
+    r.label('약속 이름').props.onChangeText('새 이름'); r.view = r.render(); r.pick('2035-02-10', '19:30');
+    noMiddleDot272(r.view, '이름과 시각 변경');
+    r.label('약속 시각 해제').props.onPress(); r.view = r.render(); noMiddleDot272(r.view, '시각 해제');
+    r.label('취소하고 돌아가기').props.onPress(); r.view = r.render();
+    assert.equal(findElement(r.view, element => element.type === 'Modal').props.visible, true); noMiddleDot272(r.view, '나가기 확인');
+    r.unmount();
+
+    const failed = await edit272({ patch: () => jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR' } }, 500) });
+    failed.label('약속 이름').props.onChangeText('새 이름'); failed.view = failed.render();
+    await roomWriteButton(failed.view, '저장').props.onPress(); failed.view = failed.render();
+    assert.ok(roomWriteButton(failed.view, '다시 시도')); noMiddleDot272(failed.view, '저장 실패');
+    const saveError = findElement(failed.view, element => element.type === 'View' && style272(element).backgroundColor === '#F8EAF0' && findElement(element.props.children, child => child.type === 'Text'));
+    assert.ok(saveError); assert.equal(style272(findElement(saveError.props.children, child => child.type === 'Text')).color, '#C64F65');
+    failed.unmount();
+
+    const saved = await edit272();
+    saved.label('약속 이름').props.onChangeText('새 이름'); saved.view = saved.render();
+    await roomWriteButton(saved.view, '저장').props.onPress(); saved.view = saved.render();
+    assert.ok(findText(saved.view, '저장했어요. 약속방으로 돌아갈게요.')); noMiddleDot272(saved.view, '저장 완료');
+    assert.deepEqual(saved.patches272, [{ name: '새 이름' }]); saved.unmount();
+
+    const loadFail = await edit272({ load: () => jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR' } }, 500) });
+    assert.ok(findText(loadFail.view, '정보를 불러오지 못했어요')); assert.ok(roomWriteButton(loadFail.view, '다시 시도')); noMiddleDot272(loadFail.view, '불러오기 실패');
+    assert.equal(findElement(loadFail.view, element => element.type === 'ActivityIndicator'), null); loadFail.unmount();
+
+    const member = await edit272({ detail: roomQueryDetail('MEMBER') });
+    assert.ok(findText(member.view, '방장만 수정할 수 있어요')); assert.ok(roomWriteButton(member.view, '약속방으로 돌아가기')); noMiddleDot272(member.view, '권한 없음');
+    member.unmount();
+});
+
+test('272 기존 문구·accessibilityLabel 은 그대로예요', async () => {
+    const r = await edit272();
+    const seen = () => new Set([...texts272(r.view), ...findAll125(r.view, element => typeof element.props?.accessibilityLabel === 'string').map(element => element.props.accessibilityLabel)]);
+    const all = new Set(seen());
+    r.label('약속 이름').props.onChangeText('새 이름'); r.view = r.render(); r.pick('2035-02-10', '19:30'); seen().forEach(text => all.add(text));
+    r.label('약속 시각 해제').props.onPress(); r.view = r.render(); seen().forEach(text => all.add(text));
+    for (const text of ['방 정보 수정', '지금 설정', '약속 이름', '약속 날짜 선택', '약속 시간 선택', '약속 시각 해제', '취소하고 돌아가기', '저장', '취소',
+        '바꾼 내용을 버릴까요?', '버리고 나가기', '계속 수정하기', '이름이 바뀌어요', '약속 시각이 바뀌어요', '약속 시각을 해제해요', '바꾼 내용이 없어요.', '바꾼 항목만 저장돼요.']) {
+        assert.ok(all.has(text), text);
+    }
+    for (const label of ['약속 날짜 선택', '약속 시간 선택', '취소하고 돌아가기']) assert.equal(r.label(label).props.accessibilityRole, 'button', label);
+    r.unmount();
+});
+
+test('272 저장 버튼은 바뀐 내용이 없으면 꺼진 색, 바꾸면 보라이고 버리고 나가기는 빨강, 바뀜 표시는 연보라·해제는 분홍이에요', async () => {
+    const r = await edit272();
+    assert.equal(style272(roomWriteButton(r.view, '저장')).backgroundColor, '#CFC6DA'); assert.equal(roomWriteButton(r.view, '저장').props.disabled, true);
+    assert.equal(style272(roomWriteButton(r.view, '버리고 나가기')).backgroundColor, '#C64F65');
+    assert.equal(style272(findElement(r.view, element => element.type === 'Text' && textOf(element) === '버리고 나가기')).color, '#FFFFFF');
+    assert.equal(style272(roomWriteButton(r.view, '계속 수정하기')).backgroundColor, '#FFFFFF');
+    const tag = text => findElement(deep272(r.view), element => element.type === 'View' && [element.props.children].flat().some(child => child?.type === 'Text' && textOf(child) === text));
+    r.label('약속 이름').props.onChangeText('새 이름'); r.view = r.render();
+    assert.equal(style272(roomWriteButton(r.view, '저장')).backgroundColor, '#5C3F78'); assert.equal(roomWriteButton(r.view, '저장').props.disabled, false);
+    assert.equal(style272(tag('이름이 바뀌어요')).backgroundColor, '#EDE8F3');
+    r.pick('2035-02-10', '19:30'); assert.equal(style272(tag('약속 시각이 바뀌어요')).backgroundColor, '#EDE8F3');
+    r.label('약속 시각 해제').props.onPress(); r.view = r.render();
+    const cleared = tag('약속 시각을 해제해요'); assert.equal(style272(cleared).backgroundColor, '#F8EAF0');
+    assert.equal(style272(findElement(cleared.props.children, child => child.type === 'Text')).color, '#8C4C62');
+    r.unmount();
+});
