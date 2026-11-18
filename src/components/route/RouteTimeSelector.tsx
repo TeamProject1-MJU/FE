@@ -111,7 +111,6 @@ export default function RouteTimeSelector({ value, open, onOpen, onClose, onChan
                                     onChange={(nextDate, nextTime) => { setDate(nextDate); setTime(nextTime); setError(''); }} />
                                 <Text style={styles.summary}>{dayLabel(date)} {timeLabel(time)} {mode === 'arrival' ? '도착' : '출발'}</Text>
                                 <Text style={[styles.caption, styles.note, styles.noteFirst]}>{mode === 'arrival' ? '도착' : '출발'} 날짜는 {mode === 'arrival' ? arrivalLastDate() : departureLastDate()}까지 선택할 수 있어요.</Text>
-                                <Text style={[styles.caption, styles.note]}>날짜가 멀수록 실제 운행 시각과 다를 수 있어요.</Text>
                             </>
                         )}
                         {!!error && <Text style={styles.error} accessibilityRole="alert">{error}</Text>}
