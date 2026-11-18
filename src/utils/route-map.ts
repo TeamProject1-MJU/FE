@@ -3,13 +3,17 @@
  *
  * - 역 좌표는 응답에 없어요. 역 마커는 구간 경로선(path)의 양 끝점에 찍고, path 가 없는 구간은 선·마커를 생략해요.
  * - path 는 [경도, 위도] 순서예요(명세 6.1). 지도에는 { latitude, longitude } 로 바꾸고 범위 밖 점은 버려요.
- * - 지하철 구간 색: 혼잡도 정보가 있으면 혼잡도 색, 없으면 노선 색, 그것도 없으면 회색. 도보는 회색 점선.
- * - 역 좌표가 없어 역마다 나눠 칠할 수 없으니 한 지하철 구간(승차~하차) 전체를 그 구간의 가장 높은 단계 색으로 칠해요.
- *   혼잡도 값은 서버가 준 level 을 그대로 쓰고 새로 계산하지 않아요.
+ * - 색 우선순위: 혼잡도 색 > 노선 색 > 회색. 도보는 회색 점선.
+ * - path 의 점이 하나도 버려지지 않았고 점 개수가 정차역(stops) 수와 같으면(2 이상, 시간표 경로) path 의 i번째 점을 stops[i] 로 보고
+ *   역과 역 사이마다 출발 쪽 역(stops[i])의 혼잡도 색으로 칠해요. 그 역의 혼잡도는 stations 에서 같은 id, 없으면 같은 순서 i 의 항목이에요.
+ *   같은 색이 이어지는 사이는 선 하나로 합치고, 이어지는 두 선은 경계 점을 함께 가져요.
+ * - 그렇지 않은 지하철 구간(카카오 경로 등)은 역 위치를 알 수 없어 승차~하차 전체를 그 구간의 가장 높은 단계 색으로 칠해요.
+ * - 나눈 결과가 지도 메시지 상한(isValidMapLines)을 넘으면 경로 전체를 나누지 않는 방식으로 그려요.
+ * - 혼잡도 값은 서버가 준 level 을 그대로 쓰고 새로 계산하지 않아요.
  */
 import type { MapLine, MapMarker } from '@/components/KakaoMap';
 import type { RouteMarkerKind } from '@/components/map/route-marker-icons';
-import { isHexColor, MAP_LIMITS } from '@/components/map/map-html';
+import { isHexColor, isValidMapLines, MAP_LIMITS } from '@/components/map/map-html';
 import { CONGESTION_STYLE, UNSUPPORTED_COLOR } from '@/components/route/Congestion';
 import type { Congestion, CongestionLevel, Route, RouteStep } from '@/types/route';
 import { DEFAULT_MAP_CENTER, isCoordinate, type Coordinate, type MapBounds } from '@/utils/home-map';
@@ -109,27 +113,71 @@ function sameLine(a: RouteMapLegendLine, b: RouteMapLegendLine) {
     return a.name === b.name && a.color === b.color;
 }
 
+/** 나눠 칠한 구간의 id 간격. 나누지 않은 선의 id(step 번호, MAP_LIMITS.lines 미만)와 겹치지 않아요. */
+const SECTION_ID_BASE = 1000;
+
+/** path 점이 모두 유효하고 개수가 정차역 수(2 이상)와 같은 지하철 구간만 역 사이로 나눌 수 있어요. */
+function canSplitStep(step: RouteStep, points: Coordinate[]) {
+    return step.type === 'SUBWAY' && Array.isArray(step.path) && points.length === step.path.length
+        && points.length >= 2 && points.length === (step.stops ?? []).length;
+}
+
+/** 정차역 i 의 혼잡도: stations 에서 같은 id, 없으면 같은 순서. 칠할 수 있는(supported·알려진 level) 값만 돌려줘요. */
+function stopCongestion(step: RouteStep, index: number): Congestion | null {
+    const stations = step.stations ?? [];
+    const id = step.stops[index]?.id;
+    const station = (id != null ? stations.find(item => item?.id === id) : undefined) ?? stations[index];
+    const congestion = station?.congestion;
+    return congestion?.supported && congestion.level && congestion.level in CONGESTION_STYLE ? congestion : null;
+}
+
+type Painted = { lines: MapLine[]; usesCongestion: boolean; usesLineColor: boolean; estimated: boolean; mock: boolean };
+
+function paintLines(steps: RouteStep[], stepPoints: Coordinate[][], split: boolean): Painted {
+    // 나누지 않는 선은 선 하나와 전체 점 개수 상한 안으로 고르게 줄여요.
+    const drawn = stepPoints.filter(points => points.length >= 2).length;
+    const perLine = Math.min(MAP_LIMITS.linePoints, Math.floor(MAP_LIMITS.totalPoints / Math.max(drawn, 1)));
+    const result: Painted = { lines: [], usesCongestion: false, usesLineColor: false, estimated: false, mock: false };
+    // 지도에 실제로 칠한 혼잡도만 범례 표시에 반영해요.
+    const paint = (congestion: Congestion | null) => {
+        if (congestion) {
+            result.usesCongestion = true;
+            if (congestion.kind === 'ESTIMATED') result.estimated = true;
+            if (congestion.kind === 'MOCK') result.mock = true;
+        } else result.usesLineColor = true;
+    };
+    steps.forEach((step, index) => {
+        const subway = step.type === 'SUBWAY';
+        const points = stepPoints[index];
+        if (points.length < 2) return;
+        if (split && canSplitStep(step, points)) {
+            const lineColor = isHexColor(step.line?.color) ? step.line.color : NO_DATA_LINE_COLOR;
+            let start = 0; let color = ''; let order = 0;
+            for (let i = 0; i < points.length - 1; i++) {
+                const congestion = stopCongestion(step, i);
+                paint(congestion);
+                const next = congestion?.level ? CONGESTION_STYLE[congestion.level].color : lineColor;
+                if (i > 0 && next !== color) {
+                    result.lines.push({ id: (index + 1) * SECTION_ID_BASE + order++, color, points: points.slice(start, i + 1) });
+                    start = i;
+                }
+                color = next;
+            }
+            result.lines.push({ id: (index + 1) * SECTION_ID_BASE + order, color, points: points.slice(start) });
+            return;
+        }
+        if (subway) paint(stepCongestion(step));
+        result.lines.push({ id: index, color: stepLineColor(step), points: thinPoints(points, perLine), ...(subway ? {} : { dashed: true }) });
+    });
+    return result;
+}
+
 export function buildRouteMap(route: Route): RouteMap {
     const steps = (route.steps ?? []).slice(0, MAP_LIMITS.lines);
     const stepPoints = steps.map(step => toCoordinates(step.path));
-    // 선 하나와 전체 점 개수 상한 안으로 고르게 줄여요.
-    const drawn = stepPoints.filter(points => points.length >= 2).length;
-    const perLine = Math.min(MAP_LIMITS.linePoints, Math.floor(MAP_LIMITS.totalPoints / Math.max(drawn, 1)));
-    const lines: MapLine[] = [];
-    let usesCongestion = false; let usesLineColor = false; let estimated = false; let mock = false;
-    steps.forEach((step, index) => {
-        const subway = step.type === 'SUBWAY';
-        const congestion = subway ? stepCongestion(step) : null;
-        const points = stepPoints[index];
-        if (points.length < 2) return;
-        // 지도에 실제로 칠한 혼잡도만 범례 표시에 반영해요.
-        if (congestion) {
-            usesCongestion = true;
-            if (congestion.kind === 'ESTIMATED') estimated = true;
-            if (congestion.kind === 'MOCK') mock = true;
-        } else if (subway) usesLineColor = true;
-        lines.push({ id: index, color: stepLineColor(step), points: thinPoints(points, perLine), ...(subway ? {} : { dashed: true }) });
-    });
+    // 역 사이로 나눈 결과가 지도 상한을 넘으면 지도가 메시지를 통째로 무시하니 나누지 않는 방식으로 그려요.
+    const sectioned = paintLines(steps, stepPoints, true);
+    const { lines, usesCongestion, usesLineColor, estimated, mock } = isValidMapLines(sectioned.lines) ? sectioned : paintLines(steps, stepPoints, false);
 
     const markers: RouteMapMarker[] = [];
     const subwayIndexes = steps.map((step, index) => step.type === 'SUBWAY' ? index : -1).filter(index => index >= 0);

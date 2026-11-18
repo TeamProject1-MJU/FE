@@ -3027,27 +3027,33 @@ test('도착정보 mock 은 기존 동작(정상·none·fail)을 유지하고 �
     assert.equal(server.timers.size, 0);
 });
 
-test('"곧 도착" 표시: secondsUntil 이 숫자면 message 와 상관없이 카운트다운, null 일 때만 message', () => {
+test('263 곧 도착·곧 출발: secondsUntil 숫자는 60/59/30/29/0 경계로 표시하고 null 일 때만 message', () => {
     const format = createRuntime().load('src/components/route/format.ts');
-    const { formatNextTrain, formatDestination, ARRIVING_SOON_SEC } = format;
+    const { formatNextTrain, formatDestination, ARRIVING_SOON_SEC, ARRIVING_NOW_SEC } = format;
     const train = (secondsUntil, message = null) => ({ destinationName: '성수', secondsUntil, message });
     assert.equal(formatDestination('성수'), '성수행');
     assert.equal(formatDestination('성수행'), '성수행');
     assert.equal(formatDestination(' 석남 '), '석남행');
     assert.equal(ARRIVING_SOON_SEC, 60);
+    assert.equal(ARRIVING_NOW_SEC, 30);
     assert.equal(Object.hasOwn(format, 'isTimeMessage'), false);
-    // secondsUntil 이 숫자면 message(시간 문구든 상태 문구든)와 상관없이 계산해요. 경계: 60 → 1분 0초, 59·0 → 곧 도착
+    // 숫자는 message와 무관해요. 30초는 곧 도착, 29초부터 곧 출발이에요.
     for (const message of ['2분 50초 후', '전역 출발', '[2]번째 전역', '[3]번째 전역 (남영)', '성수행 전역 도착', '', null]) {
         assert.equal(formatNextTrain(train(60, message), 0), '성수행 1분 0초', String(message));
         assert.equal(formatNextTrain(train(59, message), 0), '성수행 곧 도착', String(message));
-        assert.equal(formatNextTrain(train(0, message), 0), '성수행 곧 도착', String(message));
+        assert.equal(formatNextTrain(train(30, message), 0), '성수행 곧 도착', String(message));
+        assert.equal(formatNextTrain(train(29, message), 0), '성수행 곧 출발', String(message));
+        assert.equal(formatNextTrain(train(0, message), 0), '성수행 곧 출발', String(message));
         assert.equal(formatNextTrain(train(100, message), 0), '성수행 1분 40초', String(message));
         assert.equal(formatNextTrain(train(100, message), 41), '성수행 곧 도착', String(message));
     }
     // 지난 시간을 빼고, 0 아래로 내려가지 않아요.
     assert.equal(formatNextTrain(train(125), 65), '성수행 1분 0초');
     assert.equal(formatNextTrain(train(125), 66), '성수행 곧 도착');
-    assert.equal(formatNextTrain(train(30), 500), '성수행 곧 도착');
+    assert.equal(formatNextTrain(train(125), 95), '성수행 곧 도착');
+    assert.equal(formatNextTrain(train(125), 96), '성수행 곧 출발');
+    assert.equal(formatNextTrain(train(30), 500), '성수행 곧 출발');
+    assert.equal(formatNextTrain(train(-1), 0), '성수행 곧 출발');
     assert.equal(formatNextTrain(train(125), -30), '성수행 2분 5초');
     // secondsUntil 이 null 일 때만 message 를 "성수행 · 문구"로 보여주고, 행선지는 한 번만 나와요.
     // 맨 앞 "[N]" 은 대괄호만 빼고(#103), 괄호 안 역 이름과 나머지 글자는 서버 원문 그대로예요.
@@ -3094,8 +3100,19 @@ function nextTrainsRuntime(env = serverEnv, baseMs = ARRIVALS_BASE_MS) {
         return flat(view);
     };
     const receivedNow = () => new Date(baseMs + r.now()).toISOString();
-    return { ...r, calls, text, receivedNow, respond: fn => { responder = fn; } };
+    return { ...r, calls, text, view: props => r.renderComponent(element(props)), receivedNow, respond: fn => { responder = fn; } };
 }
+
+test('263 다음 열차의 곧 도착·곧 출발은 같은 강조 스타일이고 30→29초에서 문구만 바뀌어요', async () => {
+    const r = nextTrainsRuntime();
+    r.respond(async () => ok(arrivalsData({ trains: [arrivalTrain({ secondsUntil: 30 })] })));
+    r.text(); await flush();
+    const arriving = findText(r.view(), '성수행 곧 도착'); assert.ok(arriving);
+    assert.equal(arriving.props.style.color, '#5C3F78'); assert.equal(arriving.props.style.fontWeight, '700');
+    r.advance(1000);
+    const leaving = findText(r.view(), '성수행 곧 출발'); assert.ok(leaving);
+    assert.deepEqual(plain(leaving.props.style), plain(arriving.props.style)); r.unmount();
+});
 
 test('NextTrains: 첫 승차 구간 조건으로 부르고 카운트다운 중 1분 아래에서 "곧 도착", 20초 전에는 다시 부르지 않아요', async () => {
     const r = nextTrainsRuntime();
@@ -9353,6 +9370,17 @@ function selector152(value = { mode: 'now' }) {
     return Object.assign(r, { props152: props, changes152: changes });
 }
 
+test('263 출발·도착 날짜 범위 안내와 버튼 간격은 유지하고 먼 날짜 안내만 제거해요', () => {
+    for (const mode of ['departure', 'arrival']) {
+        const r = selector152({ mode, at: mode === 'arrival' ? ARRIVE152 : DEPART152 });
+        r.button152('검색 시각 선택').props.onPress(); const view = r.pump152();
+        assert.ok(findText(view, `${mode === 'arrival' ? '도착' : '출발'} 날짜는 2027-11-14까지 선택할 수 있어요.`));
+        assert.equal(findText(view, '날짜가 멀수록 실제 운행 시각과 다를 수 있어요.'), null);
+        const actions = findElement(view, node => node.type === 'View' && node.props.style?.marginTop === 16 && findText(node, '지금 출발') && findText(node, '확인'));
+        assert.ok(actions); r.unmount();
+    }
+});
+
 test('152 시각 선택은 적용 전에 검색하지 않고 날짜·시각 취소와 모달 닫기는 이전 조건을 유지해요', () => {
     const r = selector152(); r.button152('검색 시각 선택').props.onPress(); r.pump152();
     findElement(r.pump152(), element => element.type === 'Pressable' && element.props.accessibilityRole === 'switch' && element.props.accessibilityLabel === '도착 시각 설정').props.onPress();
@@ -9880,24 +9908,24 @@ test('173 조회 실패: 인증 오류는 이전 값·이전 기준 시각으로
     r.unmount();
 });
 
-test('173 표시 규칙 유지: null 은 message, 0초·60초 미만은 곧 도착, 0 아래로 내려가지 않아요', async () => {
+test('173/263 표시 규칙: null 은 message, 30~59초는 곧 도착, 30초 미만은 곧 출발, 0 아래로 내려가지 않아요', async () => {
     const r = nextTrains173Runtime();
     r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(40), trains: [
             arrivalTrain({ secondsUntil: null, stopsAway: 3, message: '[3]번째 전역 (남영)' }),
             arrivalTrain({ secondsUntil: 0, message: '전역 도착' }),
         ] })));
     r.text(); await flush();
-    assert.equal(r.text(), '다음 열차 성수행 · 3번째 전역 (남영), 성수행 곧 도착');
+    assert.equal(r.text(), '다음 열차 성수행 · 3번째 전역 (남영), 성수행 곧 출발');
     r.advance(10000);
-    assert.equal(r.text(), '다음 열차 성수행 · 3번째 전역 (남영), 성수행 곧 도착');
+    assert.equal(r.text(), '다음 열차 성수행 · 3번째 전역 (남영), 성수행 곧 출발');
     r.unmount();
-    for (const [seconds, shown] of [[60, '성수행 1분 0초'], [59, '성수행 곧 도착'], [1, '성수행 곧 도착']]) {
+    for (const [seconds, shown] of [[60, '성수행 1분 0초'], [59, '성수행 곧 도착'], [30, '성수행 곧 도착'], [29, '성수행 곧 출발'], [0, '성수행 곧 출발']]) {
         const one = nextTrains173Runtime();
         one.respond(async () => ok(arrivalsData({ receivedAt: one.ago(50), trains: [arrivalTrain({ secondsUntil: seconds })] })));
         one.text(); await flush();
         assert.equal(one.text(), `다음 열차 ${shown}`, String(seconds));
         one.advance(19000);
-        assert.equal(one.text(), '다음 열차 성수행 곧 도착', `${seconds} 0 아래로 내려가지 않아요`);
+        assert.equal(one.text(), seconds >= 49 ? '다음 열차 성수행 곧 도착' : '다음 열차 성수행 곧 출발', `${seconds} 지난 시간 차감과 0 이하 보정`);
         one.unmount();
     }
 });
@@ -10583,11 +10611,11 @@ test('233 36분 40초는 총시간·대기·구간에서 36분이며 도보·구
     assert.ok(timeline146(route).some(text => text.includes('36분')));
 });
 
-test('233 배지는 대기 포함 초·환승·요금을 독립 비교하고 동률·다중 배지·단일 경로를 처리해요', () => {
+test('233/263 배지는 대기 포함 초·환승·도보를 독립 비교하고 동률·다중 배지·단일 경로를 처리해요', () => {
     const r = createRuntime(); const { sortRoutes, routeBadges } = r.load('src/components/route/result.ts');
-    const make = (id, total, wait, transfers, fare) => ({ ...routeData().routes[0], routeId: id, routeType: null,
-        summary: { ...routeData().routes[0].summary, totalTimeSec: total, totalWithWaitSec: wait, transferCount: transfers, fare } });
-    const a = make('a', 1000, 2200, 1, 1500); const b = make('b', 2199, null, 2, 1400); const c = make('c', 2000, 2200, 0, 1400);
+    const make = (id, total, wait, transfers, walkingMinutes) => ({ ...routeData().routes[0], routeId: id, routeType: null,
+        summary: { ...routeData().routes[0].summary, totalTimeSec: total, totalWithWaitSec: wait, transferCount: transfers, walkingMinutes } });
+    const a = make('a', 1000, 2200, 1, 5); const b = make('b', 2199, null, 2, 3); const c = make('c', 2000, 2200, 0, 3);
     const routes = [a, c, b];
     assert.deepEqual(plain(sortRoutes(routes).map(route => route.routeId)), ['b', 'c', 'a']);
     assert.deepEqual(plain(routes.map(route => route.routeId)), ['a', 'c', 'b']);
@@ -10601,11 +10629,11 @@ test('233 배지는 대기 포함 초·환승·요금을 독립 비교하고 동
 test('252 기준별 유일한 최솟값에만 배지를 붙이고 일부·전체 최솟값 동률은 숨겨요', () => {
     const { routeBadges } = createRuntime().load('src/components/route/result.ts');
     const make = (id, summary = {}) => ({ ...routeData().routes[0], routeId: id,
-        summary: { ...routeData().routes[0].summary, totalTimeSec: 1200, totalWithWaitSec: 1500, transferCount: 1, fare: 1650, ...summary } });
+        summary: { ...routeData().routes[0].summary, totalTimeSec: 1200, totalWithWaitSec: 1500, transferCount: 1, fare: 1650, walkingMinutes: 3, ...summary } });
     const equal = [make('a'), make('b'), make('c')];
     for (const route of equal) assert.deepEqual(plain(routeBadges(route, equal)), []);
     for (const [field, larger, label] of [
-        ['totalWithWaitSec', 1600, '최소시간'], ['transferCount', 2, '최소환승'], ['fare', 1750, '최저요금'],
+        ['totalWithWaitSec', 1600, '최소시간'], ['transferCount', 2, '최소환승'], ['walkingMinutes', 4, '최소도보'],
     ]) {
         const tiedMinima = [make('a'), make('b'), make('c', { [field]: larger })];
         assert.deepEqual(plain(routeBadges(tiedMinima[0], tiedMinima)), []);
@@ -10616,11 +10644,28 @@ test('252 기준별 유일한 최솟값에만 배지를 붙이고 일부·전체
         assert.deepEqual(plain(routeBadges(uniqueMinimum[1], uniqueMinimum)), []);
         assert.deepEqual(plain(routeBadges(uniqueMinimum[2], uniqueMinimum)), []);
     }
-    const equalFares = [make('a'), make('b', { totalWithWaitSec: 1600, transferCount: 2 }), make('c', { totalWithWaitSec: 1700, transferCount: 2 })];
-    assert.deepEqual(plain(routeBadges(equalFares[0], equalFares)), ['최소시간', '최소환승']);
-    for (const route of equalFares) assert.equal(routeBadges(route, equalFares).includes('최저요금'), false);
+    const winner = [make('a'), make('b', { totalWithWaitSec: 1600, transferCount: 2, walkingMinutes: 4, fare: 1500 }), make('c', { totalWithWaitSec: 1700, transferCount: 2, walkingMinutes: 5, fare: 1400 })];
+    assert.deepEqual(plain(routeBadges(winner[0], winner)), ['최소시간', '최소환승', '최소도보']);
+    for (const route of winner) assert.equal(routeBadges(route, winner).includes('최저요금'), false);
+    const zeroWalks = [make('a', { walkingMinutes: 0 }), make('b', { walkingMinutes: 0 }), make('c', { walkingMinutes: 0 })];
+    for (const route of zeroWalks) assert.deepEqual(plain(routeBadges(route, zeroWalks)), []);
+    const onlyZero = [make('a', { walkingMinutes: 0 }), make('b'), make('c')];
+    assert.deepEqual(plain(routeBadges(onlyZero[0], onlyZero)), ['최소도보']);
+    assert.deepEqual(plain(routeBadges(onlyZero[0], [onlyZero[0]])), []);
     assert.deepEqual(plain(routeBadges(equal[0], [equal[0]])), []);
     assert.deepEqual(plain(routeBadges(equal[0], [])), []);
+});
+
+test('263 최소도보 배지로 바꿔도 접힘·펼침 카드의 예상 요금은 그대로 표시해요', () => {
+    const r = createRuntime(); const Card = r.load('src/components/route/RouteCard.tsx').default;
+    const route = r.load('src/services/route.ts').__parseRouteSearch(routeData()).routes[0]; Object.assign(route.summary, { fare: 1650, fareSource: 'ESTIMATED', walkingMinutes: 1 });
+    const other = { ...route, routeId: 'other', summary: { ...route.summary, fare: 1400, walkingMinutes: 2 } };
+    const badges = r.load('src/components/route/result.ts').routeBadges(route, [route, other]);
+    assert.deepEqual(plain(badges), ['최소도보']);
+    for (const expanded of [false, true]) {
+        const view = Card({ route, expanded, badgeLabels: badges, onPress() {}, onStart() {} });
+        assert.ok(findTextIncluding(view, '예상')); assert.ok(findTextIncluding(view, '1,650원'));
+    }
 });
 
 test('233 mock·서버 응답 경로 1개·복수 모두 표시하고 독립 토글·안내 시작으로 원본 경로를 전달해요', async () => {
@@ -10908,7 +10953,7 @@ test('241 약속방 추천의 총 소요 시간과 접근성 라벨도 시간/�
 test('241 B안 첫차 기준은 시간 아래 한 줄이며 noService 출발 안내와 중복하지 않아요', () => {
     const r = clock152(createRuntime());
     const Card = r.load('src/components/route/RouteCard.tsx').default;
-    for (const firstTrain of [false, true]) for (const noService of [false, true]) for (const expanded of [false, true]) for (const badgeLabels of [[], ['최소시간', '최저요금']]) {
+    for (const firstTrain of [false, true]) for (const noService of [false, true]) for (const expanded of [false, true]) for (const badgeLabels of [[], ['최소시간', '최소도보']]) {
         const route = r.load('src/services/route.ts').__parseRouteSearch(routeData()).routes[0];
         Object.assign(route.summary, { noService, departureAt: '2026-11-15T05:31:00+09:00' });
         const slot = route.steps.find(step => step.type === 'SUBWAY').stations[0];
@@ -11482,4 +11527,239 @@ test('271 참여자는 한 명씩 펼치고 다른 참여자를 열면 이전 �
     rows[0].props.onPress(); rows = findAll125(r.render(), e => e.type?.name === 'ParticipantRow'); assert.equal(rows.filter(row => row.props.opened).length, 1);
     assert.equal(rows[0].props.opened, true); rows[1].props.onPress(); rows = findAll125(r.render(), e => e.type?.name === 'ParticipantRow');
     assert.equal(rows[0].props.opened, false); assert.equal(rows[1].props.opened, true); assert.equal(rows.filter(row => row.props.opened).length, 1); r.unmount();
+});
+
+/* ---------- #267 도착·약속 시각 기준 경로 카드의 출발 시각 강조 ---------- */
+
+/** 큰 소요 시간 줄: 도착 문구 Text 를 바로 아래 자식으로 가진 View */
+function headline267(view, arrival) {
+    return findElement(view, element => element.type === 'View' && [element.props.children].flat().some(child => child?.type === 'Text' && textOf(child) === arrival));
+}
+
+function card267({ departureAt = '2026-11-14T23:35:00+09:00', noService = false } = {}) {
+    const r = clock152(createRuntime(serverEnv));
+    const route = r.load('src/services/route.ts').__parseRouteSearch(data152()).routes[0];
+    if (departureAt === null) delete route.summary.departureAt; else route.summary.departureAt = departureAt;
+    route.summary.noService = noService;
+    const Card = r.load('src/components/route/RouteCard.tsx').default;
+    const relative = r.load('src/utils/route-time.ts').formatRouteRelativeDateTime;
+    const render = props => Card({ route, expanded: false, onPress() {}, onStart() {}, ...props });
+    return { r, route, render, relative, departure: route.summary.departureAt ? `${relative(route.summary.departureAt)} 출발` : null, arrival: `${relative(route.summary.arrivalAt)} 도착` };
+}
+
+test('267 highlightDeparture 가 true 이고 출발 시각이 있으면 접힌 카드의 도착 문구보다 먼저 서버 출발 시각을 굵게 보여요', () => {
+    const c = card267(); const original = JSON.stringify(c.route);
+    assert.equal(c.departure, '오후 11:35 출발');
+    const view = c.render({ highlightDeparture: true });
+    const line = findText(view, c.departure); assert.ok(line);
+    const style = Object.assign({}, ...[line.props.style].flat());
+    assert.deepEqual({ color: style.color, fontSize: style.fontSize, fontWeight: style.fontWeight, marginTop: style.marginTop }, { color: '#5C3F78', fontSize: 17, fontWeight: '800', marginTop: 10 });
+    const texts = texts146(view);
+    assert.equal(texts.filter(text => text === c.departure).length, 1);
+    assert.ok(texts.indexOf(c.departure) >= 0 && texts.indexOf(c.departure) < texts.indexOf(c.arrival), '출발 시각이 도착 문구보다 먼저예요');
+    const headline = headline267(view, c.arrival);
+    assert.ok(findElement(headline, node => node.props?.accessibilityLabel?.startsWith('총 소요 시간')));
+    assert.equal(Object.assign({}, ...[headline.props.style].flat()).marginTop, 2);
+    // 자정을 넘기면 "내일" 이 붙은 서버 값 그대로예요.
+    const next = card267({ departureAt: '2026-11-15T00:05:00+09:00' });
+    assert.ok(findText(next.render({ highlightDeparture: true }), '내일 오전 12:05 출발'));
+    assert.equal(JSON.stringify(c.route), original, '카드는 route 를 바꾸지 않아요');
+});
+
+test('267 highlightDeparture 가 없거나 false 면 접힌 카드는 지금처럼 출발 시각 없이 소요 시간 여백 10 을 유지해요', () => {
+    const c = card267();
+    for (const props of [{}, { highlightDeparture: false }]) {
+        const view = c.render(props);
+        assert.equal(findText(view, c.departure), null); assert.ok(findText(view, c.arrival));
+        const headline = headline267(view, c.arrival);
+        assert.equal(Object.assign({}, ...[headline.props.style].flat()).marginTop, 10);
+        assert.deepEqual(texts146(view), texts146(c.render({})));
+    }
+});
+
+test('267 출발 시각이 없으면 새 줄이 없고, 운행 없음이면 기존 "출발 ~" 안내만 한 번 보여요', () => {
+    const none = card267({ departureAt: null });
+    assert.deepEqual(texts146(none.render({ highlightDeparture: true })), texts146(none.render({})));
+    assert.equal(findTextIncluding(none.render({ highlightDeparture: true }), '출발'), null);
+    const closed = card267({ departureAt: '2026-11-15T05:36:00+09:00', noService: true });
+    const view = closed.render({ highlightDeparture: true });
+    assert.equal(findText(view, closed.departure), null);
+    assert.ok(findText(view, `${closed.departure} ~`));
+    assert.deepEqual(texts146(view), texts146(closed.render({})));
+});
+
+test('267 펼친 카드는 새 줄이 있어도 타임라인의 출발·도착 예정 문구를 그대로 보여요', () => {
+    const c = card267();
+    for (const highlightDeparture of [false, true]) {
+        const view = c.render({ expanded: true, highlightDeparture });
+        const steps = findElement(view, element => element.type === 'View' && findText(element, `${c.relative(c.route.summary.arrivalAt)} 도착 예정`));
+        assert.ok(findText(steps, c.departure), '타임라인 맨 위 출발 시각');
+        assert.equal(texts146(view).filter(text => text === c.departure).length, highlightDeparture ? 2 : 1);
+    }
+});
+
+test('267 개인 검색은 도착 시각 지정만, 약속방은 약속 시각 기준만 카드 출발 시각을 강조해요', async () => {
+    const r = await screen152();
+    for (const [value, expected] of [[null, false], [{ mode: 'departure', at: DEPART152 }, false], [{ mode: 'arrival', at: ARRIVE152 }, true], [{ mode: 'now' }, false]]) {
+        if (value) { r.selector152().props.onChange(value); await pump152(r); }
+        const card = r.card152(); assert.equal(card.props.highlightDeparture, expected, value?.mode ?? 'now');
+        const view = card.type(card.props); const departure = `${r.load('src/utils/route-time.ts').formatRouteRelativeDateTime(card.props.route.summary.departureAt)} 출발`;
+        assert.equal(!!findText(view, departure), expected);
+    }
+    r.unmount();
+
+    for (const [label, options, expected] of [['약속 시각', {}, true], ['약속 없는 방', { appointmentAt: null }, false],
+        ['지난 약속', { appointmentAt: '2026-01-01T19:00:00+09:00', passed: true }, false], ['확인 못 함', { cache: false, detail: 'fail' }, false]]) {
+        const { appointmentAt = APPOINTMENT172, passed = false, cache = true, detail = 'ok' } = options;
+        const room = { ...roomQueryDetail(), appointmentAt };
+        const s = routeScreenRuntime({ departure: '강남', destination: '사당', roomId: room.id });
+        s.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_ME, nickname: '서버 나' });
+        const roomCache = s.load('src/services/room-cache.ts');
+        if (cache) roomCache.cacheRoomDetail({ ...room, memberCount: room.members.length }, roomCache.getRoomCacheScope());
+        const data = data152(); data.appointmentPassed = passed;
+        s.context.fetch = async url => {
+            if (url.endsWith('/routes/search')) return ok(data);
+            if (url.endsWith(`/rooms/${room.id}`)) return detail === 'fail' ? jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR' } }, 500) : ok(room);
+            return ok(stationSearchData([url.includes(encodeURIComponent('강남')) ? serverRouteStation(88001, '강남') : serverRouteStation(99002, '사당')]));
+        };
+        for (let i = 0; i < 6; i++) { s.render(); await settle(); }
+        const card = findElement(s.render(), element => element.type === s.load('src/components/route/RouteCard.tsx').default);
+        assert.ok(card, label); assert.equal(card.props.highlightDeparture, expected, label);
+        const before = JSON.stringify(card.props.route);
+        const relative = s.load('src/utils/route-time.ts').formatRouteRelativeDateTime;
+        assert.equal(!!findText(card.type(card.props), `${relative(data.routes[0].summary.departureAt)} 출발`), expected, label);
+        assert.equal(JSON.stringify(card.props.route), before, label);
+        card.props.onStart();
+        assert.equal(s.load('src/stores/route-store.ts').getSelectedRoute().timeBasis, { '약속 시각': 'appointment', '약속 없는 방': 'now', '지난 약속': 'now', '확인 못 함': 'unknown' }[label]);
+        s.unmount();
+    }
+});
+
+/* ---------- #269 경로 지도 선을 역 사이마다 혼잡도 색으로 ---------- */
+
+const stops269 = n => Array.from({ length: n }, (_, i) => ({ id: 100 + i, name: `역${100 + i}`, order: i }));
+const path269 = (n, offset = 0) => Array.from({ length: n }, (_, i) => [127 + (offset + i) / 1000, 37.5 + (offset + i) / 1000]);
+const point269 = ([lng, lat]) => ({ latitude: lat, longitude: lng });
+/** 정차역 수 = path 점 수인 지하철 구간. levels[i] 는 stops[i] 의 혼잡도(null 은 데이터 없음). */
+function split269(levels, { kinds = [], line, offset = 0, shuffle = false } = {}) {
+    const stations = levels.map((level, i) => station129(100 + i, congestion129(level, kinds[i] ?? 'PREDICTED')));
+    return step129('SUBWAY', { ...(line !== undefined ? { line } : {}), path: path269(levels.length, offset), stops: stops269(levels.length), stations: shuffle ? stations.reverse() : stations });
+}
+const map269 = steps => {
+    const route = { ...route129(), steps }; const before = JSON.stringify(route);
+    const built = routeMap129().buildRouteMap(route); assert.equal(JSON.stringify(route), before, '입력 route 를 바꾸지 않아요');
+    return plain(built);
+};
+
+test('269 점 수 = 정차역 수인 구간은 역 사이마다 출발 쪽 역 색, 같은 색은 한 선, 이어지는 선은 경계 점을 함께 가져요', () => {
+    const { MAP_LIMITS, isValidMapLines } = createRuntime().load('src/components/map/map-html.ts');
+    for (const shuffle of [false, true]) {
+        const step = split269(['NORMAL', 'NORMAL', 'CROWDED', 'VERY_CROWDED', 'VERY_CROWDED', 'COMFORTABLE'], { shuffle });
+        const map = map269([step]);
+        assert.deepEqual(map.lines.map(l => [l.id, l.color, l.dashed ?? false]), [
+            [1000, CONGESTION_COLOR129.NORMAL, false], [1001, CONGESTION_COLOR129.CROWDED, false], [1002, CONGESTION_COLOR129.VERY_CROWDED, false]], `shuffle ${shuffle}`);
+        const points = step.path.map(point269);
+        assert.deepEqual(map.lines.map(l => l.points), [points.slice(0, 3), points.slice(2, 4), points.slice(3, 6)]);
+        for (let i = 1; i < map.lines.length; i++) assert.deepEqual(map.lines[i].points[0], map.lines[i - 1].points.at(-1), '경계 점을 함께 가져요');
+        // 마지막 역(COMFORTABLE)은 칠하는 데 쓰지 않아요.
+        assert.equal(map.lines.some(l => l.color === CONGESTION_COLOR129.COMFORTABLE), false);
+        assert.equal(map.usesCongestion, true); assert.equal(map.usesLineColor, false);
+        assert.deepEqual(map.markers.map(m => [m.kind, m.latitude, m.longitude]), [['origin', 37.5, 127], ['destination', 37.505, 127.005]]);
+        assert.ok(isValidMapLines(map.lines)); assert.ok(map.lines.length <= MAP_LIMITS.lines);
+    }
+    // stations id 가 stops 와 맞지 않으면 같은 순서의 항목을 써요.
+    const byOrder = split269(['RELAXED', 'CROWDED', null]); byOrder.stations.forEach((station, i) => { station.id = 900 + i; });
+    assert.deepEqual(map269([byOrder]).lines.map(l => l.color), [CONGESTION_COLOR129.RELAXED, CONGESTION_COLOR129.CROWDED]);
+    // 같은 색만 이어지면 선 하나예요.
+    const same = map269([split269(['CROWDED', 'CROWDED', 'CROWDED', null])]);
+    assert.deepEqual(same.lines.map(l => [l.id, l.color, l.points.length]), [[1000, CONGESTION_COLOR129.CROWDED, 4]]);
+});
+
+test('269 혼잡도 없는 역에서 출발하는 사이는 노선 색, 노선 색도 없으면 회색이고 usesCongestion·usesLineColor 가 모두 true', () => {
+    const { NO_DATA_LINE_COLOR } = routeMap129();
+    const unsupported = { ...congestion129('VERY_CROWDED'), supported: false };
+    const step = split269(['NORMAL', null, 'NORMAL', null]); step.stations[2].congestion = unsupported;
+    const map = map269([step]);
+    assert.deepEqual(map.lines.map(l => [l.color, l.points.length]), [[CONGESTION_COLOR129.NORMAL, 2], ['#00a84d', 3]]);
+    assert.equal(map.usesCongestion, true); assert.equal(map.usesLineColor, true);
+    const gray = map269([split269([null, 'CROWDED', 'CROWDED'], { line: { id: 7, name: '7호선', color: null } })]);
+    assert.deepEqual(gray.lines.map(l => l.color), [NO_DATA_LINE_COLOR, CONGESTION_COLOR129.CROWDED]);
+    assert.equal(gray.usesCongestion, true); assert.equal(gray.usesLineColor, true);
+    // 알 수 없는 level 도 칠하지 않아요(서버 값을 바꾸지 않고 노선 색으로).
+    const odd = split269(['NORMAL', 'NORMAL']); odd.stations[0].congestion.level = 'UNKNOWN';
+    const oddMap = map269([odd]); assert.deepEqual(oddMap.lines.map(l => l.color), ['#00a84d']);
+    assert.equal(oddMap.usesCongestion, false); assert.equal(oddMap.usesLineColor, true);
+});
+
+test('269 estimated·mock 은 실제로 칠하는 데 쓴 혼잡도만 반영해요(마지막 역만 MOCK 이면 false)', () => {
+    const last = map269([split269(['NORMAL', 'CROWDED', 'VERY_CROWDED'], { kinds: ['PREDICTED', 'PREDICTED', 'MOCK'] })]);
+    assert.equal(last.mock, false); assert.equal(last.estimated, false);
+    const lastEstimated = map269([split269(['NORMAL', 'NORMAL'], { kinds: ['PREDICTED', 'ESTIMATED'] })]);
+    assert.equal(lastEstimated.estimated, false);
+    const used = map269([split269(['NORMAL', 'CROWDED', null], { kinds: ['ESTIMATED', 'MOCK'] })]);
+    assert.equal(used.estimated, true); assert.equal(used.mock, true);
+});
+
+test('269 점 수가 정차역 수와 다르거나 잘못된 점이 섞인 구간은 기존처럼 전체 한 색(가장 높은 단계)이에요', () => {
+    const { stepLineColor, thinPoints, toCoordinates } = routeMap129();
+    const more = split269(['NORMAL', 'CROWDED', 'VERY_CROWDED']); more.path = path269(5);
+    const fewer = split269(['NORMAL', 'CROWDED', 'VERY_CROWDED']); fewer.path = path269(2);
+    const bad = split269(['NORMAL', 'CROWDED', 'VERY_CROWDED', 'NORMAL']); bad.path = [...path269(3), [200, 37.5]];
+    const one = split269(['NORMAL']);
+    const noStops = split269(['NORMAL', 'VERY_CROWDED']); noStops.stops = [];
+    for (const [label, step] of [['점이 더 많음', more], ['점이 더 적음', fewer], ['잘못된 점', bad], ['역 하나', one], ['정차역 없음', noStops]]) {
+        const map = map269([step]);
+        const points = toCoordinates(step.path);
+        if (points.length < 2) { assert.equal(map.lines.length, 0, label); continue; }
+        assert.deepEqual(map.lines, [{ id: 0, color: stepLineColor(step), points: plain(thinPoints(points, 1000)) }], label);
+        assert.equal(map.lines[0].color, CONGESTION_COLOR129.VERY_CROWDED, label);
+    }
+    // 기존 경로 예시(path 3점, 정차역 2개)는 그대로예요.
+    const { NO_DATA_LINE_COLOR, WALK_LINE_COLOR } = routeMap129();
+    assert.deepEqual(plain(routeMap129().buildRouteMap(route129())).lines.map(l => [l.id, l.color]), [
+        [0, WALK_LINE_COLOR], [1, CONGESTION_COLOR129.CROWDED], [2, '#00a5de'], [3, '#00a5de'], [4, NO_DATA_LINE_COLOR]]);
+});
+
+test('269 색이 계속 바뀌는 긴 경로도 선 개수·점 개수가 상한 안이고, 넘으면 경로 전체를 나누지 않고 그려요', () => {
+    const { MAP_LIMITS, isValidMapLines } = createRuntime().load('src/components/map/map-html.ts');
+    const { stepLineColor } = routeMap129();
+    const alternate = n => Array.from({ length: n }, (_, i) => (i % 2 ? 'CROWDED' : 'COMFORTABLE'));
+    // 상한 안: 선 49개로 나눠요.
+    const fits = map269([split269(alternate(50))]);
+    assert.equal(fits.lines.length, 49); assert.ok(isValidMapLines(fits.lines)); assert.equal(new Set(fits.lines.map(l => l.id)).size, 49);
+    // 선 개수 초과: 두 구간 모두 나누지 않아요(경로 전체).
+    const many = [split269(alternate(30)), step129('WALKING', { path: path269(2, 40) }), split269(alternate(500), { offset: 50 })];
+    const tooMany = map269(many);
+    assert.ok(tooMany.lines.length <= MAP_LIMITS.lines); assert.ok(isValidMapLines(tooMany.lines));
+    assert.deepEqual(tooMany.lines.map(l => [l.id, l.color]), [[0, stepLineColor(many[0])], [1, '#8c93a3'], [2, stepLineColor(many[2])]]);
+    assert.equal(tooMany.usesLineColor, false); assert.equal(tooMany.usesCongestion, true);
+    // 선 하나의 점 개수 초과(같은 색 1200역): 나누지 않고 줄여서 그려요.
+    const longSame = map269([split269(Array(1200).fill('NORMAL'))]);
+    assert.deepEqual(longSame.lines.map(l => [l.id, l.points.length]), [[0, MAP_LIMITS.linePoints]]); assert.ok(isValidMapLines(longSame.lines));
+    // 전체 점 개수 초과: 6개 구간 × 999역.
+    const total = map269(Array.from({ length: 6 }, (_, i) => split269(Array(999).fill('NORMAL'), { offset: i * 1000 })));
+    assert.deepEqual(total.lines.map(l => l.id), [0, 1, 2, 3, 4, 5]); assert.ok(isValidMapLines(total.lines));
+    assert.ok(total.lines.reduce((sum, l) => sum + l.points.length, 0) <= MAP_LIMITS.totalPoints);
+});
+
+test('269 나눈 구간과 나누지 않은 구간이 섞여도 선 id 는 모두 다른 safe integer 이고 도보·마커·범위는 그대로예요', () => {
+    const { isValidMapLines } = createRuntime().load('src/components/map/map-html.ts');
+    const steps = [
+        step129('WALKING', { path: [[126.99, 37.49], [127, 37.5]] }),
+        split269(['NORMAL', 'CROWDED', null, 'CROWDED']),
+        step129('WALKING', { path: [[127.003, 37.503], [127.01, 37.51]] }),
+        step129('SUBWAY', { line: { id: 4, name: '4호선', color: '#00a5de' }, path: path269(3, 10), stops: stops269(2), stations: [station129(100, congestion129('VERY_CROWDED'))] }),
+        split269(['RELAXED', 'VERY_CROWDED', 'VERY_CROWDED'], { offset: 12, line: { id: 7, name: '7호선', color: '#747f00' } }),
+    ];
+    const map = map269(steps);
+    const ids = map.lines.map(l => l.id);
+    assert.deepEqual(ids, [0, 2000, 2001, 2002, 2, 3, 5000, 5001]);
+    assert.ok(ids.every(Number.isSafeInteger)); assert.equal(new Set(ids).size, ids.length); assert.ok(isValidMapLines(map.lines));
+    assert.deepEqual(map.lines.map(l => l.dashed ?? false), [true, false, false, false, true, false, false, false]);
+    assert.deepEqual(map.lines.map(l => l.color), ['#8c93a3', CONGESTION_COLOR129.NORMAL, CONGESTION_COLOR129.CROWDED, '#00a84d', '#8c93a3',
+        CONGESTION_COLOR129.VERY_CROWDED, CONGESTION_COLOR129.RELAXED, CONGESTION_COLOR129.VERY_CROWDED]);
+    assert.deepEqual(map.markers.map(m => [m.kind, m.latitude, m.longitude]), [
+        ['origin', 37.5, 127], ['transfer', 37.51, 127.01], ['transfer', 37.512, 127.012], ['destination', 37.514, 127.014]]);
+    assert.deepEqual(map.routeLines.map(l => l.id), [2, 4, 7]);
+    assert.deepEqual(map.bounds, { minLng: 126.99, minLat: 37.49, maxLng: 127.014, maxLat: 37.514 });
 });

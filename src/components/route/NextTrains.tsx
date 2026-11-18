@@ -15,7 +15,7 @@ function trainLabel(text: string, countdown: boolean) {
     if (countdown && match) {
         return <><Text style={styles.destination}>{match[1]}</Text><Text style={styles.remaining}>{match[2]}</Text></>;
     }
-    return <Text style={text.endsWith(' 곧 도착') ? styles.soon : styles.destination}>{text}</Text>;
+    return <Text style={text.endsWith(' 곧 도착') || text.endsWith(' 곧 출발') ? styles.soon : styles.destination}>{text}</Text>;
 }
 
 /** 서버가 (역, 노선)별로 10~20초 캐시하고 일일 호출 한도가 있어 15~30초 사이로 지켜요. */
