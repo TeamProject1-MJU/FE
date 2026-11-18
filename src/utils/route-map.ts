@@ -8,6 +8,7 @@
  *   혼잡도 값은 서버가 준 level 을 그대로 쓰고 새로 계산하지 않아요.
  */
 import type { MapLine, MapMarker } from '@/components/KakaoMap';
+import type { RouteMarkerKind } from '@/components/map/route-marker-icons';
 import { isHexColor, MAP_LIMITS } from '@/components/map/map-html';
 import { CONGESTION_STYLE, UNSUPPORTED_COLOR } from '@/components/route/Congestion';
 import type { Congestion, CongestionLevel, Route, RouteStep } from '@/types/route';
@@ -22,7 +23,7 @@ export const CONGESTION_LEVEL_LABEL: Record<CongestionLevel, string> = {
 export const NO_DATA_LINE_COLOR = UNSUPPORTED_COLOR;
 /** 도보 구간(점선) */
 export const WALK_LINE_COLOR = '#8c93a3';
-export type RouteMarkerKind = 'origin' | 'transfer' | 'destination';
+export type { RouteMarkerKind } from '@/components/map/route-marker-icons';
 export const ROUTE_MARKER_COLOR: Record<RouteMarkerKind, string> = { origin: '#2879ef', transfer: '#6a5ae0', destination: '#0f1c3f' };
 export const ROUTE_MARKER_LABEL: Record<RouteMarkerKind, string> = { origin: '출발', transfer: '환승', destination: '도착' };
 /** 점이 하나뿐이거나 폭이 0인 범위를 넓히는 양(도, 약 200m) */

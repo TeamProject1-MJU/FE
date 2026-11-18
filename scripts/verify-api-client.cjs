@@ -6372,8 +6372,9 @@ test('114 화면 이중 제출·이탈 및 계정 전환 후 응답 폐기·임�
         if (stale === 'account') await r.load('src/services/auth.ts').clearLocalSession();
         finish(jsonResponse({ success: true, data: directionData114() }));
         for (let i = 0; i < 4; i++) await settle();
-        if (stale !== 'unmount') assert.equal(!!findElement(r.render(), e => e.props?.children === '맞는 방향이에요'), stale === 'none');
-        assert.ok(r.deleted.includes('file:///cache/output.jpg')); r.unmount();
+        if (stale !== 'unmount') assert.equal(!!findElement(deep125(r.render()), e => e.props?.accessibilityRole === 'header' && e.props?.children === '맞는 방향이에요'), stale === 'none');
+        assert.equal(r.deleted.includes('file:///cache/output.jpg'), stale !== 'none'); r.unmount();
+        assert.ok(r.deleted.includes('file:///cache/output.jpg'), '정상 결과도 화면을 떠날 때 정리해요');
     }
 });
 
@@ -6602,8 +6603,8 @@ test('254 새 사진은 기존 사진·결과·오류를 교체하고 새 임시
         const view = await r.press('갤러리 선택');
         assert.equal(texts125(view).includes('맞는 방향이에요'), false);
         assert.equal(alertText125(view), invalid ? SERVER_ERROR_TEXT125.IMAGE_INVALID : null);
-        assert.equal(photoUri125(view), invalid ? null : output);
-        assert.equal(r.deleted.includes(source), invalid); assert.equal(r.deleted.includes(output), invalid);
+        assert.equal(photoUri125(view), invalid ? source : output);
+        assert.equal(r.deleted.includes(source), false, '새 사진은 변환 실패에도 미리보기에 유지해요'); assert.equal(r.deleted.includes(output), invalid);
         assert.equal(r.button('다시 시도'), null);
         if (!invalid) assert.equal(r.button('AI로 확인하기').props.disabled, false);
         r.unmount(); assert.ok(r.deleted.includes(source)); assert.ok(r.deleted.includes(output));
@@ -6626,7 +6627,7 @@ test('125 재시도 가능한 오류 4종은 사진을 유지하고 다시 시�
         view = r.render(); assert.equal(r.button('AI로 확인하기').props.disabled, true); assert.equal(r.button('다시 시도'), null);
         assert.ok(texts125(view).includes('표지판을 읽는 중…')); assert.ok(findElement(view, e => e.type?.name === 'ScanLine'));
         finish(jsonResponse({ success: true, data: directionData114() })); view = await r.pump();
-        assert.ok(texts125(view).includes('맞는 방향이에요')); assert.equal(photoUri125(view), null); assert.equal(deletedCount125(r), 1);
+        assert.ok(texts125(view).includes('맞는 방향이에요')); assert.equal(photoUri125(view), OUTPUT125); assert.equal(deletedCount125(r), 0);
         r.unmount();
     }
 });
@@ -6647,17 +6648,17 @@ test('125 재시도 오류 뒤 새 사진을 고르면 유지하던 사진과 �
     assert.ok(r.button('AI로 확인하기')); assert.equal(r.button('다시 시도'), null); r.unmount();
 });
 
-test('125 IMAGE_INVALID는 사진을 지우고 다른 사진을, 경로 오류는 경로 재선택을, 인증 오류는 안내 없이 정리해요', async () => {
+test('125 IMAGE_INVALID·경로 오류도 사진을 유지하고 안내하며 인증 오류는 사진을 정리해요', async () => {
     const image = await directionScreen125(); await image.press('표지판 촬영');
     image.respond(failure125('IMAGE_INVALID')); let view = await image.press('AI로 확인하기');
-    assert.equal(alertText125(view), SERVER_ERROR_TEXT125.IMAGE_INVALID); assert.equal(photoUri125(view), null); assert.equal(deletedCount125(image), 1);
+    assert.equal(alertText125(view), SERVER_ERROR_TEXT125.IMAGE_INVALID); assert.equal(photoUri125(view), OUTPUT125); assert.equal(deletedCount125(image), 0);
     assert.equal(image.button('다시 시도'), null); assert.equal(image.button('AI로 확인하기'), null);
     assert.ok(texts125(view).includes('표지판이 잘 보이는 다른 사진을 골라 주세요.'));
     assert.equal(image.button('표지판 촬영').props.disabled, false); assert.equal(image.button('갤러리 선택').props.disabled, false); image.unmount();
     for (const code of ['STATION_NOT_FOUND', 'VALIDATION_ERROR']) {
         const r = await directionScreen125(); await r.press('표지판 촬영');
         r.respond(failure125(code)); view = await r.press('AI로 확인하기');
-        assert.equal(alertText125(view), SERVER_ERROR_TEXT125[code]); assert.equal(photoUri125(view), null); assert.equal(deletedCount125(r), 1);
+        assert.equal(alertText125(view), SERVER_ERROR_TEXT125[code]); assert.equal(photoUri125(view), OUTPUT125); assert.equal(deletedCount125(r), 0);
         assert.equal(r.button('다시 시도'), null); assert.equal(r.button('표지판 촬영'), null);
         await r.press('경로 다시 선택'); assert.deepEqual(r.routes, ['/route-search']); r.unmount();
     }
@@ -6668,7 +6669,7 @@ test('125 IMAGE_INVALID는 사진을 지우고 다른 사진을, 경로 오류�
     assert.equal(auth.alerts.length, 0); assert.ok(texts125(view).includes('표지판을 찍어 주세요')); auth.unmount();
 });
 
-test('125 결과 3종은 제목·색·아이콘이 다르고 읽은 값·내 경로 값을 나란히, null은 읽지 못했어요로 보여주며 사진을 정리해요', async () => {
+test('125 결과 3종은 제목·색·아이콘이 다르고 읽은 값·내 경로 값과 인식 체크를 보여주며 사진을 유지해요', async () => {
     const looks = {};
     for (const result of ['CORRECT', 'WRONG', 'RETAKE']) {
         const r = await directionScreen125(); await r.press('표지판 촬영');
@@ -6676,22 +6677,23 @@ test('125 결과 3종은 제목·색·아이콘이 다르고 읽은 값·내 경
             : { stationName: '강남', lineName: '2호선', headsign: result === 'CORRECT' ? '사당 방면' : '성수 방면' };
         r.respond(async () => jsonResponse({ success: true, data: { ...directionData114(result), recognized, message: `서버 안내 ${result}` } }));
         const view = deep125(await r.press('AI로 확인하기'));
-        assert.equal(photoUri125(view), null, `${result}: 사진 정리`); assert.equal(deletedCount125(r), 1);
+        assert.equal(photoUri125(view), OUTPUT125, `${result}: 사진 유지`); assert.equal(deletedCount125(r), 0);
         const titleNode = findAll125(view, e => e.type === 'Text' && e.props.accessibilityRole === 'header')[0];
         const title = { text: textOf(titleNode), color: flattenStyle125(titleNode.props.style).color };
         const icon = findAll125(view, e => e.type === 'Ionicons' && e.props.size === 18)[0].props.name;
         looks[result] = { ...title, icon };
         assert.ok(texts125(view).includes(`서버 안내 ${result}`), `${result}: 서버 message`);
-        const rows = findAll125(view, e => e.type === 'View' && e.props.style?.[0]?.paddingVertical === 11);
-        assert.equal(rows.length, 2, '인식한 문구와 가야 할 방향 두 행으로 보여줘요');
+        const marks = findAll125(view, e => e.type === 'Ionicons' && /^(역 이름|호선|방면) (인식됨|미인식)$/.test(e.props.accessibilityLabel ?? ''));
+        assert.equal(marks.length, 3, '역 이름·호선·방면 세 항목을 보여줘요');
+        assert.ok(marks.every(mark => mark.props.name === (result === 'RETAKE' ? 'close-circle' : 'checkmark-circle')));
         const fields = findAll125(view, e => e.type === 'Text' && /^(읽은|내 경로) (역 이름|호선|방면)$/.test(e.props.accessibilityLabel ?? ''));
         assert.deepEqual(fields.map(field => [field.props.accessibilityLabel, textOf(field)]), [
-            ['읽은 역 이름', recognized.stationName ? '강남역' : '읽지 못했어요'],
-            ['읽은 호선', recognized.lineName ?? '읽지 못했어요'], ['읽은 방면', recognized.headsign ?? '읽지 못했어요'],
+            ['읽은 역 이름', recognized.stationName ? '강남역' : '미인식'],
+            ['읽은 호선', recognized.lineName ?? '미인식'], ['읽은 방면', recognized.headsign ?? '미인식'],
             ['내 경로 역 이름', '강남역'], ['내 경로 호선', '2호선'], ['내 경로 방면', '사당 방면'],
         ], result);
         const headsignCell = fields.find(field => field.props.accessibilityLabel === '읽은 방면');
-        assert.equal(flattenStyle125(headsignCell.props.style).color, { CORRECT: '#5C3F78', WRONG: '#8C4166', RETAKE: '#83808B' }[result], `${result}: 방면 비교 색`);
+        assert.equal(flattenStyle125(headsignCell.props.style).color, { CORRECT: '#25212D', WRONG: '#25212D', RETAKE: '#83808B' }[result], `${result}: 인식 문구 색`);
         assert.equal(headsignCell.props.numberOfLines, undefined, '값은 자르지 않아요');
         assert.equal(r.button('표지판 촬영').props.disabled, false); assert.equal(!!r.button('경로 안내로 돌아가기'), true);
         r.unmount();
@@ -6782,10 +6784,11 @@ test('250 사진이 없으면 사진 카드 없이 촬영 프레임을, 사진�
     assert.equal(change.props.accessibilityRole, 'button'); assert.equal(change.props.disabled, false);
     assert.equal(corner250(view), null, '사진 카드에는 모서리 표시가 없어요');
     assert.equal(texts125(view).includes('선택한 사진이에요'), false, '사진 카드에는 안내 칩이 없어요');
-    // 결과가 나오면 사진을 정리하므로 카드도 사라져요.
+    // 결과가 나와도 같은 사진 카드가 남아요 (#265).
     r.respond(async () => jsonResponse({ success: true, data: directionData114() })); view = await r.press('AI로 확인하기');
     assert.ok(texts125(view).includes('맞는 방향이에요'));
-    assert.equal(photoChange250(view), null); assert.equal(texts125(view).includes('선택한 사진'), false); assert.ok(corner250(view));
+    assert.ok(photoChange250(view)); assert.ok(texts125(view).includes('선택한 사진')); assert.equal(corner250(view), null);
+    assert.equal(photoUri125(view), OUTPUT125);
     r.unmount();
 });
 
@@ -6827,13 +6830,13 @@ test('250 분석 중에는 바꾸기가 잠기고 사진 상자 높이를 받은
  */
 const MOCK_FIXTURE125 = path.join(root, 'scripts/fixtures/ai-direction-mock-125.json');
 const MOCK_FIXTURE_UPDATE125 = 'UPDATE_FIXTURES=1 node scripts/verify-api-client.cjs';
-test('125 mock 모드 화면은 #198 디자인 기준의 단계별 트리·스타일·동작을 유지해요', async () => {
+test('125 mock 모드 화면은 #265 인식 체크 기준의 단계별 트리·스타일·동작을 유지해요', async () => {
     const crypto = require('node:crypto');
     const actual = Object.fromEntries(Object.entries(await mockDirectionSnapshots125())
         .map(([key, value]) => [key, crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex')]));
     if (process.env.UPDATE_FIXTURES === '1') {
         fs.writeFileSync(MOCK_FIXTURE125, JSON.stringify({
-            note: '#198 밝은 시안 디자인(블록 승객·두 행 비교표·촬영 프레임)을 반영해 mock 화면 기준을 갱신했어요. serialize125 로 만들고 UPDATE_FIXTURES=1 로 갱신해요.',
+            note: '#265 인식 3개 항목 체크·X와 가야 할 방향, 재촬영 선택 취소 시 기존 사진 유지를 반영했어요. serialize125 로 만들고 UPDATE_FIXTURES=1 로 갱신해요.',
             snapshots: actual,
         }, null, 1) + '\n');
         return;
@@ -7332,7 +7335,7 @@ function html129() {
         kakao: { maps: { LatLng, load: fn => fn(), event: { addListener() {} },
                 LatLngBounds: class { constructor(sw, ne) { this.sw = sw; this.ne = ne; } },
                 Map: class { setCenter() {} getLevel() { return 5; } setBounds(bounds, ...padding) { fits.push({ bounds, padding }); } getBounds() { return { getSouthWest: () => new LatLng(37.4, 126.9), getNorthEast: () => new LatLng(37.7, 127.2) }; } },
-                CustomOverlay: class { constructor(options) { this.color = options.content.style.borderColor ?? options.content.style.backgroundColor; dots.push(this); } setMap(v) { this.detached = v === null; } },
+                CustomOverlay: class { constructor(options) { this.options = options; this.color = options.content.style.borderColor ?? options.content.style.backgroundColor; dots.push(this); } setMap(v) { this.detached = v === null; } },
                 Polyline: class { constructor(options) { this.options = options; polylines.push(this); } setMap(v) { this.detached = v === null; } },
             } },
     };
@@ -10236,7 +10239,7 @@ test('151 인식 정보가 모두 null인 RETAKE도 실패 화면 없이 재촬�
     const r = await directionScreen125({ stationId: '88001', lineId: '6', direction: 'LOOP' }); await r.press('갤러리 선택');
     const data = response151('RETAKE', 'MISSING_INFO', null); data.recognized = { stationName: null, lineName: null, headsign: null };
     r.respond(async () => jsonResponse({ success: true, data })); const text = texts125(await r.press('AI로 확인하기'));
-    assert.ok(text.includes('다시 촬영해 주세요')); assert.ok(text.includes('읽지 못했어요')); assert.ok(text.includes('순환'));
+    assert.ok(text.includes('다시 촬영해 주세요')); assert.ok(text.includes('미인식')); assert.ok(text.includes('순환'));
     assert.ok(r.button('표지판 촬영')); assert.ok(r.button('경로 안내로 돌아가기')); assert.equal(r.alerts.length, 0); r.unmount();
 });
 
@@ -10354,7 +10357,7 @@ test('198 서버 화면은 블록 승객과 실제 판정·재촬영·갤러리�
     let view = await r.press('AI로 확인하기');
     assert.ok(findElement(deep125(view), e => e.type === 'Image' && e.props.source?.uri.startsWith('data:image/svg+xml')));
     assert.ok(r.button('표지판 촬영')); assert.ok(r.button('갤러리 선택')); assert.ok(r.button('경로 안내로 돌아가기'));
-    assert.equal(photoUri125(view), null, '결과 후 원본 사진 정리 정책은 그대로예요');
+    assert.equal(photoUri125(view), OUTPUT125, '결과 후에도 사진은 유지해요 (#265)');
     assert.equal(texts125(view).some(text => /시연용|시연 결과|AI OCR 미연결/.test(text)), false);
     await r.press('표지판 촬영');
     view = r.render();
@@ -10967,4 +10970,347 @@ test('241 B안 첫차 기준은 시간 아래 한 줄이며 noService 출발 안
         }
         assert.equal(JSON.stringify(route), original);
     }
+});
+
+/* ---------- 경로 지도 마커 표시와 플랫폼 호환 (#261) ---------- */
+test('261 웹 경로 마커는 원래 좌표에서 전용 아이콘을 쓰고 홈·내 위치 점과 지도 이동을 유지해요', () => {
+    const r = createRuntime();
+    const { createWebMap } = r.load('src/components/map/map-web.ts');
+    const f = webMap126Fixture();
+    const kinds = ['origin', 'transfer', 'transfer', 'destination'];
+    const markers = kinds.map((kind, id) => ({ id, isSupported: true, kind, latitude: 37.5 + id * .01, longitude: 127 + id * .01 }));
+    const state = { ...f.state, markers: [...markers, f.state.markers[0]] };
+    const controller = createWebMap(f.container, f.sdk, state, { onRegionChange() {}, onReady() {}, onError() { assert.fail(); } });
+    const route = f.overlays.slice(0, kinds.length).map(o => o.options);
+    assert.deepEqual(route.map(o => o.content.tagName), ['img', 'img', 'img', 'img']);
+    assert.deepEqual(route.map(o => [o.position.getLat(), o.position.getLng()]), markers.map(m => [m.latitude, m.longitude]));
+    assert.deepEqual(route.map(o => o.content.alt), ['출발', '환승', '환승', '도착']);
+    assert.ok(route[0].yAnchor > .9, '캐릭터는 중심이 아니라 발밑을 좌표에 맞춰요');
+    assert.equal(route[1].yAnchor, .5, '환승 원은 중심을 좌표에 맞춰요');
+    assert.ok(route[3].yAnchor > .9 && route[3].xAnchor < .5, '깃발 천 중심이 아니라 왼쪽 기둥 아래가 좌표예요');
+    assert.equal(route[1].content.src, route[2].content.src);
+    assert.notEqual(route[0].content.src, route[1].content.src);
+    assert.notEqual(route[3].content.src, route[1].content.src);
+    assert.match(f.overlays[4].options.content.style.cssText, /border:3px solid #5C3F78/);
+    assert.match(f.overlays[5].options.content.style.cssText, /background-color:#2879ef/);
+    const centerCount = f.centers.length;
+    controller.update({ ...state, markers: [] });
+    assert.ok(f.overlays.slice(0, 6).every(o => o.detached));
+    assert.equal(f.centers.length, centerCount, '마커 갱신으로 사용자가 이동한 중심을 되돌리지 않아요');
+    controller.dispose(); assert.ok(f.overlays.every(o => o.detached));
+});
+
+test('261 WebView와 웹 지도는 같은 아이콘·기준점·좌표를 쓰고 이전 마커를 정리해요', () => {
+    const r = createRuntime(); const f = webMap126Fixture(); const h = html129();
+    const markers = ['origin', 'transfer', 'destination'].map((kind, id) => ({ ...h.point, latitude: h.point.latitude + id * .01, id, kind, isSupported: true }));
+    h.send({ ...h.base, markers });
+    const controller = r.load('src/components/map/map-web.ts').createWebMap(f.container, f.sdk,
+        { ...f.state, myLocation: null, markers }, { onRegionChange() {}, onReady() {}, onError() { assert.fail(); } });
+    assert.equal(h.dots.length, 3);
+    for (let i = 0; i < markers.length; i++) {
+        const native = h.dots[i].options; const web = f.overlays[i].options;
+        assert.equal(native.content.src, web.content.src);
+        assert.equal(native.content.alt, web.content.alt);
+        assert.equal(native.xAnchor, web.xAnchor); assert.equal(native.yAnchor, web.yAnchor);
+        assert.deepEqual([native.position.getLat(), native.position.getLng()], [markers[i].latitude, markers[i].longitude]);
+    }
+    h.send({ ...h.base, markers: [] }); assert.ok(h.dots.every(o => o.detached));
+    controller.dispose();
+});
+
+test('261 알 수 없는 마커 종류는 웹·WebView 모두 갱신 전체를 거절하고 기존 마커를 보존해요', () => {
+    const r = createRuntime(); const { validMapState, createWebMap } = r.load('src/components/map/map-web.ts');
+    const f = webMap126Fixture(); const h = html129();
+    const markers = [{ ...h.point, id: 0, isSupported: true, kind: 'origin' }];
+    const state = { ...f.state, myLocation: null, markers };
+    const controller = createWebMap(f.container, f.sdk, state, { onRegionChange() {}, onReady() {}, onError() { assert.fail(); } });
+    h.send({ ...h.base, markers });
+    for (const kind of [null, '', 'other', 'constructor', '__proto__', '<img onerror=alert(1)>', 0, {}]) {
+        const invalid = [{ ...markers[0], kind }];
+        assert.equal(validMapState({ ...state, markers: invalid }), false);
+        controller.update({ ...state, markers: invalid });
+        h.send({ ...h.base, markers: invalid });
+        assert.equal(f.overlays.length, 1); assert.equal(h.dots.length, 1);
+        assert.ok(!f.overlays[0].detached && !h.dots[0].detached);
+    }
+    controller.dispose();
+});
+
+test('261 앱 지도 메시지는 경로 마커 종류와 좌표를 그대로 전달하고 홈 메시지는 그대로예요', () => {
+    const markers = ['origin', 'transfer', 'destination'].map((kind, id) => ({ latitude: 37.5, longitude: 127 + id * .01, id, isSupported: true, kind }));
+    const before = JSON.stringify(markers);
+    const native = nativeMap129({ myLocation: null, markers });
+    assert.deepEqual(native.posted.at(-1).markers, markers);
+    assert.equal(JSON.stringify(markers), before); native.r.unmount();
+    const home = nativeMap129({});
+    assert.ok(home.posted.at(-1).markers.every(m => !Object.hasOwn(m, 'kind'))); home.r.unmount();
+});
+
+test('261 예시 지도는 서버 요청 없이 같은 마커와 범례를 쓰고 빈 경로에 가짜 도착점을 만들지 않아요', () => {
+    const r = createScreenRuntime({}, 'src/components/route/RouteMapPreview.tsx');
+    const route = route129(); const before = JSON.stringify(route);
+    r.screen.default = (() => { const Preview = r.screen.default; return () => Preview({ route }); })();
+    let view = r.render();
+    findElement(view, e => typeof e.props?.onLayout === 'function').props.onLayout({ nativeEvent: { layout: { width: 320, height: 150 } } });
+    view = r.render();
+    const Marker = r.load('src/components/route/RouteMapMarker.tsx').default;
+    const kinds = findElements(view, e => e.type === Marker).map(e => e.props.kind);
+    assert.equal(kinds[0], 'origin'); assert.equal(kinds.at(-1), 'destination');
+    assert.ok(kinds.slice(1, -1).every(kind => kind === 'transfer'));
+    const Legend = r.load('src/components/route/RouteMapLegend.tsx').default;
+    const legend = findElement(view, e => e.type === Legend); assert.ok(legend);
+    const legendView = Legend(legend.props);
+    for (const text of ['도보', '출발', '환승', '도착', '혼잡도', '노선']) assert.ok(findText(legendView, text), text);
+    const legendMarkers = findElements(legendView, e => e.type === Marker);
+    for (const node of legendMarkers) {
+        const image = Marker(node.props);
+        assert.equal(image.props.source.uri, r.load('src/components/map/route-marker-icons.ts').ROUTE_MARKER_ICONS[node.props.kind].uri);
+        assert.ok(image.props.style.width < 20, '범례는 지도 마커보다 작은 보조 표시예요');
+    }
+    assert.equal(JSON.stringify(route), before); r.unmount();
+    const empty = createScreenRuntime({}, 'src/components/route/RouteMapPreview.tsx');
+    const Preview = empty.screen.default; empty.screen.default = () => Preview({ route: { ...route, steps: [] } });
+    const emptyView = empty.render();
+    findElement(emptyView, e => typeof e.props?.onLayout === 'function').props.onLayout({ nativeEvent: { layout: { width: 320, height: 150 } } });
+    assert.equal(findElements(empty.render(), e => e.type === empty.load('src/components/route/RouteMapMarker.tsx').default).length, 0);
+    empty.unmount();
+});
+
+test('261 긴 역명·여러 환승·좁은 화면·큰 글꼴에서도 이름표와 모든 마커가 겹치거나 지도 밖으로 나가지 않아요', () => {
+    const { layoutRouteMapPreview } = createRuntime().load('src/utils/route-map-preview.ts');
+    const overlaps = (a, b) => a.left < b.left + b.width - .01 && b.left < a.left + a.width - .01
+        && a.top < b.top + b.height - .01 && b.top < a.top + a.height - .01;
+    for (const width of [240, 320, 390]) for (const fontScale of [1, 1.3, 2]) for (const count of [2, 4, 9, 30]) {
+        const names = Array.from({ length: count }, (_, i) => ['건대입구', '고속터미널', '동대문역사문화공원', '서울대입구(관악구청)', '사당'][i % 5]);
+        const input = JSON.stringify(names);
+        const layout = layoutRouteMapPreview(names, width, fontScale);
+        assert.equal(layout.points.length, count); assert.equal(JSON.stringify(names), input);
+        const rectangles = layout.points.flatMap(point => [point.label, point.marker]);
+        for (const point of layout.points) {
+            assert.equal(point.label.text.replace(/\n/g, ''), point.name, '줄을 바꿔도 역명 전체를 유지해요');
+            assert.ok(!point.label.text.includes('…'));
+            assert.ok(Number.isFinite(point.x) && Number.isFinite(point.y));
+        }
+        for (let i = 0; i < rectangles.length; i++) {
+            const rect = rectangles[i];
+            assert.ok(rect.left >= 0 && rect.top >= 0 && rect.left + rect.width <= width + .01);
+            assert.ok(rect.top + rect.height <= layout.height - 24, '아래 안내와도 간격을 둬요');
+            for (let j = i + 1; j < rectangles.length; j++) assert.ok(!overlaps(rect, rectangles[j]), `${width}px, 글꼴 ${fontScale}, ${count}개: ${i}/${j}`);
+        }
+    }
+    for (const width of [0, NaN]) assert.equal(layoutRouteMapPreview(['사당'], width).points.length, 0);
+    assert.equal(layoutRouteMapPreview([], 320).points.length, 0);
+});
+
+test('261 예시 지도는 긴 이름을 아이콘 밖에서 표시하고 화면 폭·글꼴 변화에 맞춰 다시 배치해요', () => {
+    const r = createScreenRuntime({}, 'src/components/route/RouteMapPreview.tsx');
+    const route = route129(); const subway = route.steps.filter(step => step.type === 'SUBWAY');
+    const names = ['건대입구', '고속터미널', '동대문역사문화공원', '서울대입구(관악구청)'];
+    subway.forEach((step, i) => { step.stops = [{ id: i * 2 + 1, name: names[i % names.length], order: 0 }, { id: i * 2 + 2, name: '중간역', order: 1 }]; });
+    subway.at(-1).stops.at(-1).name = '사당';
+    const before = JSON.stringify(route);
+    const Preview = r.screen.default; r.screen.default = () => Preview({ route });
+    const resize = width => {
+        const view = r.render();
+        findElement(view, e => typeof e.props?.onLayout === 'function').props.onLayout({ nativeEvent: { layout: { width, height: 150 } } });
+        return r.render();
+    };
+    const small = resize(240);
+    const Marker = r.load('src/components/route/RouteMapMarker.tsx').default;
+    const labels = view => findElements(view, e => e.type === 'Text' && typeof e.props.accessibilityLabel === 'string');
+    assert.equal(labels(small).length, subway.length + 1);
+    for (const label of labels(small)) {
+        assert.equal(textOf(label).replace(/\n/g, ''), label.props.accessibilityLabel);
+        assert.equal(label.props.numberOfLines, undefined, '긴 역명을 임의로 잘라내지 않아요');
+    }
+    const smallMap = findElement(small, e => typeof e.props?.onLayout === 'function');
+    const large = resize(390); const largeMap = findElement(large, e => typeof e.props?.onLayout === 'function');
+    assert.ok(largeMap.props.style[1].height <= smallMap.props.style[1].height);
+    assert.deepEqual(labels(large).map(e => e.props.accessibilityLabel), labels(small).map(e => e.props.accessibilityLabel));
+    r.native.useWindowDimensions = () => ({ width: 390, height: 844, scale: 1, fontScale: 2 });
+    const bigger = r.render();
+    assert.equal(labels(bigger).length, subway.length + 1);
+    assert.equal(findElements(bigger, e => e.type === Marker).length, subway.length + 1);
+    assert.equal(JSON.stringify(route), before); r.unmount();
+});
+
+
+test('261 지도 역명은 역을 덧붙이지 않고 서울역을 보존하며 긴 이름은 균형 있게 줄을 나눠요', () => {
+    const { layoutRouteMapPreview } = createRuntime().load('src/utils/route-map-preview.ts');
+    const names = ['건대입구', '고속터미널', '교대', '사당'];
+    const ordinary = layoutRouteMapPreview(names, 360);
+    assert.deepEqual(plain(ordinary.points.map(point => point.label.text)), names);
+    const long = layoutRouteMapPreview(['서울역', '디지털미디어시티', '동대문역사문화공원', '사당'], 360);
+    assert.equal(long.points[0].name, '서울역'); assert.equal(long.points[0].label.text, '서울역');
+    assert.equal(long.points[2].label.text, '동대문역사\n문화공원');
+    for (const point of long.points) {
+        const lines = point.label.text.split('\n');
+        assert.equal(lines.join(''), point.name);
+        assert.ok(lines.length <= 2);
+        if (lines.length === 2) assert.ok(Math.abs(lines[0].length - lines[1].length) <= 1);
+    }
+});
+
+test('261 최신 홈 역 점·색 지정 점·내 위치와 경로 아이콘이 웹·WebView에서 함께 유지돼요', () => {
+    const r = createRuntime(); const f = webMap126Fixture(); const h = html129();
+    const markers = [
+        { ...h.point, id: 0, isSupported: true, kind: 'destination' },
+        { ...h.point, id: 1, isSupported: true },
+        { ...h.point, id: 2, isSupported: false },
+        { ...h.point, id: 3, isSupported: true, color: '#123456' },
+    ];
+    const levels = [];
+    const controller = r.load('src/components/map/map-web.ts').createWebMap(f.container, f.sdk,
+        { ...f.state, markers }, { onRegionChange: (_bounds, level) => levels.push(level), onReady() {}, onError() { assert.fail(); } });
+    assert.equal(f.overlays[0].options.content.tagName, 'img');
+    assert.match(f.overlays[1].options.content.style.cssText, /border:3px solid #5C3F78/);
+    assert.match(f.overlays[2].options.content.style.cssText, /border:3px solid #B9B5C0/);
+    assert.match(f.overlays[3].options.content.style.cssText, /background-color:#123456/);
+    assert.match(f.overlays[4].options.content.style.cssText, /background-color:#2879ef/);
+    f.map().level = 9; f.events.get('idle')(); assert.deepEqual(levels, [5, 9]);
+    h.send({ ...h.base, markers, myLocation: h.point });
+    assert.equal(h.dots[0].options.content.src, f.overlays[0].options.content.src);
+    assert.equal(h.dots[1].options.content.className, 'dot'); assert.equal(h.dots[1].color, '#5C3F78');
+    assert.equal(h.dots[2].options.content.className, 'dot'); assert.equal(h.dots[2].color, '#B9B5C0');
+    assert.equal(h.dots[3].options.content.className, 'dot dot-filled'); assert.equal(h.dots[3].color, '#123456');
+    assert.equal(h.dots[4].options.content.className, 'dot dot-filled'); assert.equal(h.dots[4].color, '#2879ef');
+    controller.dispose();
+});
+
+test('261 홈 역 터치·3D 모형과 경로 아이콘을 전환해도 이전 모형이나 터치 영역이 남지 않아요', () => {
+    const r = createRuntime(); const f = webMap126Fixture(); const h = html259();
+    f.container.ownerDocument = h.doc;
+    const pressed = []; let cleared = 0;
+    const home = { ...f.state, stationSelection: true, selectedStationId: 1, selectedStationName: '시청역', selectedStationColor: '#00A84D' };
+    const controller = r.load('src/components/map/map-web.ts').createWebMap(f.container, f.sdk, home,
+        { onRegionChange() {}, onReady() {}, onError() { assert.fail(); }, onStationPress: id => pressed.push(id), onMapPress: () => cleared++ });
+    const active = () => f.overlays.filter(item => !item.detached).map(item => item.options.content);
+    assert.equal(active().filter(el => el.className === 'map-model').length, 2);
+    active().find(el => el.className === 'station-hit').onclick({ stopPropagation() {} }); assert.deepEqual(pressed, [1]);
+    const markers = ['origin', 'transfer', 'destination'].map((kind, id) => ({ ...h.state.center, id, kind, isSupported: true }));
+    const route = { ...home, stationSelection: false, selectedStationId: null, markers, myLocation: null };
+    controller.update(route);
+    assert.equal(active().length, 3);
+    assert.ok(active().every(el => el.tagName === 'img'));
+    f.events.get('click')(); assert.equal(cleared, 0);
+    h.send({ ...h.state, stationSelection: false, selectedStationId: null, markers, myLocation: null });
+    const native = h.overlays.filter(item => !item.detached);
+    assert.equal(native.length, 3);
+    for (let i = 0; i < 3; i++) assert.equal(native[i].options.content.src, active()[i].src);
+    assert.equal(h.active('map-model').length, 0); assert.equal(h.active('station-hit').length, 0);
+    controller.update(home);
+    assert.equal(active().filter(el => el.className === 'map-model').length, 2);
+    assert.equal(active().filter(el => el.className === 'station-hit').length, 2);
+    controller.dispose(); assert.ok(f.overlays.every(item => item.detached));
+});
+
+
+/* ---------- #265 표지판 사진 유지·인식 체크·보조 버튼 ---------- */
+
+const readMarks265 = view => findAll125(deep125(view), e => e.type === 'Ionicons' && /^(역 이름|호선|방면) (인식됨|미인식)$/.test(e.props.accessibilityLabel ?? ''));
+const readValues265 = view => findAll125(deep125(view), e => e.type === 'Text' && /^읽은 (역 이름|호선|방면|방향 표시)$/.test(e.props.accessibilityLabel ?? '')).map(textOf);
+
+test('265 역 이름·호선·방면 중 읽힌 항목만 초록 체크이며 null·빈 문자열은 X로 표시해요', async () => {
+    const keys = ['stationName', 'lineName', 'headsign'];
+    for (const mask of [0, 1, 2, 4, 7]) {
+        const r = await directionScreen125(); await r.press('표지판 촬영');
+        const recognized = Object.fromEntries(keys.map((key, index) => [key, mask & (1 << index) ? ['강남', '2호선', '사당 방면'][index] : index === 1 ? '  ' : null]));
+        const data = { ...directionData114('RETAKE'), reason: 'UNREADABLE', recognized };
+        r.respond(async () => ok(data)); const view = await r.press('AI로 확인하기');
+        const marks = readMarks265(view); assert.equal(marks.length, 3);
+        marks.forEach((mark, index) => {
+            const read = !!(mask & (1 << index));
+            assert.equal(mark.props.name, read ? 'checkmark-circle' : 'close-circle');
+            assert.equal(mark.props.color, read ? '#23845C' : '#8C4166');
+        });
+        assert.deepEqual(readValues265(view), keys.map((key, index) => mask & (1 << index) ? ['강남역', '2호선', '사당 방면'][index] : '미인식'));
+        assert.equal(texts125(view).some(text => text.includes('읽지 못했어요')), false);
+        assert.ok(texts125(view).includes('가야 할 방향')); assert.equal(photoUri125(view), OUTPUT125);
+        assert.equal(texts125(view).some(text => text.includes('화살표')), false, '서버에 없는 화살표 판독 결과는 만들지 않아요');
+        r.unmount();
+    }
+});
+
+test('265 다른 역·호선·방면을 읽은 WRONG도 인식 체크는 유지하고 경로 불일치 판정은 그대로 보여줘요', async () => {
+    const r = await directionScreen125(); await r.press('표지판 촬영');
+    const data = { ...directionData114('WRONG'), recognized: { stationName: '서울역', lineName: '4호선', headsign: '진접 방면' }, message: '경로와 다른 표지판입니다.' };
+    r.respond(async () => ok(data)); const view = await r.press('AI로 확인하기');
+    assert.ok(readMarks265(view).every(mark => mark.props.name === 'checkmark-circle' && mark.props.color === '#23845C'));
+    assert.deepEqual(readValues265(view), ['서울역', '4호선', '진접 방면']);
+    assert.ok(texts125(view).includes('경로와 다른 표지판이에요')); assert.ok(texts125(view).includes(data.message));
+    assert.ok(texts125(view).includes('강남역')); assert.ok(texts125(view).includes('사당 방면'));
+    assert.equal(r.sent.length, 1); assert.deepEqual(r.sent[0].route, { stationId: 105, lineId: 2, headsign: '사당 방면' }); r.unmount();
+});
+
+test('265 방향 코드 5종의 MISSING_INFO는 읽은 방면과 부족한 방향 표시를 구분하고 내선·외선을 명시해요', async () => {
+    for (const [direction, lineId, label] of directionCases151) {
+        const r = await directionScreen125({ stationId: '88001', stationName: '승차역', lineId: String(lineId), lineName: `${lineId}호선`, direction });
+        await r.press('갤러리 선택');
+        const data = response151('RETAKE', 'MISSING_INFO', '성수 방면');
+        r.respond(async () => ok(data)); const view = await r.press('AI로 확인하기');
+        const marks = readMarks265(view); assert.equal(marks[2].props.name, 'checkmark-circle', '방면 원문을 읽은 사실과 방향 코드 판단은 구분해요');
+        assert.ok(texts125(view).includes(`${label} 표시 확인 필요`)); assert.ok(texts125(view).includes('성수 방면'), '서버가 읽은 원문은 남겨요');
+        assert.equal(data.expected.headsign, null); assert.equal(r.sent[0].route.direction, direction); r.unmount();
+    }
+});
+
+test('265 사진 변환 실패도 선택한 원본을 보여주고 취소·권한 거부 후 유지하며 재선택·이탈 때만 정리해요', async () => {
+    const r = await directionScreen125(); r.oversized();
+    let view = await r.press('표지판 촬영'); const source = 'file:///cache/source.heic';
+    assert.equal(photoUri125(view), source); assert.equal(r.deleted.includes(source), false);
+    assert.equal(r.button('AI로 확인하기'), null, '변환 실패 사진은 업로드하지 않아요');
+    assert.equal(r.button('다시 시도'), null);
+    const before = serialize125(view); const picker = r.external['expo-image-picker'];
+    picker.launchImageLibraryAsync = async () => ({ canceled: true, assets: null });
+    view = await r.press('갤러리 선택'); assert.deepEqual(serialize125(view), before); assert.equal(r.deleted.includes(source), false);
+    r.deny(); view = await r.press('표지판 촬영'); assert.equal(photoUri125(view), source);
+    r.blur(); assert.ok(r.deleted.includes(source)); r.focus(); assert.equal(photoUri125(r.render()), null); r.unmount();
+});
+
+test('265 CORRECT·WRONG·RETAKE와 서버 사진·경로 오류의 사진은 이탈 전까지 유지하고 이탈 때 정리해요', async () => {
+    for (const outcome of ['CORRECT', 'WRONG', 'RETAKE', 'IMAGE_INVALID', 'STATION_NOT_FOUND', 'VALIDATION_ERROR']) {
+        const r = await directionScreen125(); await r.press('표지판 촬영');
+        r.respond(['CORRECT', 'WRONG', 'RETAKE'].includes(outcome) ? async () => ok(directionData114(outcome)) : failure125(outcome));
+        const view = await r.press('AI로 확인하기');
+        assert.equal(photoUri125(view), OUTPUT125, outcome); assert.equal(deletedCount125(r), 0);
+        assert.equal(corner250(view), null, '결과에도 사진 대신 빈 촬영 프레임을 넣지 않아요');
+        r.blur(); assert.equal(deletedCount125(r), 1); r.focus(); assert.equal(photoUri125(r.render()), null); r.unmount();
+    }
+});
+
+test('265 하단 갤러리는 세로 확장 없는 보조 버튼이며 사진 선택 기능은 유지해요', async () => {
+    const r = await directionScreen125(); await r.press('표지판 촬영');
+    r.respond(async () => ok(directionData114())); await r.press('AI로 확인하기');
+    const button = r.button('갤러리 선택'); assert.equal(button.props.compact, true);
+    const expanded = button.type(button.props); const action = expanded.type(expanded.props);
+    const style = flattenStyle125(action.props.style({ pressed: false }));
+    assert.equal(style.flex, 0); assert.equal(style.flexBasis, 'auto'); assert.equal(style.borderWidth, 0); assert.equal(style.minHeight, 44);
+    const opened = countPicker250(r); await r.press('갤러리 선택');
+    assert.equal(opened.gallery, 1); assert.equal(opened.camera, 0); assert.ok(r.button('AI로 확인하기')); r.unmount();
+});
+
+test('265 mock 결과 3종의 인식 체크와 예시 사진은 재촬영 선택을 취소해도 남고 다른 예시 선택 시 교체돼요', async () => {
+    for (const [sample, expectedMarks] of [['맞는 방향', 3], ['반대 방향', 3], ['흐린 사진', 0]]) {
+        const r = directionMockScreen125({});
+        const action = label => findElement(deep125(r.render()), e => e.type === 'Pressable' && e.props.accessibilityLabel === label);
+        const choose = title => findElement(r.render(), e => e.props?.accessibilityLabel === `예시 사진 ${title}`).props.onPress();
+        action('사진 업로드').props.onPress(); choose(sample); action('AI로 확인하기').props.onPress(); r.advance(1500); await settle();
+        let view = r.render(); assert.equal(readMarks265(view).filter(mark => mark.props.name === 'checkmark-circle').length, expectedMarks);
+        const shown = findElement(view, e => e.type?.name === 'SignPlate').props.sign; const before = serialize125(view);
+        action('다시 촬영').props.onPress(); findAll125(r.render(), e => e.props?.accessibilityLabel === '닫기').at(-1).props.onPress();
+        view = r.render(); assert.deepEqual(serialize125(view), before); assert.equal(findElement(view, e => e.type?.name === 'SignPlate').props.sign, shown);
+        action('다시 촬영').props.onPress(); choose('다른 노선');
+        assert.ok(action('AI로 확인하기')); assert.notEqual(findElement(r.render(), e => e.type?.name === 'SignPlate').props.sign, shown); r.unmount();
+    }
+});
+
+test('265 mock 분석 오류도 예시 사진을 유지하고 같은 사진으로 재시도해요', async () => {
+    const r = directionMockScreen125({});
+    const action = label => findElement(r.render(), e => e.type?.name === 'ActionButton' && e.props.label === label);
+    action('사진 업로드').props.onPress(); findElement(r.render(), e => e.props?.accessibilityLabel === '예시 사진 분석 실패').props.onPress();
+    const sample = findElement(r.render(), e => e.type?.name === 'SignPlate').props.sign;
+    action('AI로 확인하기').props.onPress(); r.advance(1500); await settle();
+    assert.ok(action('다시 시도')); assert.equal(findElement(r.render(), e => e.type?.name === 'SignPlate').props.sign, sample);
+    action('다시 시도').props.onPress(); r.advance(1500); await settle();
+    assert.ok(action('다시 시도')); assert.equal(findElement(r.render(), e => e.type?.name === 'SignPlate').props.sign, sample); r.unmount();
 });

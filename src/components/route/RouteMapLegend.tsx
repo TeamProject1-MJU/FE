@@ -3,10 +3,10 @@ import { Text } from '@/components/app-text';
 
 import { CONGESTION_STYLE } from '@/components/route/Congestion';
 import LineBadge from '@/components/route/LineBadge';
+import RouteMapMarker from '@/components/route/RouteMapMarker';
 import {
     CONGESTION_LEVEL_LABEL,
     CONGESTION_LEVELS,
-    ROUTE_MARKER_COLOR,
     ROUTE_MARKER_LABEL,
     WALK_LINE_COLOR,
     type RouteMap,
@@ -63,7 +63,7 @@ export default function RouteMapLegend({ map, compact = false }: { map: RouteMap
                 </View>
                 {MARKERS.map(kind => (
                     <View key={kind} style={styles.item}>
-                        <View style={[styles.marker, { backgroundColor: ROUTE_MARKER_COLOR[kind] }]} />
+                        <RouteMapMarker kind={kind} size={compact ? 14 : 16} />
                         <Text style={[styles.text, compact && { fontSize: 11.5 }]}>{ROUTE_MARKER_LABEL[kind]}</Text>
                     </View>
                 ))}
@@ -134,14 +134,6 @@ const styles = StyleSheet.create({
         width: 4,
         height: 4,
         borderRadius: 2,
-    },
-
-    marker: {
-        width: 11,
-        height: 11,
-        borderWidth: 2,
-        borderColor: '#ffffff',
-        borderRadius: 6,
     },
 
     tag: {
