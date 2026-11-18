@@ -3287,13 +3287,29 @@ test('118 커서 페이지·AI SYSTEM nullable 파싱·시간순 병합과 id �
     assert.deepEqual(plain(mergeChatMessages(page1.items, page2.items)), [system, ai, newest]);
     assert.equal(page2.hasMore, false); assert.equal(page2.nextCursor, null);
     assert.equal(chat.parseChatMessage(chat118Message({ nickname: null })).nickname, null);
-    for (const malformed of [{ senderType: 'BOGUS' }, { senderType: ['AI'], senderId: null, nickname: null }, { senderId: null }, { nickname: undefined }, { meta: {} }, { createdAt: 'bad' }, { id: 'bad' }, { senderType: 'AI' }]) {
+    for (const malformed of [{ senderType: 'BOGUS' }, { senderType: ['AI'], senderId: null, nickname: null }, { senderId: null }, { nickname: undefined }, { createdAt: 'bad' }, { id: 'bad' }, { senderType: 'AI' }]) {
         r.respond(async () => ok({ items: [chat118Message(malformed)], nextCursor: null, hasMore: false }));
         await assert.rejects(chat.fetchChatMessages(ROOM_QUERY_ID), { code: 'UNKNOWN_ERROR' });
     }
     for (const raw of [{ items: [], hasMore: false, nextCursor: ai.id }, { items: [], hasMore: true, nextCursor: null }, { message: newest, aiPending: 'true' }]) {
         r.respond(async () => ok(raw));
         await assert.rejects(raw.message ? chat.sendChatMessage(ROOM_QUERY_ID, { content: 'hi' }) : chat.fetchChatMessages(ROOM_QUERY_ID), { code: 'UNKNOWN_ERROR' });
+    }
+});
+
+test('279 채팅 meta는 추천 실행만 보존하고 알 수 없거나 잘못된 값 때문에 페이지를 실패시키지 않아요', async () => {
+    const r = roomQueryRuntime(); const chat = r.load('src/services/chat.ts');
+    const valid = { type: 'RECOMMENDATION', runId: 'run-279' };
+    const values = [null, valid, { type: 'OTHER', runId: 'run-279' }, { type: 'RECOMMENDATION' },
+        { type: 'RECOMMENDATION', runId: null }, { type: 'RECOMMENDATION', runId: 279 },
+        { type: 'RECOMMENDATION', runId: '' }, { type: 'RECOMMENDATION', runId: '  ' }, {}, [], 'RECOMMENDATION', 279, undefined];
+    for (const meta of values) {
+        const message = chat118Message({ meta });
+        const expected = meta === valid ? valid : null;
+        assert.deepEqual(plain(chat.parseChatMessage(message).meta), expected);
+        r.respond(async () => ok({ items: [message, chat118Message({ id: ROOM_QUERY_ID2 })], hasMore: false, nextCursor: null }));
+        const page = await chat.fetchChatMessages(ROOM_QUERY_ID);
+        assert.equal(page.items.length, 2); assert.deepEqual(plain(page.items[0].meta), expected);
     }
 });
 
@@ -10513,7 +10529,7 @@ function panel232(mock = false, platform = 'ios') {
         send() { r.calls232.push(['send', controller.draft]); controller.setDraft(''); },
         loadOlder() { r.calls232.push(['older']); }, retrySend() {}, reload() {} };
     r.controller232 = controller;
-    r.view232 = () => r.renderComponent({ type: r.screen.default, props: { controller, myUserId: 'me', members: [], panelHeight: 500 } });
+    r.view232 = () => r.renderComponent({ type: r.screen.default, props: { roomId: ROOM_QUERY_ID, controller, myUserId: 'me', members: [], panelHeight: 500 } });
     r.scroll232 = () => findElement(r.view232(), e => e.type === 'ScrollView');
     r.input232 = () => findElement(r.view232(), e => e.type === 'TextInput');
     r.scroll232().props.ref.current = { scrollToEnd: args => r.calls232.push(['end', args]), scrollTo: args => r.calls232.push(['offset', args]) };
@@ -10526,6 +10542,130 @@ function panel232(mock = false, platform = 'ios') {
     r.button232 = label => findElement(r.view232(), e => e.type === 'Pressable' && e.props.accessibilityLabel === label);
     return r;
 }
+
+test('279 상세보기는 RECOMMENDATION 메타가 있는 AI 말풍선 안에만 표시해요', () => {
+    for (const mock of [false, true]) {
+        const r = panel232(mock); const meta = { type: 'RECOMMENDATION', runId: 'run-279' };
+        r.controller232.messages = [
+            { ...message232(1), meta }, message232(2),
+            { ...message232(3, 'USER', '일반 메시지', 'me'), meta },
+            { ...message232(4, 'SYSTEM'), meta },
+            { ...message232(5, 'USER', '다른 참여자', 'other'), meta },
+        ];
+        const view = r.view232(); const buttons = findAll125(view, e => e.type === 'Pressable' && e.props.accessibilityLabel === '상세보기');
+        assert.equal(buttons.length, 1); assert.ok(findText(buttons[0], '상세보기'));
+        assert.equal(buttons[0].props.style.backgroundColor, '#fff'); assert.ok(buttons[0].props.style.borderRadius >= 20);
+        assert.ok(findElement(buttons[0], e => e.type === 'Ionicons' && e.props.name === 'train-outline'));
+        assert.ok(findElement(buttons[0], e => e.type === 'Ionicons' && e.props.name === 'chevron-forward'));
+        assert.ok(findElement(view, e => e.type === 'View' && flattenStyle125(e.props.style).backgroundColor === '#EDE8F3' && findElement(e, child => child.props?.accessibilityLabel === '상세보기')));
+        r.unmount();
+    }
+});
+
+test('279 상세보기는 해당 roomId·runId의 8.3 결과를 열고 조건 블록과 참여자 상세를 유지해요', async () => {
+    const panel = panel232(); let target;
+    panel.external['expo-router'].router.push = value => { target = value; };
+    panel.controller232.messages = [{ ...message232(1), meta: { type: 'RECOMMENDATION', runId: 'chat-run-279' } }];
+    panel.button232('상세보기').props.onPress();
+    assert.deepEqual(plain(target), { pathname: '/rooms/[roomId]/recommendations', params: { roomId: ROOM_QUERY_ID, runId: 'chat-run-279' } });
+    panel.unmount();
+    const r = recoScreen(target.params);
+    r.recoRespond(() => ok(recoRun({ runId: 'chat-run-279', conditionText: '40분 이내 환승 1회', appliedConstraints: { maxMinutes: 40, maxTransfers: 1 } })));
+    let view = await pumpScreen(r);
+    assert.ok(r.calls.some(call => call.url.endsWith(`/rooms/${ROOM_QUERY_ID}/recommendations/chat-run-279`) && call.options.method === 'GET'));
+    assert.equal(r.calls.filter(call => call.options.method === 'POST' || call.url.endsWith('/recommendations/latest')).length, 0);
+    assert.ok(findText(view, '이렇게 이해했어요')); assert.ok(findText(view, 'LR'));
+    assert.ok(findText(view, '모두 40분 이내')); assert.ok(findText(view, '환승 1회 이하'));
+    assert.equal(findAll125(view, e => e.type === 'Text' && textOf(e) === '✓').length, 2);
+    const row = findElement(view, e => e.type?.name === 'ParticipantRow');
+    assert.ok(row); assert.equal(row.props.opened, false); row.props.onPress(); view = r.render();
+    const opened = findElement(view, e => e.type?.name === 'ParticipantRow' && e.props.opened);
+    assert.ok(opened);
+    const expanded = r.renderComponent(opened);
+    assert.ok(findElement(expanded, e => e.type?.name === 'ParticipantTripDetail'));
+    assert.ok(findText(view, '왜 이 역인가요')); r.unmount();
+});
+
+test('279 결과 요약은 인원·약속 시각만 표시하고 조건 칩과 기준 탭은 유지해요', async () => {
+    const appointment = new Date('2026-11-20T19:00:00+09:00');
+    const pad = value => String(value).padStart(2, '0');
+    const appointmentLabel = `${pad(appointment.getMonth() + 1)}.${pad(appointment.getDate())} ${pad(appointment.getHours())}:${pad(appointment.getMinutes())}`;
+    for (const scheduled of [true, false]) {
+        const r = recoScreen();
+        r.recoRespond(() => ok(recoRun({ conditionText: '40분 이내 환승 1회', appliedConstraints: { maxMinutes: 40, maxTransfers: 1 } })));
+        const fetch = r.context.fetch;
+        r.context.fetch = (url, options) => {
+            if (!scheduled && url.endsWith(`/rooms/${ROOM_QUERY_ID}`)) return Promise.resolve(ok({ ...roomQueryDetail(), appointmentAt: null }));
+            return fetch(url, options);
+        };
+        let view = await pumpScreen(r);
+        const expected = scheduled ? `2명, 약속 시각 ${appointmentLabel}` : '2명, 약속 시각 미정';
+        for (const label of ['시간 기준', '요금 기준', '거리 기준']) {
+            const summary = findText(view, expected); assert.ok(summary, expected);
+            assert.doesNotMatch(textOf(summary), /이내|환승|기준/);
+            assert.ok(findText(view, '이렇게 이해했어요')); assert.ok(findText(view, '모두 40분 이내'));
+            assert.ok(findText(view, '환승 1회 이하')); assert.ok(findText(view, 'LR'));
+            const tab = findElement(view, e => e.props?.accessibilityRole === 'tab' && findText(e, label));
+            assert.ok(tab); tab.props.onPress(); view = r.render();
+        }
+        r.unmount();
+    }
+});
+
+test('279 최신 확인 문구는 숨기고 오래된 결과 안내와 다시 추천받기는 유지해요', async () => {
+    for (const isStale of [false, null, true]) {
+        const r = recoScreen();
+        r.recoRespond(() => ok(recoRun({ isStale, staleReasons: isStale === null ? null : isStale ? ['MEMBERS_CHANGED'] : [] })));
+        const view = await pumpScreen(r);
+        assert.equal(findTextIncluding(view, '지금 약속 시각, 참여자 기준 최신 결과'), null);
+        assert.equal(findTextIncluding(view, '최신 결과예요'), null);
+        assert.equal(!!findText(view, '참여자나 출발역이 바뀌었어요'), isStale === true);
+        assert.equal(!!findText(view, '다시 추천받기'), isStale === true);
+        r.unmount();
+    }
+});
+
+test('279 mock room-2의 추천 질문은 새 실행을 연결하고 일반 질문·다른 방·멘션 없는 질문은 유지해요', async () => {
+    const r = createScreenRuntime({}, 'src/components/rooms/chat-panel.tsx');
+    const chat = r.load('src/services/chat.ts'); const reco = r.load('src/services/recommendation.ts');
+    for (const [roomId, content, recommendation] of [
+        ['room-2', '@링크로 추천해줘', true], ['room-2', '@링크로 현재 출발역은?', false],
+        ['room-4', '@링크로 추천해줘', false], ['room-2', '추천해줘', false],
+        ['room-2', '@linkro 다시 추천해줘', true],
+    ]) {
+        const before = await finishRoomMock(r, chat.fetchChatMessages(roomId, { size: 100 }));
+        const ids = new Set(before.items.map(message => message.id));
+        const sent = await finishRoomMock(r, chat.sendChatMessage(roomId, { content }));
+        for (let i = 0; i < 20 && chat.getPendingChatAiCount(roomId); i++) { r.advance(1000); await settle(); }
+        assert.equal(chat.getPendingChatAiCount(roomId), 0);
+        const after = await finishRoomMock(r, chat.fetchChatMessages(roomId, { size: 100 }));
+        assert.deepEqual(plain(after.items.filter(message => ids.has(message.id))), plain(before.items), 'seed와 기존 대화는 바꾸지 않아요');
+        const replies = after.items.filter(message => !ids.has(message.id) && message.senderType === 'AI');
+        assert.equal(replies.length, sent.aiPending ? 1 : 0);
+        if (!sent.aiPending) continue;
+        const reply = replies[0];
+        if (recommendation) {
+            assert.equal(reply.meta.type, 'RECOMMENDATION');
+            const run = await finishRoomMock(r, reco.fetchRecommendation(roomId, reply.meta.runId));
+            assert.equal(run.runId, reply.meta.runId); assert.ok(run.results.length > 0);
+            assert.ok(run.conditionText); assert.equal(run.appliedConstraints.maxMinutes, 40); assert.equal(run.appliedConstraints.maxTransfers, 1);
+        } else {
+            assert.equal(reply.meta, null); assert.ok(reply.content.startsWith('현재 출발역은 '));
+        }
+    }
+    r.unmount();
+});
+
+test('279 mock room-2 채팅의 상세보기 메타는 조회 가능한 mock 추천 실행을 가리켜요', async () => {
+    const r = createScreenRuntime({}, 'src/components/rooms/chat-panel.tsx');
+    const chat = r.load('src/services/chat.ts'); const reco = r.load('src/services/recommendation.ts');
+    const page = await finishRoomMock(r, chat.fetchChatMessages('room-2'));
+    const reply = page.items.find(message => message.senderType === 'AI' && message.meta?.type === 'RECOMMENDATION');
+    assert.ok(reply);
+    const run = await finishRoomMock(r, reco.fetchRecommendation('room-2', reply.meta.runId));
+    assert.equal(run.runId, reply.meta.runId); assert.ok(run.results.length > 0);
+    assert.ok(run.appliedConstraints.maxMinutes); r.unmount();
+});
 
 test('232 강조는 AI에만 보라 굵게·밑줄로 적용하고 사용자·시스템 원문과 정보는 유지해요', () => {
     for (const mock of [false, true]) {

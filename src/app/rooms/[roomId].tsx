@@ -659,6 +659,7 @@ export default function RoomDetailScreen() {
                     <RoomChatPanel
                         key={chat.scope}
                         controller={chat}
+                        roomId={detail.id}
                         myUserId={myUserId}
                         members={detail.members}
                         ownerId={detail.ownerId}

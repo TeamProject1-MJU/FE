@@ -6,6 +6,8 @@
 /** 서버에서 구분하는 메시지 발신자 유형 */
 export type ChatSenderType = 'USER' | 'AI' | 'SYSTEM';
 
+export type ChatMessageMeta = { type: 'RECOMMENDATION'; runId: string } | null;
+
 /** API 메시지 객체 */
 export type ChatMessage = {
     id: string;
@@ -17,8 +19,8 @@ export type ChatMessage = {
     content: string;
     /** ISO 8601 형식 */
     createdAt: string;
-    /** 명세 10.1: 현재 사용하는 확장 정보가 없어 null */
-    meta: null;
+    /** 연결할 추천 실행. 지원하지 않는 확장 정보는 null로 취급해요. */
+    meta: ChatMessageMeta;
 };
 
 /**
