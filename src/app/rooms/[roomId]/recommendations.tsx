@@ -824,11 +824,10 @@ export default function RoomRecommendationsScreen() {
                         </View>
 
                         {/* ❹ 추천 이유 */}
-                        <View style={styles.reasonBox}>
+                        {!!result.explanation.trim() && <View style={styles.reasonBox}>
                             <Text style={styles.reasonTitle}>왜 이 역인가요</Text>
                             <Text style={styles.reasonText}>{result.explanation}</Text>
-                            <Text style={styles.reasonSource}>{result.explanationSource === 'AI' ? '경로 계산 결과를 AI가 설명했어요' : '계산 결과로 만든 기본 설명이에요 (AI 설명 연동 전)'}</Text>
-                        </View>
+                        </View>}
 
                         {!!notice && <View style={lv.noticeBox}><Ionicons name="information-circle-outline" size={17} color={LV_PURPLE} /><Text style={lv.noticeText}>{notice}</Text></View>}
 
@@ -1095,7 +1094,6 @@ const styles = StyleSheet.create({
     reasonBox: { marginTop: 12, padding: 14, borderRadius: 16, backgroundColor: LV_SEGMENT },
     reasonTitle: { fontSize: 15, lineHeight: 23, fontWeight: '700', color: LV_PURPLE },
     reasonText: { fontSize: 16, lineHeight: 25, color: LV_TEXT, marginTop: 8 },
-    reasonSource: { fontSize: 14, lineHeight: 21, color: LV_SUBTEXT, marginTop: 10 },
 
     nearbyLines: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
     nearbyOption: { gap: 8 },

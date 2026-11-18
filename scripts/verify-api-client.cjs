@@ -4966,6 +4966,28 @@ test('추천 화면(서버): 빈 기록은 입력 보기, 계산 버튼 연타�
     r.unmount();
 });
 
+test('추천 이유는 AI·기본 설명 모두 본문만 표시하고 출처 문구는 숨겨요', async () => {
+    for (const explanationSource of ['AI', 'TEMPLATE']) {
+        const explanation = '  참여자 이동 시간을 고르게 줄일 수 있는 역이에요.  ';
+        const { r, view } = await reco153Screen(recoRun({ results: [recoResult('TIME', 77001, { explanation, explanationSource })] }));
+        assert.ok(findText(view, '왜 이 역인가요')); assert.ok(findText(view, explanation), '본문을 변경하지 않아요');
+        assert.equal(findTextIncluding(view, '계산 결과로 만든 기본 설명이에요 (AI 설명 연동 전)'), null);
+        assert.equal(findTextIncluding(view, '경로 계산 결과를 AI가 설명했어요'), null);
+        r.unmount();
+    }
+});
+
+test('추천 이유의 explanation이 비었거나 공백뿐이면 제목과 섹션을 모두 숨겨요', async () => {
+    for (const explanationSource of ['AI', 'TEMPLATE']) for (const explanation of ['', '   ', '\n\t  ']) {
+        const { r, view } = await reco153Screen(recoRun({ results: [recoResult('TIME', 77001, { explanation, explanationSource })] }));
+        assert.equal(findText(view, '왜 이 역인가요'), null);
+        assert.equal(findElement(view, node => node.type === 'View' && node.props.style?.backgroundColor === '#EDE8F3' && node.props.style?.padding === 14 && node.props.style?.marginTop === 12), null);
+        assert.equal(findTextIncluding(view, '계산 결과로 만든 기본 설명이에요 (AI 설명 연동 전)'), null);
+        assert.equal(findTextIncluding(view, '경로 계산 결과를 AI가 설명했어요'), null);
+        assert.ok(findText(view, '서버 추천역 77001역')); r.unmount();
+    }
+});
+
 test('277 결과 헤더는 조건 바꾸기 없이 좌우 44px로 제목 정렬을 유지해요', async () => {
     for (const results of [[], recoRun().results]) {
         const { r, view } = await reco153Screen(recoRun({ results }));
