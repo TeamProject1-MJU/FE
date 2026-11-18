@@ -13,7 +13,8 @@ export function routeBadges(route: Route, routes: Route[]): string[] {
     const criteria: [string, (route: Route) => number][] = [
         ['최소시간', duration],
         ['최소환승', route => route.summary.transferCount],
-        ['최저요금', route => route.summary.fare],
+        // 한 경로만 도보 0분이어도 현재는 유일한 최솟값으로 보고 배지를 붙여요.
+        ['최소도보', route => route.summary.walkingMinutes],
     ];
     return criteria.filter(([, value]) => {
         const current = value(route);

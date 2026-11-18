@@ -3027,27 +3027,33 @@ test('도착정보 mock 은 기존 동작(정상·none·fail)을 유지하고 �
     assert.equal(server.timers.size, 0);
 });
 
-test('"곧 도착" 표시: secondsUntil 이 숫자면 message 와 상관없이 카운트다운, null 일 때만 message', () => {
+test('263 곧 도착·곧 출발: secondsUntil 숫자는 60/59/30/29/0 경계로 표시하고 null 일 때만 message', () => {
     const format = createRuntime().load('src/components/route/format.ts');
-    const { formatNextTrain, formatDestination, ARRIVING_SOON_SEC } = format;
+    const { formatNextTrain, formatDestination, ARRIVING_SOON_SEC, ARRIVING_NOW_SEC } = format;
     const train = (secondsUntil, message = null) => ({ destinationName: '성수', secondsUntil, message });
     assert.equal(formatDestination('성수'), '성수행');
     assert.equal(formatDestination('성수행'), '성수행');
     assert.equal(formatDestination(' 석남 '), '석남행');
     assert.equal(ARRIVING_SOON_SEC, 60);
+    assert.equal(ARRIVING_NOW_SEC, 30);
     assert.equal(Object.hasOwn(format, 'isTimeMessage'), false);
-    // secondsUntil 이 숫자면 message(시간 문구든 상태 문구든)와 상관없이 계산해요. 경계: 60 → 1분 0초, 59·0 → 곧 도착
+    // 숫자는 message와 무관해요. 30초는 곧 도착, 29초부터 곧 출발이에요.
     for (const message of ['2분 50초 후', '전역 출발', '[2]번째 전역', '[3]번째 전역 (남영)', '성수행 전역 도착', '', null]) {
         assert.equal(formatNextTrain(train(60, message), 0), '성수행 1분 0초', String(message));
         assert.equal(formatNextTrain(train(59, message), 0), '성수행 곧 도착', String(message));
-        assert.equal(formatNextTrain(train(0, message), 0), '성수행 곧 도착', String(message));
+        assert.equal(formatNextTrain(train(30, message), 0), '성수행 곧 도착', String(message));
+        assert.equal(formatNextTrain(train(29, message), 0), '성수행 곧 출발', String(message));
+        assert.equal(formatNextTrain(train(0, message), 0), '성수행 곧 출발', String(message));
         assert.equal(formatNextTrain(train(100, message), 0), '성수행 1분 40초', String(message));
         assert.equal(formatNextTrain(train(100, message), 41), '성수행 곧 도착', String(message));
     }
     // 지난 시간을 빼고, 0 아래로 내려가지 않아요.
     assert.equal(formatNextTrain(train(125), 65), '성수행 1분 0초');
     assert.equal(formatNextTrain(train(125), 66), '성수행 곧 도착');
-    assert.equal(formatNextTrain(train(30), 500), '성수행 곧 도착');
+    assert.equal(formatNextTrain(train(125), 95), '성수행 곧 도착');
+    assert.equal(formatNextTrain(train(125), 96), '성수행 곧 출발');
+    assert.equal(formatNextTrain(train(30), 500), '성수행 곧 출발');
+    assert.equal(formatNextTrain(train(-1), 0), '성수행 곧 출발');
     assert.equal(formatNextTrain(train(125), -30), '성수행 2분 5초');
     // secondsUntil 이 null 일 때만 message 를 "성수행 · 문구"로 보여주고, 행선지는 한 번만 나와요.
     // 맨 앞 "[N]" 은 대괄호만 빼고(#103), 괄호 안 역 이름과 나머지 글자는 서버 원문 그대로예요.
@@ -3094,8 +3100,19 @@ function nextTrainsRuntime(env = serverEnv, baseMs = ARRIVALS_BASE_MS) {
         return flat(view);
     };
     const receivedNow = () => new Date(baseMs + r.now()).toISOString();
-    return { ...r, calls, text, receivedNow, respond: fn => { responder = fn; } };
+    return { ...r, calls, text, view: props => r.renderComponent(element(props)), receivedNow, respond: fn => { responder = fn; } };
 }
+
+test('263 다음 열차의 곧 도착·곧 출발은 같은 강조 스타일이고 30→29초에서 문구만 바뀌어요', async () => {
+    const r = nextTrainsRuntime();
+    r.respond(async () => ok(arrivalsData({ trains: [arrivalTrain({ secondsUntil: 30 })] })));
+    r.text(); await flush();
+    const arriving = findText(r.view(), '성수행 곧 도착'); assert.ok(arriving);
+    assert.equal(arriving.props.style.color, '#5C3F78'); assert.equal(arriving.props.style.fontWeight, '700');
+    r.advance(1000);
+    const leaving = findText(r.view(), '성수행 곧 출발'); assert.ok(leaving);
+    assert.deepEqual(plain(leaving.props.style), plain(arriving.props.style)); r.unmount();
+});
 
 test('NextTrains: 첫 승차 구간 조건으로 부르고 카운트다운 중 1분 아래에서 "곧 도착", 20초 전에는 다시 부르지 않아요', async () => {
     const r = nextTrainsRuntime();
@@ -9350,6 +9367,17 @@ function selector152(value = { mode: 'now' }) {
     return Object.assign(r, { props152: props, changes152: changes });
 }
 
+test('263 출발·도착 날짜 범위 안내와 버튼 간격은 유지하고 먼 날짜 안내만 제거해요', () => {
+    for (const mode of ['departure', 'arrival']) {
+        const r = selector152({ mode, at: mode === 'arrival' ? ARRIVE152 : DEPART152 });
+        r.button152('검색 시각 선택').props.onPress(); const view = r.pump152();
+        assert.ok(findText(view, `${mode === 'arrival' ? '도착' : '출발'} 날짜는 2027-11-14까지 선택할 수 있어요.`));
+        assert.equal(findText(view, '날짜가 멀수록 실제 운행 시각과 다를 수 있어요.'), null);
+        const actions = findElement(view, node => node.type === 'View' && node.props.style?.marginTop === 16 && findText(node, '지금 출발') && findText(node, '확인'));
+        assert.ok(actions); r.unmount();
+    }
+});
+
 test('152 시각 선택은 적용 전에 검색하지 않고 날짜·시각 취소와 모달 닫기는 이전 조건을 유지해요', () => {
     const r = selector152(); r.button152('검색 시각 선택').props.onPress(); r.pump152();
     findElement(r.pump152(), element => element.type === 'Pressable' && element.props.accessibilityRole === 'switch' && element.props.accessibilityLabel === '도착 시각 설정').props.onPress();
@@ -9877,24 +9905,24 @@ test('173 조회 실패: 인증 오류는 이전 값·이전 기준 시각으로
     r.unmount();
 });
 
-test('173 표시 규칙 유지: null 은 message, 0초·60초 미만은 곧 도착, 0 아래로 내려가지 않아요', async () => {
+test('173/263 표시 규칙: null 은 message, 30~59초는 곧 도착, 30초 미만은 곧 출발, 0 아래로 내려가지 않아요', async () => {
     const r = nextTrains173Runtime();
     r.respond(async () => ok(arrivalsData({ receivedAt: r.ago(40), trains: [
             arrivalTrain({ secondsUntil: null, stopsAway: 3, message: '[3]번째 전역 (남영)' }),
             arrivalTrain({ secondsUntil: 0, message: '전역 도착' }),
         ] })));
     r.text(); await flush();
-    assert.equal(r.text(), '다음 열차 성수행 · 3번째 전역 (남영), 성수행 곧 도착');
+    assert.equal(r.text(), '다음 열차 성수행 · 3번째 전역 (남영), 성수행 곧 출발');
     r.advance(10000);
-    assert.equal(r.text(), '다음 열차 성수행 · 3번째 전역 (남영), 성수행 곧 도착');
+    assert.equal(r.text(), '다음 열차 성수행 · 3번째 전역 (남영), 성수행 곧 출발');
     r.unmount();
-    for (const [seconds, shown] of [[60, '성수행 1분 0초'], [59, '성수행 곧 도착'], [1, '성수행 곧 도착']]) {
+    for (const [seconds, shown] of [[60, '성수행 1분 0초'], [59, '성수행 곧 도착'], [30, '성수행 곧 도착'], [29, '성수행 곧 출발'], [0, '성수행 곧 출발']]) {
         const one = nextTrains173Runtime();
         one.respond(async () => ok(arrivalsData({ receivedAt: one.ago(50), trains: [arrivalTrain({ secondsUntil: seconds })] })));
         one.text(); await flush();
         assert.equal(one.text(), `다음 열차 ${shown}`, String(seconds));
         one.advance(19000);
-        assert.equal(one.text(), '다음 열차 성수행 곧 도착', `${seconds} 0 아래로 내려가지 않아요`);
+        assert.equal(one.text(), seconds >= 49 ? '다음 열차 성수행 곧 도착' : '다음 열차 성수행 곧 출발', `${seconds} 지난 시간 차감과 0 이하 보정`);
         one.unmount();
     }
 });
@@ -10580,11 +10608,11 @@ test('233 36분 40초는 총시간·대기·구간에서 36분이며 도보·구
     assert.ok(timeline146(route).some(text => text.includes('36분')));
 });
 
-test('233 배지는 대기 포함 초·환승·요금을 독립 비교하고 동률·다중 배지·단일 경로를 처리해요', () => {
+test('233/263 배지는 대기 포함 초·환승·도보를 독립 비교하고 동률·다중 배지·단일 경로를 처리해요', () => {
     const r = createRuntime(); const { sortRoutes, routeBadges } = r.load('src/components/route/result.ts');
-    const make = (id, total, wait, transfers, fare) => ({ ...routeData().routes[0], routeId: id, routeType: null,
-        summary: { ...routeData().routes[0].summary, totalTimeSec: total, totalWithWaitSec: wait, transferCount: transfers, fare } });
-    const a = make('a', 1000, 2200, 1, 1500); const b = make('b', 2199, null, 2, 1400); const c = make('c', 2000, 2200, 0, 1400);
+    const make = (id, total, wait, transfers, walkingMinutes) => ({ ...routeData().routes[0], routeId: id, routeType: null,
+        summary: { ...routeData().routes[0].summary, totalTimeSec: total, totalWithWaitSec: wait, transferCount: transfers, walkingMinutes } });
+    const a = make('a', 1000, 2200, 1, 5); const b = make('b', 2199, null, 2, 3); const c = make('c', 2000, 2200, 0, 3);
     const routes = [a, c, b];
     assert.deepEqual(plain(sortRoutes(routes).map(route => route.routeId)), ['b', 'c', 'a']);
     assert.deepEqual(plain(routes.map(route => route.routeId)), ['a', 'c', 'b']);
@@ -10598,11 +10626,11 @@ test('233 배지는 대기 포함 초·환승·요금을 독립 비교하고 동
 test('252 기준별 유일한 최솟값에만 배지를 붙이고 일부·전체 최솟값 동률은 숨겨요', () => {
     const { routeBadges } = createRuntime().load('src/components/route/result.ts');
     const make = (id, summary = {}) => ({ ...routeData().routes[0], routeId: id,
-        summary: { ...routeData().routes[0].summary, totalTimeSec: 1200, totalWithWaitSec: 1500, transferCount: 1, fare: 1650, ...summary } });
+        summary: { ...routeData().routes[0].summary, totalTimeSec: 1200, totalWithWaitSec: 1500, transferCount: 1, fare: 1650, walkingMinutes: 3, ...summary } });
     const equal = [make('a'), make('b'), make('c')];
     for (const route of equal) assert.deepEqual(plain(routeBadges(route, equal)), []);
     for (const [field, larger, label] of [
-        ['totalWithWaitSec', 1600, '최소시간'], ['transferCount', 2, '최소환승'], ['fare', 1750, '최저요금'],
+        ['totalWithWaitSec', 1600, '최소시간'], ['transferCount', 2, '최소환승'], ['walkingMinutes', 4, '최소도보'],
     ]) {
         const tiedMinima = [make('a'), make('b'), make('c', { [field]: larger })];
         assert.deepEqual(plain(routeBadges(tiedMinima[0], tiedMinima)), []);
@@ -10613,11 +10641,28 @@ test('252 기준별 유일한 최솟값에만 배지를 붙이고 일부·전체
         assert.deepEqual(plain(routeBadges(uniqueMinimum[1], uniqueMinimum)), []);
         assert.deepEqual(plain(routeBadges(uniqueMinimum[2], uniqueMinimum)), []);
     }
-    const equalFares = [make('a'), make('b', { totalWithWaitSec: 1600, transferCount: 2 }), make('c', { totalWithWaitSec: 1700, transferCount: 2 })];
-    assert.deepEqual(plain(routeBadges(equalFares[0], equalFares)), ['최소시간', '최소환승']);
-    for (const route of equalFares) assert.equal(routeBadges(route, equalFares).includes('최저요금'), false);
+    const winner = [make('a'), make('b', { totalWithWaitSec: 1600, transferCount: 2, walkingMinutes: 4, fare: 1500 }), make('c', { totalWithWaitSec: 1700, transferCount: 2, walkingMinutes: 5, fare: 1400 })];
+    assert.deepEqual(plain(routeBadges(winner[0], winner)), ['최소시간', '최소환승', '최소도보']);
+    for (const route of winner) assert.equal(routeBadges(route, winner).includes('최저요금'), false);
+    const zeroWalks = [make('a', { walkingMinutes: 0 }), make('b', { walkingMinutes: 0 }), make('c', { walkingMinutes: 0 })];
+    for (const route of zeroWalks) assert.deepEqual(plain(routeBadges(route, zeroWalks)), []);
+    const onlyZero = [make('a', { walkingMinutes: 0 }), make('b'), make('c')];
+    assert.deepEqual(plain(routeBadges(onlyZero[0], onlyZero)), ['최소도보']);
+    assert.deepEqual(plain(routeBadges(onlyZero[0], [onlyZero[0]])), []);
     assert.deepEqual(plain(routeBadges(equal[0], [equal[0]])), []);
     assert.deepEqual(plain(routeBadges(equal[0], [])), []);
+});
+
+test('263 최소도보 배지로 바꿔도 접힘·펼침 카드의 예상 요금은 그대로 표시해요', () => {
+    const r = createRuntime(); const Card = r.load('src/components/route/RouteCard.tsx').default;
+    const route = r.load('src/services/route.ts').__parseRouteSearch(routeData()).routes[0]; Object.assign(route.summary, { fare: 1650, fareSource: 'ESTIMATED', walkingMinutes: 1 });
+    const other = { ...route, routeId: 'other', summary: { ...route.summary, fare: 1400, walkingMinutes: 2 } };
+    const badges = r.load('src/components/route/result.ts').routeBadges(route, [route, other]);
+    assert.deepEqual(plain(badges), ['최소도보']);
+    for (const expanded of [false, true]) {
+        const view = Card({ route, expanded, badgeLabels: badges, onPress() {}, onStart() {} });
+        assert.ok(findTextIncluding(view, '예상')); assert.ok(findTextIncluding(view, '1,650원'));
+    }
 });
 
 test('233 mock·서버 응답 경로 1개·복수 모두 표시하고 독립 토글·안내 시작으로 원본 경로를 전달해요', async () => {
@@ -10905,7 +10950,7 @@ test('241 약속방 추천의 총 소요 시간과 접근성 라벨도 시간/�
 test('241 B안 첫차 기준은 시간 아래 한 줄이며 noService 출발 안내와 중복하지 않아요', () => {
     const r = clock152(createRuntime());
     const Card = r.load('src/components/route/RouteCard.tsx').default;
-    for (const firstTrain of [false, true]) for (const noService of [false, true]) for (const expanded of [false, true]) for (const badgeLabels of [[], ['최소시간', '최저요금']]) {
+    for (const firstTrain of [false, true]) for (const noService of [false, true]) for (const expanded of [false, true]) for (const badgeLabels of [[], ['최소시간', '최소도보']]) {
         const route = r.load('src/services/route.ts').__parseRouteSearch(routeData()).routes[0];
         Object.assign(route.summary, { noService, departureAt: '2026-11-15T05:31:00+09:00' });
         const slot = route.steps.find(step => step.type === 'SUBWAY').stations[0];
