@@ -34,6 +34,7 @@ const PURPLE = '#5C3F78';
 const AI = '#5C3F78';
 const WARNING = '#8C4166';
 const RETAKE_COLOR = '#725B86';
+const READ_COLOR = '#23845C';
 const WHITE = '#ffffff';
 const SECONDARY = '#83808B';
 const BORDER = '#EEEAF2';
@@ -113,12 +114,6 @@ const COMPARE_FIELDS = [
     { key: 'headsign', label: '방면' },
 ] as const;
 
-/** 표시 비교용: 띄어쓰기와 끝의 '역'·'방면'은 무시해요. */
-const sameSign = (a: string, b: string) => {
-    const normalize = (value: string) => value.replace(/\s+/g, '').replace(/(역|방면)$/, '');
-    return normalize(a) === normalize(b);
-};
-
 type ServerStage = 'route' | 'picking' | 'analyzing' | 'result' | 'error' | 'photo' | 'idle';
 
 function ServerDirectionScreen() {
@@ -135,6 +130,8 @@ function ServerDirectionScreen() {
     const routeSummary = [formatStationName(shown(params.stationName)), [lineName, route.headsign || (route.direction ? DIRECTION_LABELS[route.direction] : '')].filter(Boolean).join(' ')].filter(Boolean).join(' / ');
 
     const [photo, setPhoto] = useState<DirectionPhoto | null>(null);
+    // 업로드 가능한 사진과 미리보기를 분리해 변환·분석 오류에도 선택한 사진을 보여줘요.
+    const [previewUri, setPreviewUri] = useState<string | null>(null);
     const [data, setData] = useState<DirectionCheckResponse | null>(null);
     const [error, setError] = useState<DirectionErrorCode | null>(null);
     const [busy, setBusy] = useState<'pick' | 'analyze' | null>(null);
@@ -149,7 +146,7 @@ function ServerDirectionScreen() {
     /** 사진 카드: 사진 가로세로 비율(구하기 전이나 실패하면 4:3)과 사진 상자 크기 */
     const [photoRatio, setPhotoRatio] = useState<{ uri: string; ratio: number } | null>(null);
     const [photoBox, setPhotoBox] = useState({ width: 0, height: 0 });
-    const photoUri = photo?.uri ?? null;
+    const photoUri = previewUri;
     useEffect(() => {
         if (!photoUri) return;
         let alive = true;
@@ -162,14 +159,15 @@ function ServerDirectionScreen() {
     }, [photoUri]);
     const ratio = photoRatio && photoRatio.uri === photoUri ? photoRatio.ratio : 4 / 3;
     const photoBoxHeight = photoBox.width > 0 ? Math.min(400, Math.max(180, photoBox.width / ratio)) : 260;
-    const clean = useCallback(() => {
+    const clean = useCallback((keepUri?: string) => {
         for (const uri of temporary.current) {
+            if (uri === keepUri) continue;
             try { const file = new File(uri); if (file.exists) file.delete(); temporary.current.delete(uri); } catch { /* Retry cleanup at the next lifecycle boundary. */ }
         }
     }, []);
     useFocusEffect(useCallback(() => {
         active.current = true;
-        setBusy(null); setPhoto(null); setData(null); setError(null);
+        setBusy(null); setPhoto(null); setPreviewUri(null); setData(null); setError(null);
         // 화면을 떠나면 유지하던 사진의 임시 파일도 지워요. 요청 중이면 그 요청이 끝날 때 지워요.
         return () => { active.current = false; requestId.current++; if (!inFlight.current) clean(); };
     }, [clean, routeKey]));
@@ -184,6 +182,7 @@ function ServerDirectionScreen() {
         inFlight.current = true; setBusy('pick');
         const id = ++requestId.current;
         const generation = getSessionGeneration();
+        let chosenUri: string | undefined;
         const current = () => active.current && id === requestId.current && generation === getSessionGeneration();
         try {
             const permission = camera ? await ImagePicker.requestCameraPermissionsAsync() : await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -198,8 +197,9 @@ function ServerDirectionScreen() {
             const result = camera ? await ImagePicker.launchCameraAsync(options) : await ImagePicker.launchImageLibraryAsync(options);
             if (result.canceled) return;
             const asset = result.assets[0];
-            // 실제 사진을 받은 뒤에만 교체하고, 새 파일을 등록하기 전에 기존 파일을 정리해요.
-            if (current()) { setError(null); setData(null); setPhoto(null); clean(); }
+            // 실제 새 사진을 받았을 때만 교체해요. 취소·권한 거부는 이전 사진·결과를 유지해요.
+            chosenUri = asset.uri;
+            if (current()) { setError(null); setData(null); setPhoto(null); setPreviewUri(asset.uri); clean(asset.uri); }
             // Only delete picker-owned cache files, never an original library asset.
             if (Platform.OS !== 'web' && asset.uri.startsWith(Paths.cache.uri)) temporary.current.add(asset.uri);
             if (!current()) return;
@@ -220,23 +220,29 @@ function ServerDirectionScreen() {
                 if (size > 0 && size <= MAX_IMAGE_BYTES) {
                     if (!current()) return;
                     photoGeneration.current = generation;
+                    setPreviewUri(output.uri);
                     setPhoto({ uri: output.uri, mimeType: 'image/jpeg', fileName: 'direction.jpg', ...(blob ? { file: blob } : {}) });
                     return;
                 }
             }
             throw new DirectionCheckError('IMAGE_INVALID', '');
         } catch {
-            if (current()) { setError('IMAGE_INVALID'); clean(); }
+            if (current()) { setError('IMAGE_INVALID'); if (chosenUri) clean(chosenUri); }
         } finally {
             inFlight.current = false;
             if (current()) setBusy(null);
-            else clean();
+            else {
+                clean();
+                if (active.current && generation !== getSessionGeneration()) {
+                    setBusy(null); setPhoto(null); setPreviewUri(null); setData(null); setError(null);
+                }
+            }
         }
     };
     /** 처음 확인과 '다시 시도' 모두 지금 들고 있는 같은 사진으로 보내요. */
     const analyze = async () => {
         if (!photo || !validRoute || inFlight.current) return;
-        if (photoGeneration.current !== getSessionGeneration()) { clean(); setPhoto(null); setError(null); return; }
+        if (photoGeneration.current !== getSessionGeneration()) { clean(); setPhoto(null); setPreviewUri(null); setData(null); setError(null); return; }
         inFlight.current = true; setBusy('analyze'); setError(null); setData(null);
         const id = ++requestId.current;
         const generation = getSessionGeneration();
@@ -245,18 +251,21 @@ function ServerDirectionScreen() {
         let keep = false;
         try {
             const response = await checkDirection(photo, route);
-            if (current()) setData(response);
+            if (current()) { setData(response); keep = true; }
         } catch (failure) {
             if (current() && !isAuthError(failure)) {
                 const code = failure instanceof DirectionCheckError ? failure.code : 'UNKNOWN_ERROR';
                 setError(code);
-                keep = RETRYABLE_ERRORS.includes(code);
+                keep = true;
             }
         } finally {
             inFlight.current = false;
-            // 결과·사진 오류·경로 오류·인증 오류, 화면 이탈·계정 전환 뒤에는 사진과 임시 파일을 정리해요.
-            if (!keep) clean();
-            if (mounted()) { setBusy(null); if (!keep) setPhoto(null); }
+            // 결과·오류 뒤에는 사진을 유지하고, 이탈·계정 전환·인증 실패 때만 정리해요.
+            if (!keep || !current()) clean();
+            if (mounted()) {
+                setBusy(null);
+                if (!keep || !current()) { setPhoto(null); setPreviewUri(null); }
+            }
         }
     };
 
@@ -281,7 +290,7 @@ function ServerDirectionScreen() {
         : stage === 'analyzing' ? '표지판을 읽는 중…'
             : stage === 'picking' ? '사진을 준비하고 있어요'
                 : stage === 'result' && data ? RESULT_LOOK[data.result].title
-                    : photo ? '선택한 사진이에요' : '표지판 전체가 보이게 맞춰 주세요';
+                    : photoUri ? '선택한 사진이에요' : '표지판 전체가 보이게 맞춰 주세요';
 
     return (
         <View style={styles.container}>
@@ -306,7 +315,7 @@ function ServerDirectionScreen() {
                 )}
 
                 {/* 사진 영역: 사진이 있으면 흰 카드에 사진 전체를 보여주고, 없으면 촬영 프레임을 보여줘요. */}
-                {photo ? (
+                {photoUri ? (
                     <View style={styles.photoCard}>
                         <View
                             style={[styles.photoBox, { height: photoBoxHeight }]}
@@ -315,7 +324,7 @@ function ServerDirectionScreen() {
                                 setPhotoBox(previous => (previous.width === width && previous.height === height ? previous : { width, height }));
                             }}
                         >
-                            <Image source={{ uri: photo.uri }} style={styles.serverPhoto} resizeMode="contain" accessibilityLabel="선택한 표지판 사진" />
+                            <Image source={{ uri: photoUri }} style={styles.serverPhoto} resizeMode="contain" accessibilityLabel="선택한 표지판 사진" />
                             {stage === 'analyzing' && <ScanLine height={photoBox.height} />}
                         </View>
                         <View style={styles.photoMeta}>
@@ -421,7 +430,7 @@ function ServerDirectionScreen() {
                                 <ServerButton icon="map-outline" label="경로 안내로 돌아가기" displayLabel="안내로 돌아가기" disabled={locked} onPress={goBack} />
                             </View>
                             <View style={styles.galleryRow}>
-                                <ServerButton icon="image-outline" label="갤러리 선택" variant="outline" disabled={locked} onPress={() => { void pick(false); }} />
+                                <ServerButton icon="image-outline" label="갤러리 선택" variant="outline" compact disabled={locked} onPress={() => { void pick(false); }} />
                             </View>
                         </>
                     )}
@@ -484,35 +493,48 @@ function ServerResult({ data, direction }: { data: DirectionCheckResponse; direc
     );
 }
 
-/** 두 행 표 안에서도 역·노선·방향의 인식 여부와 서버 판정 차이를 보존해요. */
+/** 체크는 인식 여부만 나타내요. 경로 일치 여부는 서버 판정 제목·안내를 그대로 사용해요. */
 function SignComparison({ data, direction }: { data: DirectionCheckResponse; direction?: DirectionCode }) {
     const directionOnly = data.expected.headsign === null && direction !== undefined;
     return (
         <View style={styles.grid}>
-            {(['recognized', 'expected'] as const).map((side, row) => (
-                <View key={side} style={[styles.comparisonRow, row === 0 && styles.comparisonDivider]}>
-                    <Text style={styles.comparisonLabel}>{row === 0 ? '인식한 문구' : '가야 할 방향'}</Text>
-                    <View style={styles.comparisonValues}>
-                        {COMPARE_FIELDS.map(({ key, label }) => {
-                            const read = data.recognized[key];
-                            const want = data.expected[key];
-                            const codeOnly = key === 'headsign' && directionOnly;
-                            const raw = row === 0 ? read : codeOnly ? DIRECTION_LABELS[direction!] : want;
-                            const value = key === 'stationName' && raw ? formatStationName(raw) : raw;
-                            const differs = read != null && want != null && !sameSign(read, want);
-                            const bad = row === 0 && data.result === 'WRONG' && (codeOnly ? data.reason === 'DIRECTION_MISMATCH' && read != null : differs);
-                            const good = row === 0 && data.result === 'CORRECT' && read != null && !differs;
-                            const a11yLabel = codeOnly ? (row === 0 ? '읽은 방향 표시' : '내 경로 방향') : `${row === 0 ? '읽은' : '내 경로'} ${label}`;
-                            return (
-                                <Text key={key} accessibilityLabel={a11yLabel} style={[styles.comparisonValue, good && { color: PURPLE }, bad && { color: WARNING }, value == null && styles.cellMuted]}>
-                                    {codeOnly && <Text style={styles.directionLabel}>{a11yLabel}: </Text>}
-                                    {value ?? (row === 0 ? '읽지 못했어요' : '정보 없음')}
-                                </Text>
-                            );
-                        })}
+            <Text style={styles.comparisonHeading}>인식 결과</Text>
+            {COMPARE_FIELDS.map(({ key, label }) => {
+                const read = data.recognized[key]?.trim() || null;
+                const codeOnly = key === 'headsign' && directionOnly;
+                // 방면 이름을 읽어도 방향 코드 판단에 필요한 표시가 없을 수 있어요.
+                const needsDirectionCheck = codeOnly && data.result === 'RETAKE' && data.reason === 'MISSING_INFO';
+                const recognized = read !== null;
+                const value = key === 'stationName' && read ? formatStationName(read) : read;
+                const a11yLabel = codeOnly ? '읽은 방향 표시' : `읽은 ${label}`;
+                const wantedDirection = codeOnly ? DIRECTION_LABELS[direction!] : null;
+                return (
+                    <View key={key} style={styles.comparisonRow}>
+                        <View style={styles.comparisonField}>
+                            <Ionicons name={recognized ? 'checkmark-circle' : 'close-circle'} size={17}
+                                color={recognized ? READ_COLOR : WARNING} accessibilityLabel={`${label} ${recognized ? '인식됨' : '미인식'}`} />
+                            <Text style={styles.comparisonLabel}>{label}</Text>
+                        </View>
+                        <View style={styles.comparisonValues}>
+                            <Text accessibilityLabel={a11yLabel} style={[styles.comparisonValue, !recognized && styles.cellMuted]}>
+                                {value ?? '미인식'}
+                            </Text>
+                            {needsDirectionCheck && <Text style={styles.directionLabel}>{wantedDirection} 표시 {read ? '확인 필요' : '미인식'}</Text>}
+                        </View>
                     </View>
+                );
+            })}
+            <View style={styles.expectedRow}>
+                <Text style={styles.comparisonLabel}>가야 할 방향</Text>
+                <View style={styles.expectedValues}>
+                    {COMPARE_FIELDS.map(({ key, label }) => {
+                        const codeOnly = key === 'headsign' && directionOnly;
+                        const raw = codeOnly ? DIRECTION_LABELS[direction!] : data.expected[key];
+                        const value = key === 'stationName' && raw ? formatStationName(raw) : raw;
+                        return <Text key={key} accessibilityLabel={codeOnly ? '내 경로 방향' : `내 경로 ${label}`} style={styles.comparisonValue}>{value || '정보 없음'}</Text>;
+                    })}
                 </View>
-            ))}
+            </View>
         </View>
     );
 }
@@ -541,18 +563,19 @@ function PrivacyNote() {
     );
 }
 
-function ServerButton({ icon, label, displayLabel, shutter, captureGallery, onPress, disabled = false, variant, tone }: {
+function ServerButton({ icon, label, displayLabel, shutter, captureGallery, compact, onPress, disabled = false, variant, tone }: {
     icon: IconName;
     label: string;
     displayLabel?: string;
     shutter?: boolean;
     captureGallery?: boolean;
+    compact?: boolean;
     onPress: () => void;
     disabled?: boolean;
     variant?: 'fill' | 'outline';
     tone?: 'navy' | 'ai';
 }) {
-    return <ActionButton icon={icon} label={displayLabel ?? label} onPress={onPress} variant={variant} tone={tone} disabled={disabled} shutter={shutter} captureGallery={captureGallery} fluid />;
+    return <ActionButton icon={icon} label={displayLabel ?? label} onPress={onPress} variant={variant} tone={tone} disabled={disabled} shutter={shutter} captureGallery={captureGallery} compact={compact} fluid />;
 }
 
 function MockDirectionScreen() {
@@ -620,7 +643,7 @@ function MockDirectionScreen() {
     };
 
     const restart = () => {
-        setPhase({ kind: 'waiting' });
+        // 새 예시 사진을 고르기 전에는 이전 사진과 결과를 유지해요.
         setPickerOpen(true);
     };
 
@@ -719,6 +742,7 @@ function MockDirectionScreen() {
                                 data={phase.data}
                                 ride={ride}
                                 fromRoute={fromRoute}
+                                direction={expected.direction}
                                 onRetake={restart}
                                 onBack={goBack}
                             />
@@ -783,12 +807,14 @@ function ResultPanel({
                          data,
                          ride,
                          fromRoute,
+                         direction,
                          onRetake,
                          onBack,
                      }: {
     data: DirectionCheckResponse;
     ride: { stops: number; minutes: number; alightName: string } | null;
     fromRoute: boolean;
+    direction?: DirectionCode;
     onRetake: () => void;
     onBack: () => void;
 }) {
@@ -804,6 +830,7 @@ function ResultPanel({
         return (
             <View>
                 <ResultHeading icon="camera-reverse-outline" color={RETAKE_COLOR} title={title} message={data.message} />
+                <SignComparison data={data} direction={direction} />
                 <View style={styles.tips}>
                     {['표지판 전체가 네모 안에 들어오게', '글자가 흐리지 않게 가까이에서', '빛 반사가 없는 각도로'].map(tip => (
                         <View key={tip} style={styles.tipRow}>
@@ -826,7 +853,7 @@ function ResultPanel({
     return (
         <View>
             <ResultHeading icon={correct ? 'checkmark-circle' : 'close-circle'} color={correct ? PURPLE : WARNING} title={title} message={data.message} />
-            <SignComparison data={data} />
+            <SignComparison data={data} direction={direction} />
 
             {correct && ride && (
                 <Text style={styles.panelText}>
@@ -865,6 +892,7 @@ function ActionButton({
                           fluid,
                           shutter = false,
                           captureGallery = false,
+                          compact = false,
                       }: {
     icon: IconName;
     label: string;
@@ -873,6 +901,8 @@ function ActionButton({
     tone?: 'navy' | 'ai';
     /** 촬영 대기 화면의 갤러리 아이콘 모양만 지정해요. */
     captureGallery?: boolean;
+    /** 결과 아래 보조 버튼은 내용 크기로 보여줘요. */
+    compact?: boolean;
     /** 촬영 대기 화면의 원형 버튼 모양만 지정해요. */
     shutter?: boolean;
     /** 서버 화면 전용: 처리 중 버튼 잠금 */
@@ -892,6 +922,7 @@ function ActionButton({
                 fluid && styles.actionFluid,
                 shutter && styles.shutterAction,
                 captureGallery && styles.captureGalleryAction,
+                compact && styles.compactAction,
                 disabled && styles.disabled,
             ]}
             onPress={onPress}
@@ -912,7 +943,7 @@ function ActionButton({
             ) : (
                 <>
                     <Ionicons name={icon} size={18} color={fill ? WHITE : INK} />
-                    <Text style={[styles.actionText, { color: fill ? WHITE : INK }, fluid && styles.actionTextFluid]}>{label}</Text>
+                    <Text style={[styles.actionText, { color: fill ? WHITE : INK }, fluid && styles.actionTextFluid, compact && styles.compactActionText]}>{label}</Text>
                 </>
             )}
         </Pressable>
@@ -1014,16 +1045,21 @@ const styles = StyleSheet.create({
     resultHeading: { flexDirection: 'row', alignItems: 'flex-start', gap: 14 },
     passenger: { width: 50, flexShrink: 0, paddingTop: 2 },
     resultCopy: { flex: 1 },
-    comparisonRow: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 14, paddingVertical: 11, gap: 10 },
-    comparisonDivider: { borderBottomWidth: 1, borderBottomColor: BORDER },
+    comparisonHeading: { color: INK, fontSize: 13, fontWeight: '600', paddingHorizontal: 14, paddingTop: 12, paddingBottom: 4 },
+    comparisonRow: { flexDirection: 'row', alignItems: 'flex-start', paddingHorizontal: 14, paddingVertical: 8, gap: 10 },
+    comparisonField: { flexDirection: 'row', alignItems: 'center', gap: 6, width: 88, flexShrink: 1 },
+    expectedRow: { padding: 14, marginTop: 4, borderTopWidth: 1, borderTopColor: BORDER, gap: 4 },
+    expectedValues: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
     comparisonLabel: { color: SECONDARY, fontSize: 13.5, lineHeight: 21, flexShrink: 1 },
-    comparisonValues: { flex: 1, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 4 },
+    comparisonValues: { flex: 1, alignItems: 'flex-end', gap: 2 },
     comparisonValue: { color: INK, fontSize: 13.5, fontWeight: '600', lineHeight: 21, flexShrink: 1, textAlign: 'right' },
     directionLabel: { color: SECONDARY, fontSize: 12, fontWeight: '400' },
     captureGalleryAction: { flex: 0, minHeight: 104, padding: 4, flexDirection: 'column', gap: 6, borderWidth: 0, backgroundColor: 'transparent' },
     captureGalleryIcon: { width: 48, height: 48, borderRadius: 16, backgroundColor: WHITE, borderWidth: 1, borderColor: '#DED8E6', alignItems: 'center', justifyContent: 'center' },
     captureGalleryLabel: { color: '#6E6A77', fontSize: 12, lineHeight: 17, fontWeight: '500' },
     galleryRow: { alignSelf: 'center', marginTop: 8 },
+    compactAction: { flex: 0, flexBasis: 'auto', minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderWidth: 0, backgroundColor: 'transparent' },
+    compactActionText: { color: PURPLE, fontSize: 13 },
     shutterAction: { flex: 0, minHeight: 104, padding: 4, flexDirection: 'column', gap: 6, backgroundColor: 'transparent' },
     captureIconSlot: { width: 72, height: 72, alignItems: 'center', justifyContent: 'center' },
     shutterRing: { width: 72, height: 72, borderRadius: 36, borderWidth: 4, borderColor: PURPLE, padding: 4 },
