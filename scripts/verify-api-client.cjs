@@ -4902,7 +4902,7 @@ test('273 추천 입력은 조건·칩 없이 기준만 선택하고 8.1은 빈 
     for (const label of ['시간', '요금', '거리']) {
         const r = recoScreen(); let created = null;
         r.recoRespond(async (_url, options) => {
-            if (options.method === 'POST') created = recoRun({ conditionText: '채팅에서 요청한 조건', appliedConstraints: { maxMinutes: 30 } });
+            if (options.method === 'POST') created = recoRun({ results: [], conditionText: '채팅에서 요청한 조건', appliedConstraints: { maxMinutes: 30 } });
             return ok(created);
         });
         let view = await pumpScreen(r);
@@ -4925,7 +4925,8 @@ test('273 추천 입력은 조건·칩 없이 기준만 선택하고 8.1은 빈 
         assert.deepEqual(body, {}); assert.equal(Object.hasOwn(body, 'conditionText'), false); assert.equal(Object.hasOwn(body, 'filter'), false);
         assert.ok(findText(view, '이렇게 이해했어요')); assert.ok(findText(view, '"채팅에서 요청한 조건"')); assert.ok(findText(view, '모두 30분 이내'));
         assert.equal(findText(view, '원하는 조건이 있으면 채팅에서 @링크로에게 말해 보세요.'), null);
-        findElement(view, node => node.props?.accessibilityLabel === '조건 바꾸기').props.onPress();
+        assert.equal(findElement(view, node => node.props?.accessibilityLabel === '조건 바꾸기'), null);
+        findElement(view, node => node.type === 'Pressable' && findText(node, '출발역 다시 확인하기')).props.onPress();
         view = r.render();
         const recent = findElement(view, node => node.type === 'Pressable' && findText(node.props.children, '최근 추천 결과 보기'));
         assert.ok(recent); recent.props.onPress(); assert.ok(findText(r.render(), '이렇게 이해했어요')); r.unmount();
@@ -4965,8 +4966,62 @@ test('추천 화면(서버): 빈 기록은 입력 보기, 계산 버튼 연타�
     r.unmount();
 });
 
-test('추천 빈 결과는 서버 안내를 한 번 표시하고, 안내가 없을 때만 조건 완화를 안내해요', async () => {
-    const fallback = '시간, 환승, 요금 조건을 조금 완화해서 다시 추천받아 보세요.';
+test('277 결과 헤더는 조건 바꾸기 없이 좌우 44px로 제목 정렬을 유지해요', async () => {
+    for (const results of [[], recoRun().results]) {
+        const { r, view } = await reco153Screen(recoRun({ results }));
+        assert.equal(findElement(view, node => node.props?.accessibilityLabel === '조건 바꾸기'), null);
+        assert.equal(findElement(view, node => node.props?.name === 'options-outline'), null);
+        const header = findElement(view, node => node.type === 'View' && Array.isArray(node.props.children)
+            && node.props.children.some(child => child?.type === 'Text' && textOf(child) === '추천 중간역'));
+        assert.ok(header);
+        const [back, title, placeholder] = header.props.children.filter(Boolean);
+        assert.equal(back.type, 'Pressable'); assert.equal(textOf(title), '추천 중간역'); assert.equal(placeholder.type, 'View');
+        assert.equal(back.props.style.width, 44); assert.equal(placeholder.props.style.width, 44); assert.equal(placeholder.props.onPress, undefined);
+        r.unmount();
+    }
+});
+
+const otherCriteriaRows277 = view => findElements(view, node => node.type === 'Pressable' && node.props.accessibilityRole === 'button'
+    && !!findTextIncluding(node, '최대 ') && ['시간 기준', '요금 기준', '거리 기준'].some(label => findText(node, label)));
+
+test('277 세 기준이 같은 역이면 요약 카드, 모두 다르거나 일부만 같으면 기준 전환 목록을 유지해요', async () => {
+    for (const ids of [[77001, 77001, 77001], [77001, 77002, 77003], [77001, 77001, 77003], [77001, 77002, 77002]]) {
+        const run = recoRun({ results: ['TIME', 'FARE', 'DISTANCE'].map((criterion, index) => recoResult(criterion, ids[index])) });
+        const before = JSON.stringify(run); const { r, view } = await reco153Screen(run); const calls = r.calls.length;
+        const summary = findElement(view, node => node.props?.testID === 'same-station-criteria');
+        if (new Set(ids).size === 1) {
+            assert.ok(summary); assert.ok(findText(summary, '시간·요금·거리 모두 서버 추천역 77001역이에요'));
+            assert.ok(findText(summary, '세 기준에서 같은 역이 가장 좋아서 비교할 게 없어요.'));
+            assert.equal(otherCriteriaRows277(view).length, 0);
+            findElement(view, node => node.props?.accessibilityRole === 'tab' && findText(node, '요금 기준')).props.onPress();
+            assert.ok(findElement(r.render(), node => node.props?.testID === 'same-station-criteria'));
+        } else {
+            assert.equal(summary, null); const rows = otherCriteriaRows277(view); assert.equal(rows.length, 2);
+            const fare = rows.find(row => findText(row, '요금 기준')); assert.ok(fare); fare.props.onPress();
+            const next = r.render();
+            assert.equal(findElement(next, node => node.props?.accessibilityRole === 'tab' && findText(node, '요금 기준')).props.accessibilityState.selected, true);
+            assert.ok(findText(next, `서버 추천역 ${ids[1]}역`)); assert.equal(otherCriteriaRows277(next).length, 2);
+        }
+        assert.equal(r.calls.length, calls, '기준 전환은 추가 서버 요청 없음'); assert.equal(JSON.stringify(run), before); r.unmount();
+    }
+});
+
+test('277 두 기준 응답은 실제 라벨과 두 기준 안내를 쓰고 단일 기준은 비교 카드를 숨겨요', async () => {
+    for (const criteria of [['TIME', 'DISTANCE'], ['FARE', 'DISTANCE'], ['TIME']]) {
+        const { r, view } = await reco153Screen(recoRun({ results: criteria.map(criterion => recoResult(criterion, 77001)) }));
+        const summary = findElement(view, node => node.props?.testID === 'same-station-criteria');
+        if (criteria.length === 2) {
+            const label = criteria[0] === 'TIME' ? '시간 기준·거리 기준' : '요금 기준·거리 기준';
+            assert.ok(findText(summary, `${label} 모두 서버 추천역 77001역이에요`));
+            assert.ok(findText(summary, '두 기준에서 같은 역이 가장 좋아서 비교할 게 없어요.'));
+            assert.equal(findTextIncluding(summary, '세 기준'), null);
+        } else { assert.equal(summary, null); assert.equal(findText(view, '다른 기준 결과'), null); }
+        assert.equal(otherCriteriaRows277(view).length, 0); r.unmount();
+    }
+});
+
+test('277 추천 빈 결과는 서버 안내 우선, 출발역 확인·채팅 두 동작과 새 안내만 표시해요', async () => {
+    const fallback = '지금 출발역 조합으로는 모두가 갈 수 있는 중간역을 찾지 못했어요.';
     for (const message of [
         '첫차 시각이 가까워 약속 시각까지 도착할 수 있는 역이 없습니다. 약속 시간을 늦춰 주세요.',
         '조건에 맞는 중간역이 없습니다. 조건을 완화해 보세요.',
@@ -4974,6 +5029,7 @@ test('추천 빈 결과는 서버 안내를 한 번 표시하고, 안내가 없�
         '',
     ]) {
         const r = recoScreen();
+        const routes = []; r.external['expo-router'].router.replace = target => routes.push(plain(target));
         r.recoRespond(async () => ok(recoRun({ results: [], message })));
         let view = await pumpScreen(r);
         assert.ok(findText(view, '조건에 맞는 중간역이 없어요'));
@@ -4985,7 +5041,15 @@ test('추천 빈 결과는 서버 안내를 한 번 표시하고, 안내가 없�
         assert.equal(notices.length, 1, '빈 결과의 안내를 중복 없이 표시해요');
         if (message) assert.equal(findText(view, fallback), null);
         assert.equal(findText(view, '서버 추천역 77001역'), null);
-        const change = findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '조건 바꾸기'));
+        assert.equal(findElement(view, element => element.props?.accessibilityLabel === '조건 바꾸기'), null);
+        assert.equal(findText(view, '조건 바꾸기'), null);
+        assert.equal(findTextIncluding(view, '조건을 조금 완화해서'), null);
+        for (const text of ['이렇게 해 보세요', '· 출발역이 맞는지 확인해요', '· 조건을 바꾸고 싶으면 채팅에서 @링크로에게 물어봐요']) assert.ok(findText(view, text));
+        const chat = findElement(view, element => element.type === 'Pressable' && findText(element, '채팅에서 @링크로에게 물어보기'));
+        assert.ok(chat); chat.props.onPress();
+        assert.deepEqual(routes, [{ pathname: '/rooms/[roomId]', params: { roomId: ROOM_QUERY_ID, tab: 'chat' } }]);
+        assert.equal(r.calls.filter(call => call.options.method === 'POST').length, 0);
+        const change = findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '출발역 다시 확인하기'));
         assert.ok(change);
         change.props.onPress();
         view = await pumpScreen(r);
@@ -5058,7 +5122,7 @@ test('추천 화면(서버): isStale true 만 다시 추천받기 안내, null �
 
     // 조건이 모두 null 이면 "null" 글자 없이 "적용된 제약 없음"이에요. 최근 실행 하나뿐이면 이전 기록을 숨기고, 새로 실행하면 보여요.
     r = recoScreen();
-    let latest = recoRun({ conditionText: '조건' });
+    let latest = recoRun({ conditionText: '조건', isStale: true, staleReasons: ['MEMBERS_CHANGED'] });
     r.recoRespond(async (url, options) => {
         if (options.method === 'POST') latest = recoRun({ runId: 'new-run', createdAt: '2026-11-11T11:00:00+09:00', conditionText: '조건' });
         return ok(latest);
@@ -5067,9 +5131,7 @@ test('추천 화면(서버): isStale true 만 다시 추천받기 안내, null �
     assert.ok(findText(view, '적용된 제약 없음'));
     assert.equal(findTextIncluding(view, 'null'), null);
     assert.equal(findText(view, '이전 추천 기록'), null);
-    // 결과 보기의 "조건 바꾸기" → 입력 보기의 "다시 추천받기"로 8.1 을 다시 불러요.
-    findElement(view, element => element.props?.accessibilityLabel === '조건 바꾸기').props.onPress();
-    view = r.render();
+    // 최신이 아닌 결과의 기존 "다시 추천받기"로 8.1을 다시 불러요.
     findElement(view, element => element.type === 'Pressable' && findText(element.props.children, '다시 추천받기')).props.onPress();
     view = await pumpScreen(r);
     assert.ok(findText(view, '이전 추천 기록'));
@@ -11450,10 +11512,10 @@ test('271 큰 글꼴에서도 탭·지표·버튼은 고정 높이로 자르지 
     assert.ok(padding >= 226); r.unmount();
 });
 
-test('271 조건 바꾸기로 입력 화면에 돌아가도 조건 입력은 없고 다시 추천 요청은 빈 body예요', async () => {
-    const { r } = await reco153Screen(reco153Run(reco153Timetable()));
+test('271/277 빈 결과에서 출발역을 다시 확인해도 조건 입력은 없고 다시 추천 요청은 빈 body예요', async () => {
+    const { r } = await reco153Screen(reco153Run(reco153Timetable(), { results: [] }));
     const original = r.calls.length;
-    findElement(r.render(), e => e.props?.accessibilityLabel === '조건 바꾸기').props.onPress();
+    findElement(r.render(), e => e.type === 'Pressable' && findText(e, '출발역 다시 확인하기')).props.onPress();
     assert.equal(findElement(r.render(), e => e.props?.accessibilityLabel === '이동 조건 입력'), null);
     r.recoRespond(() => ok(reco153Run(reco153Timetable())));
     findElement(r.render(), e => e.type === 'Pressable' && !!findText(e, '다시 추천받기')).props.onPress(); await pumpScreen(r);
@@ -11479,7 +11541,7 @@ test('271 mock 결과도 서버 연결 없이 같은 역을 묶고 참여자 상
     const view = await pumpScreen(r); const cards = nearbyCards271(view);
     assert.equal(cards.length, 1); assert.ok(findText(cards[0], '을지로4가역')); assert.equal(calls, 0);
     assert.ok(findText(view, '누가 얼마나 걸리나요')); assert.ok(findText(view, '경로 자세히 보기')); assert.ok(findText(view, '후보로 제안'));
-    assert.ok(findElement(view, e => e.props?.accessibilityLabel === '조건 바꾸기')); r.unmount();
+    assert.equal(findElement(view, e => e.props?.accessibilityLabel === '조건 바꾸기'), null); r.unmount();
 });
 
 

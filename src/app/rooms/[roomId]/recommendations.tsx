@@ -653,21 +653,22 @@ export default function RoomRecommendationsScreen() {
     ].filter(Boolean).join(', ');
     /** 시안 "다른 기준 결과": 지금 실행(run.results)에 들어 있는 다른 기준만. 누르면 기준 탭만 바꿔요(새 요청 없음). */
     const otherResults = result ? run.results.filter(item => item.criterion !== result.criterion) : [];
+    const sameStationForAllCriteria = otherResults.length > 0 && otherResults.every(item => item.recommendedStation.id === result?.recommendedStation.id);
+    const availableCriteria = CRITERIA.filter(item => run.results.some(result => result.criterion === item.key));
+    const sameStationCriteriaLabel = availableCriteria.map(item => availableCriteria.length === 3 ? item.short : item.label).join('·');
     const showFooter = run.results.length > 0 && !!result;
     const nearbyGroups = groupNearbyAlternatives(result?.nearbyAlternatives ?? []);
 
     return (
         <View style={styles.container}>
             <StatusBar style="dark" />
-            {/* 위쪽 (시안 08): 뒤로 + 제목 + 조건 바꾸기(시안의 공유 아이콘 자리) */}
+            {/* 좌우 44px 폭을 유지해 제목을 가운데에 맞춰요. */}
             <View style={[lv.header, { paddingTop: insets.top }]}>
                 <Pressable style={lv.backButton} onPress={goBack} accessibilityRole="button" accessibilityLabel="뒤로 가기" hitSlop={8}>
                     <Ionicons name="chevron-back" size={24} color={LV_TEXT} />
                 </Pressable>
                 <Text style={styles.headerTitle} numberOfLines={1}>추천 중간역</Text>
-                <Pressable style={lv.backButton} onPress={() => setView('input')} accessibilityRole="button" accessibilityLabel="조건 바꾸기" hitSlop={8}>
-                    <Ionicons name="options-outline" size={21} color={LV_TEXT} />
-                </Pressable>
+                <View style={lv.backButton} />
             </View>
             <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + (showFooter ? Math.max(110, footerHeight + 16) : 32) }]} showsVerticalScrollIndicator={false}>
                 {newRecommendation && (
@@ -735,8 +736,14 @@ export default function RoomRecommendationsScreen() {
                     <View style={styles.emptyBox}>
                         <View style={lv.centerIcon}><Ionicons name="search-outline" size={28} color={LV_GRAY} /></View>
                         <Text style={lv.centerTitle}>조건에 맞는 중간역이 없어요</Text>
-                        <Text style={lv.centerBody}>{(serverEmptyResult && run.message) || '시간, 환승, 요금 조건을 조금 완화해서 다시 추천받아 보세요.'}</Text>
-                        <Pressable style={[lv.primaryButton, { marginTop: 16, alignSelf: 'stretch' }]} onPress={() => setView('input')} accessibilityRole="button"><Text style={lv.primaryText}>조건 바꾸기</Text></Pressable>
+                        <Text style={lv.centerBody}>{(serverEmptyResult && run.message) || '지금 출발역 조합으로는 모두가 갈 수 있는 중간역을 찾지 못했어요.'}</Text>
+                        <View style={styles.emptyAdvice}>
+                            <Text style={styles.emptyAdviceTitle}>이렇게 해 보세요</Text>
+                            <Text style={styles.emptyAdviceText}>· 출발역이 맞는지 확인해요</Text>
+                            <Text style={styles.emptyAdviceText}>· 조건을 바꾸고 싶으면 채팅에서 @링크로에게 물어봐요</Text>
+                        </View>
+                        <Pressable style={[lv.primaryButton, { marginTop: 16, alignSelf: 'stretch' }]} onPress={() => setView('input')} accessibilityRole="button"><Text style={lv.primaryText}>출발역 다시 확인하기</Text></Pressable>
+                        <Pressable style={[lv.secondaryButton, styles.emptyChatButton]} onPress={() => router.replace({ pathname: '/rooms/[roomId]', params: { roomId, tab: 'chat' } })} accessibilityRole="button"><Text style={lv.secondaryText}>채팅에서 @링크로에게 물어보기</Text></Pressable>
                     </View>
                 ) : result && (
                     <>
@@ -863,7 +870,12 @@ export default function RoomRecommendationsScreen() {
                         {otherResults.length > 0 && (
                             <>
                                 <Text style={[styles.subSectionTitle, styles.otherTitle]}>다른 기준 결과</Text>
-                                {otherResults.map(item => (
+                                {sameStationForAllCriteria ? (
+                                    <View style={styles.sameStationBox} testID="same-station-criteria">
+                                        <Text style={styles.sameStationTitle}>{sameStationCriteriaLabel} 모두 {stationName}이에요</Text>
+                                        <Text style={styles.sameStationText}>{availableCriteria.length === 3 ? '세' : '두'} 기준에서 같은 역이 가장 좋아서 비교할 게 없어요.</Text>
+                                    </View>
+                                ) : otherResults.map(item => (
                                     <Pressable
                                         key={item.criterion}
                                         style={({ pressed }) => [styles.otherRow, pressed && styles.pressed]}
@@ -1029,6 +1041,13 @@ const styles = StyleSheet.create({
     understoodMessage: { flex: 1, fontSize: 14, lineHeight: 21, fontWeight: '600', color: LV_SUBTEXT },
 
     emptyBox: { alignItems: 'center', paddingVertical: 48, paddingHorizontal: 10, gap: 6 },
+    emptyAdvice: { alignSelf: 'stretch', marginTop: 10, padding: 14, borderRadius: 14, borderWidth: 1, borderColor: LV_CARD_BORDER, backgroundColor: WHITE, gap: 6 },
+    emptyAdviceTitle: { fontSize: 14, fontWeight: '700', color: LV_TEXT },
+    emptyAdviceText: { fontSize: 12.5, lineHeight: 19, color: LV_GRAY },
+    emptyChatButton: { alignSelf: 'stretch', borderColor: LV_PURPLE, paddingHorizontal: 12 },
+    sameStationBox: { padding: 14, borderRadius: 14, borderWidth: 1, borderColor: LV_CARD_BORDER, backgroundColor: WHITE, gap: 6 },
+    sameStationTitle: { fontSize: 13.5, fontWeight: '700', color: LV_TEXT },
+    sameStationText: { fontSize: 12, lineHeight: 18, color: LV_GRAY },
 
     tabs: { marginTop: 14 },
     resultTabItem: { height: 'auto', minHeight: 44, paddingVertical: 10, paddingHorizontal: 4 },
