@@ -11608,3 +11608,101 @@ test('272 저장 버튼은 바뀐 내용이 없으면 꺼진 색, 바꾸면 보�
     assert.equal(style272(findElement(cleared.props.children, child => child.type === 'Text')).color, '#8C4C62');
     r.unmount();
 });
+
+/* ---------- #272 약속 시간 시트의 오전/오후, 시, 분 휠 ---------- */
+
+test('272 shiftDayTime 은 하루 안에서 분과 시를 이어서 넘기고 읽을 수 없는 값은 그대로 돌려줘요', () => {
+    const { shiftDayTime: shift } = createRuntime().load('src/components/time-wheel/labels.ts');
+    assert.equal(shift('23:59', 1), '00:00'); assert.equal(shift('00:00', -1), '23:59');
+    assert.equal(shift('11:59', 1), '12:00'); assert.equal(shift('23:30', 60), '00:30');
+    assert.equal(shift('00:30', -60), '23:30'); assert.equal(shift('10:15', 0), '10:15'); assert.equal(shift('10:00', 1440 * 3 + 5), '10:05');
+    for (const value of ['', '7:00', '24:00', '10:60', 'ab:cd']) assert.equal(shift(value, 1), value, value);
+    assert.equal(shift('10:00', Number.NaN), '10:00');
+});
+
+function wheel272(time) {
+    const r = createScreenRuntime({}, 'src/components/time-wheel/date-time-wheel.tsx');
+    const changes = [];
+    const wheel = r.renderComponent({ type: r.screen.TimeWheel, props: { time, onChange: value => changes.push(value) } });
+    const columns = findElements(wheel, node => typeof node.type === 'function' && node.props?.label);
+    const column = label => columns.find(node => node.props.label === label);
+    // 칸마다 새 런타임을 써요(wheel244 와 같은 이유).
+    const list = label => findElement(r.renderComponent(column(label)), node => node.type === 'FlatList');
+    return { r, wheel, changes, columns, column, list };
+}
+const scroll272 = (flat, at) => flat.props.onMomentumScrollEnd({ nativeEvent: { contentOffset: { y: at * 44 } } });
+
+test('272 TimeWheel 은 오전 오후, 시, 분 세 칸이고 시와 분이 끝없이 돌며 19:00 은 오후 7시 00분이에요', () => {
+    const w = wheel272('19:00');
+    assert.deepEqual(w.columns.map(node => node.props.label), ['오전 오후', '시', '분']);
+    assert.deepEqual(w.columns.map(node => node.props.cyclic), [undefined, true, true]);
+    assert.deepEqual(w.columns.map(node => node.props.flex), [0.9, 0.6, 0.6]);
+    assert.deepEqual(w.columns.map(node => [node.props.index, node.props.value]), [[1, '오후'], [6, '7시'], [0, '0분']]);
+    assert.deepEqual(plain(w.column('오전 오후').props.items), ['오전', '오후']);
+    assert.equal(w.column('시').props.items.length, 12); assert.equal(w.column('시').props.items[0], '1');
+    assert.equal(w.column('분').props.items.length, 60); assert.equal(w.column('분').props.items[0], '00');
+    assert.ok(findElement(w.wheel, node => node.type === 'Text' && textOf(node) === ':'));
+    const box = Object.assign({}, ...[w.wheel.props.style].flat(Infinity).filter(Boolean));
+    assert.equal(box.paddingHorizontal, 44); assert.equal(box.height, 220);
+    const band = findElement(w.wheel.props.children, node => node.type === 'View' && node.props.pointerEvents === 'none');
+    const bandStyle = Object.assign({}, ...[band.props.style].flat(Infinity).filter(Boolean));
+    assert.deepEqual([bandStyle.backgroundColor, bandStyle.borderRadius, bandStyle.height, bandStyle.top], ['#EDE8F3', 12, 44, 88]);
+    const hours = w.list('시');
+    assert.equal(hours.props.initialScrollIndex, 100 * 12 + 6);
+    const style = i => Object.assign({}, ...[hours.props.renderItem({ item: '7', index: i }).props.children.props.style].flat(Infinity).filter(Boolean));
+    assert.deepEqual([style(100 * 12 + 6).color, style(100 * 12 + 6).fontSize, style(100 * 12 + 6).fontWeight], ['#25212D', 19, '700']);
+    assert.deepEqual([style(100 * 12 + 5).color, style(100 * 12 + 5).fontSize, style(100 * 12 + 5).fontWeight], ['#A8A3B0', 17, '500']);
+});
+
+test('272 TimeWheel 은 분과 시 칸을 넘기면 자리 올림하고 오전/오후 칸은 시와 분을 그대로 둬요', () => {
+    let w = wheel272('11:59'); scroll272(w.list('분'), 100 * 60 + 60); assert.deepEqual(w.changes, ['12:00']);
+    w = wheel272('23:59'); scroll272(w.list('분'), 100 * 60 + 60); assert.deepEqual(w.changes, ['00:00']);
+    w = wheel272('00:00'); scroll272(w.list('분'), 100 * 60 - 1); assert.deepEqual(w.changes, ['23:59']);
+    w = wheel272('23:10'); scroll272(w.list('시'), 100 * 12 + 11); assert.deepEqual(w.changes, ['00:10']);
+    w = wheel272('23:10'); w.r.renderComponent(w.column('시')).props.onAccessibilityAction({ nativeEvent: { actionName: 'decrement' } }); assert.deepEqual(w.changes, ['22:10']);
+    w = wheel272('07:30'); scroll272(w.list('오전 오후'), 1); assert.deepEqual(w.changes, ['19:30']);
+    w = wheel272('19:30'); w.column('오전 오후').props.onSelect(0, -1); assert.deepEqual(w.changes, ['07:30']);
+});
+
+function timeSheet272(value) {
+    const r = createScreenRuntime({}, 'src/components/rooms/appointment-picker.tsx');
+    const calls = [];
+    const props = { visible: true, value, onClose: () => calls.push('close'), onConfirm: time => calls.push(`confirm ${time}`) };
+    const element = { type: r.screen.TimeWheelModal, props };
+    r.sheet = () => { r.renderComponent(element); return r.renderComponent(element); };
+    return Object.assign(r, { calls272: calls, props272: props });
+}
+
+test('272 약속 시간 시트: 열면 선택값이 보이고 휠을 따라 바뀌며 시간 선택은 HH:mm 을 넘기고 취소는 넘기지 않아요', () => {
+    const r = timeSheet272('19:00'); let view = r.sheet();
+    assert.ok(findText(view, '선택: 오후 7:00')); assert.ok(findText(view, '위아래로 스크롤해 시간을 선택하세요.'));
+    assert.ok(findText(view, '약속 시간'));
+    const preview = Object.assign({}, ...[findText(view, '선택: 오후 7:00').props.style].flat(Infinity).filter(Boolean));
+    assert.deepEqual([preview.color, preview.fontSize, preview.fontWeight, preview.textAlign, preview.marginTop], ['#5C3F78', 15, '700', 'center', 10]);
+    const wheel = findElement(view, node => node.type?.name === 'TimeWheel'); assert.equal(wheel.props.time, '19:00');
+    // 휠의 분 칸을 30칸 넘겨요. 검사 장치의 상태 저장소가 마지막에 그린 컴포넌트를 따라가서,
+    // 휠이 알린 값을 받아 둔 뒤 시트를 다시 그리고 시트의 onChange 로 넘겨요.
+    const emitted = [];
+    const minutes = findElements(r.renderComponent({ ...wheel, props: { ...wheel.props, onChange: value => emitted.push(value) } }), node => node.props?.label === '분')[0];
+    scroll272(findElement(r.renderComponent(minutes), node => node.type === 'FlatList'), 100 * 60 + 30);
+    assert.deepEqual(emitted, ['19:30']);
+    view = r.sheet(); findElement(view, node => node.type?.name === 'TimeWheel').props.onChange(emitted[0]);
+    view = r.sheet(); assert.ok(findText(view, '선택: 오후 7:30')); assert.equal(findElement(view, node => node.type?.name === 'TimeWheel').props.time, '19:30');
+    findElement(view, node => node.type?.name === 'TimeWheel').props.onChange('00:05'); view = r.sheet();
+    assert.ok(findText(view, '선택: 오전 12:05'));
+    noMiddleDot272(view, '시간 시트');
+    roomWriteButton(view, '시간 선택').props.onPress();
+    assert.deepEqual(r.calls272, ['confirm 00:05', 'close']);
+
+    const cancel = timeSheet272('08:15'); view = cancel.sheet(); assert.ok(findText(view, '선택: 오전 8:15'));
+    findElement(view, node => node.type?.name === 'TimeWheel').props.onChange('09:00'); view = cancel.sheet();
+    roomWriteButton(view, '취소').props.onPress(); assert.deepEqual(cancel.calls272, ['close']);
+    // 잘못된 value 는 지금처럼 19:00 으로 시작해요.
+    const bad = timeSheet272('ab:cd'); view = bad.sheet(); assert.ok(findText(view, '선택: 오후 7:00'));
+    roomWriteButton(view, '시간 선택').props.onPress(); assert.deepEqual(bad.calls272, ['confirm 19:00', 'close']);
+    // 시트에 남은 텍스트와 휠 글자에 가운데 점이 없어요.
+    const wheelView = r.renderComponent(findElement(r.sheet(), node => node.type?.name === 'TimeWheel'));
+    noMiddleDot272(wheelView, '휠');
+    const source = fs.readFileSync(path.join(root, 'src/components/rooms/appointment-picker.tsx'), 'utf8');
+    assert.equal(source.includes('function Wheel('), false); assert.equal(source.includes('\u00b7'), false);
+});

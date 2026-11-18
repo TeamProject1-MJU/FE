@@ -66,3 +66,17 @@ export function shiftWheelValue(dates: string[], date: string, time: string, del
         time: `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`,
     };
 }
+
+/**
+ * 하루 안에서 HH:MM 을 deltaMinutes 만큼 옮겨요(날짜 없음). 23:59 다음은 00:00, 00:00 앞은 23:59 예요.
+ * time 을 읽을 수 없으면 받은 값을 그대로 돌려줘요.
+ */
+export function shiftDayTime(time: string, deltaMinutes: number) {
+    const match = /^(\d{2}):(\d{2})$/.exec(time);
+    if (!match || !Number.isFinite(deltaMinutes)) return time;
+    const hour = Number(match[1]);
+    const minute = Number(match[2]);
+    if (hour > 23 || minute > 59) return time;
+    const total = (((hour * 60 + minute + Math.trunc(deltaMinutes)) % DAY_MINUTES) + DAY_MINUTES) % DAY_MINUTES;
+    return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
