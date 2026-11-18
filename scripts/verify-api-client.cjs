@@ -10587,6 +10587,9 @@ test('279 상세보기는 해당 roomId·runId의 8.3 결과를 열고 조건 �
 });
 
 test('279 결과 요약은 인원·약속 시각만 표시하고 조건 칩과 기준 탭은 유지해요', async () => {
+    const appointment = new Date('2026-11-20T19:00:00+09:00');
+    const pad = value => String(value).padStart(2, '0');
+    const appointmentLabel = `${pad(appointment.getMonth() + 1)}.${pad(appointment.getDate())} ${pad(appointment.getHours())}:${pad(appointment.getMinutes())}`;
     for (const scheduled of [true, false]) {
         const r = recoScreen();
         r.recoRespond(() => ok(recoRun({ conditionText: '40분 이내 환승 1회', appliedConstraints: { maxMinutes: 40, maxTransfers: 1 } })));
@@ -10596,7 +10599,7 @@ test('279 결과 요약은 인원·약속 시각만 표시하고 조건 칩과 �
             return fetch(url, options);
         };
         let view = await pumpScreen(r);
-        const expected = scheduled ? '2명, 약속 시각 11.20 19:00' : '2명, 약속 시각 미정';
+        const expected = scheduled ? `2명, 약속 시각 ${appointmentLabel}` : '2명, 약속 시각 미정';
         for (const label of ['시간 기준', '요금 기준', '거리 기준']) {
             const summary = findText(view, expected); assert.ok(summary, expected);
             assert.doesNotMatch(textOf(summary), /이내|환승|기준/);
