@@ -11261,3 +11261,132 @@ test('267 개인 검색은 도착 시각 지정만, 약속방은 약속 시각 �
         s.unmount();
     }
 });
+
+/* ---------- #269 경로 지도 선을 역 사이마다 혼잡도 색으로 ---------- */
+
+const stops269 = n => Array.from({ length: n }, (_, i) => ({ id: 100 + i, name: `역${100 + i}`, order: i }));
+const path269 = (n, offset = 0) => Array.from({ length: n }, (_, i) => [127 + (offset + i) / 1000, 37.5 + (offset + i) / 1000]);
+const point269 = ([lng, lat]) => ({ latitude: lat, longitude: lng });
+/** 정차역 수 = path 점 수인 지하철 구간. levels[i] 는 stops[i] 의 혼잡도(null 은 데이터 없음). */
+function split269(levels, { kinds = [], line, offset = 0, shuffle = false } = {}) {
+    const stations = levels.map((level, i) => station129(100 + i, congestion129(level, kinds[i] ?? 'PREDICTED')));
+    return step129('SUBWAY', { ...(line !== undefined ? { line } : {}), path: path269(levels.length, offset), stops: stops269(levels.length), stations: shuffle ? stations.reverse() : stations });
+}
+const map269 = steps => {
+    const route = { ...route129(), steps }; const before = JSON.stringify(route);
+    const built = routeMap129().buildRouteMap(route); assert.equal(JSON.stringify(route), before, '입력 route 를 바꾸지 않아요');
+    return plain(built);
+};
+
+test('269 점 수 = 정차역 수인 구간은 역 사이마다 출발 쪽 역 색, 같은 색은 한 선, 이어지는 선은 경계 점을 함께 가져요', () => {
+    const { MAP_LIMITS, isValidMapLines } = createRuntime().load('src/components/map/map-html.ts');
+    for (const shuffle of [false, true]) {
+        const step = split269(['NORMAL', 'NORMAL', 'CROWDED', 'VERY_CROWDED', 'VERY_CROWDED', 'COMFORTABLE'], { shuffle });
+        const map = map269([step]);
+        assert.deepEqual(map.lines.map(l => [l.id, l.color, l.dashed ?? false]), [
+            [1000, CONGESTION_COLOR129.NORMAL, false], [1001, CONGESTION_COLOR129.CROWDED, false], [1002, CONGESTION_COLOR129.VERY_CROWDED, false]], `shuffle ${shuffle}`);
+        const points = step.path.map(point269);
+        assert.deepEqual(map.lines.map(l => l.points), [points.slice(0, 3), points.slice(2, 4), points.slice(3, 6)]);
+        for (let i = 1; i < map.lines.length; i++) assert.deepEqual(map.lines[i].points[0], map.lines[i - 1].points.at(-1), '경계 점을 함께 가져요');
+        // 마지막 역(COMFORTABLE)은 칠하는 데 쓰지 않아요.
+        assert.equal(map.lines.some(l => l.color === CONGESTION_COLOR129.COMFORTABLE), false);
+        assert.equal(map.usesCongestion, true); assert.equal(map.usesLineColor, false);
+        assert.deepEqual(map.markers.map(m => [m.kind, m.latitude, m.longitude]), [['origin', 37.5, 127], ['destination', 37.505, 127.005]]);
+        assert.ok(isValidMapLines(map.lines)); assert.ok(map.lines.length <= MAP_LIMITS.lines);
+    }
+    // stations id 가 stops 와 맞지 않으면 같은 순서의 항목을 써요.
+    const byOrder = split269(['RELAXED', 'CROWDED', null]); byOrder.stations.forEach((station, i) => { station.id = 900 + i; });
+    assert.deepEqual(map269([byOrder]).lines.map(l => l.color), [CONGESTION_COLOR129.RELAXED, CONGESTION_COLOR129.CROWDED]);
+    // 같은 색만 이어지면 선 하나예요.
+    const same = map269([split269(['CROWDED', 'CROWDED', 'CROWDED', null])]);
+    assert.deepEqual(same.lines.map(l => [l.id, l.color, l.points.length]), [[1000, CONGESTION_COLOR129.CROWDED, 4]]);
+});
+
+test('269 혼잡도 없는 역에서 출발하는 사이는 노선 색, 노선 색도 없으면 회색이고 usesCongestion·usesLineColor 가 모두 true', () => {
+    const { NO_DATA_LINE_COLOR } = routeMap129();
+    const unsupported = { ...congestion129('VERY_CROWDED'), supported: false };
+    const step = split269(['NORMAL', null, 'NORMAL', null]); step.stations[2].congestion = unsupported;
+    const map = map269([step]);
+    assert.deepEqual(map.lines.map(l => [l.color, l.points.length]), [[CONGESTION_COLOR129.NORMAL, 2], ['#00a84d', 3]]);
+    assert.equal(map.usesCongestion, true); assert.equal(map.usesLineColor, true);
+    const gray = map269([split269([null, 'CROWDED', 'CROWDED'], { line: { id: 7, name: '7호선', color: null } })]);
+    assert.deepEqual(gray.lines.map(l => l.color), [NO_DATA_LINE_COLOR, CONGESTION_COLOR129.CROWDED]);
+    assert.equal(gray.usesCongestion, true); assert.equal(gray.usesLineColor, true);
+    // 알 수 없는 level 도 칠하지 않아요(서버 값을 바꾸지 않고 노선 색으로).
+    const odd = split269(['NORMAL', 'NORMAL']); odd.stations[0].congestion.level = 'UNKNOWN';
+    const oddMap = map269([odd]); assert.deepEqual(oddMap.lines.map(l => l.color), ['#00a84d']);
+    assert.equal(oddMap.usesCongestion, false); assert.equal(oddMap.usesLineColor, true);
+});
+
+test('269 estimated·mock 은 실제로 칠하는 데 쓴 혼잡도만 반영해요(마지막 역만 MOCK 이면 false)', () => {
+    const last = map269([split269(['NORMAL', 'CROWDED', 'VERY_CROWDED'], { kinds: ['PREDICTED', 'PREDICTED', 'MOCK'] })]);
+    assert.equal(last.mock, false); assert.equal(last.estimated, false);
+    const lastEstimated = map269([split269(['NORMAL', 'NORMAL'], { kinds: ['PREDICTED', 'ESTIMATED'] })]);
+    assert.equal(lastEstimated.estimated, false);
+    const used = map269([split269(['NORMAL', 'CROWDED', null], { kinds: ['ESTIMATED', 'MOCK'] })]);
+    assert.equal(used.estimated, true); assert.equal(used.mock, true);
+});
+
+test('269 점 수가 정차역 수와 다르거나 잘못된 점이 섞인 구간은 기존처럼 전체 한 색(가장 높은 단계)이에요', () => {
+    const { stepLineColor, thinPoints, toCoordinates } = routeMap129();
+    const more = split269(['NORMAL', 'CROWDED', 'VERY_CROWDED']); more.path = path269(5);
+    const fewer = split269(['NORMAL', 'CROWDED', 'VERY_CROWDED']); fewer.path = path269(2);
+    const bad = split269(['NORMAL', 'CROWDED', 'VERY_CROWDED', 'NORMAL']); bad.path = [...path269(3), [200, 37.5]];
+    const one = split269(['NORMAL']);
+    const noStops = split269(['NORMAL', 'VERY_CROWDED']); noStops.stops = [];
+    for (const [label, step] of [['점이 더 많음', more], ['점이 더 적음', fewer], ['잘못된 점', bad], ['역 하나', one], ['정차역 없음', noStops]]) {
+        const map = map269([step]);
+        const points = toCoordinates(step.path);
+        if (points.length < 2) { assert.equal(map.lines.length, 0, label); continue; }
+        assert.deepEqual(map.lines, [{ id: 0, color: stepLineColor(step), points: plain(thinPoints(points, 1000)) }], label);
+        assert.equal(map.lines[0].color, CONGESTION_COLOR129.VERY_CROWDED, label);
+    }
+    // 기존 경로 예시(path 3점, 정차역 2개)는 그대로예요.
+    const { NO_DATA_LINE_COLOR, WALK_LINE_COLOR } = routeMap129();
+    assert.deepEqual(plain(routeMap129().buildRouteMap(route129())).lines.map(l => [l.id, l.color]), [
+        [0, WALK_LINE_COLOR], [1, CONGESTION_COLOR129.CROWDED], [2, '#00a5de'], [3, '#00a5de'], [4, NO_DATA_LINE_COLOR]]);
+});
+
+test('269 색이 계속 바뀌는 긴 경로도 선 개수·점 개수가 상한 안이고, 넘으면 경로 전체를 나누지 않고 그려요', () => {
+    const { MAP_LIMITS, isValidMapLines } = createRuntime().load('src/components/map/map-html.ts');
+    const { stepLineColor } = routeMap129();
+    const alternate = n => Array.from({ length: n }, (_, i) => (i % 2 ? 'CROWDED' : 'COMFORTABLE'));
+    // 상한 안: 선 49개로 나눠요.
+    const fits = map269([split269(alternate(50))]);
+    assert.equal(fits.lines.length, 49); assert.ok(isValidMapLines(fits.lines)); assert.equal(new Set(fits.lines.map(l => l.id)).size, 49);
+    // 선 개수 초과: 두 구간 모두 나누지 않아요(경로 전체).
+    const many = [split269(alternate(30)), step129('WALKING', { path: path269(2, 40) }), split269(alternate(500), { offset: 50 })];
+    const tooMany = map269(many);
+    assert.ok(tooMany.lines.length <= MAP_LIMITS.lines); assert.ok(isValidMapLines(tooMany.lines));
+    assert.deepEqual(tooMany.lines.map(l => [l.id, l.color]), [[0, stepLineColor(many[0])], [1, '#8c93a3'], [2, stepLineColor(many[2])]]);
+    assert.equal(tooMany.usesLineColor, false); assert.equal(tooMany.usesCongestion, true);
+    // 선 하나의 점 개수 초과(같은 색 1200역): 나누지 않고 줄여서 그려요.
+    const longSame = map269([split269(Array(1200).fill('NORMAL'))]);
+    assert.deepEqual(longSame.lines.map(l => [l.id, l.points.length]), [[0, MAP_LIMITS.linePoints]]); assert.ok(isValidMapLines(longSame.lines));
+    // 전체 점 개수 초과: 6개 구간 × 999역.
+    const total = map269(Array.from({ length: 6 }, (_, i) => split269(Array(999).fill('NORMAL'), { offset: i * 1000 })));
+    assert.deepEqual(total.lines.map(l => l.id), [0, 1, 2, 3, 4, 5]); assert.ok(isValidMapLines(total.lines));
+    assert.ok(total.lines.reduce((sum, l) => sum + l.points.length, 0) <= MAP_LIMITS.totalPoints);
+});
+
+test('269 나눈 구간과 나누지 않은 구간이 섞여도 선 id 는 모두 다른 safe integer 이고 도보·마커·범위는 그대로예요', () => {
+    const { isValidMapLines } = createRuntime().load('src/components/map/map-html.ts');
+    const steps = [
+        step129('WALKING', { path: [[126.99, 37.49], [127, 37.5]] }),
+        split269(['NORMAL', 'CROWDED', null, 'CROWDED']),
+        step129('WALKING', { path: [[127.003, 37.503], [127.01, 37.51]] }),
+        step129('SUBWAY', { line: { id: 4, name: '4호선', color: '#00a5de' }, path: path269(3, 10), stops: stops269(2), stations: [station129(100, congestion129('VERY_CROWDED'))] }),
+        split269(['RELAXED', 'VERY_CROWDED', 'VERY_CROWDED'], { offset: 12, line: { id: 7, name: '7호선', color: '#747f00' } }),
+    ];
+    const map = map269(steps);
+    const ids = map.lines.map(l => l.id);
+    assert.deepEqual(ids, [0, 2000, 2001, 2002, 2, 3, 5000, 5001]);
+    assert.ok(ids.every(Number.isSafeInteger)); assert.equal(new Set(ids).size, ids.length); assert.ok(isValidMapLines(map.lines));
+    assert.deepEqual(map.lines.map(l => l.dashed ?? false), [true, false, false, false, true, false, false, false]);
+    assert.deepEqual(map.lines.map(l => l.color), ['#8c93a3', CONGESTION_COLOR129.NORMAL, CONGESTION_COLOR129.CROWDED, '#00a84d', '#8c93a3',
+        CONGESTION_COLOR129.VERY_CROWDED, CONGESTION_COLOR129.RELAXED, CONGESTION_COLOR129.VERY_CROWDED]);
+    assert.deepEqual(map.markers.map(m => [m.kind, m.latitude, m.longitude]), [
+        ['origin', 37.5, 127], ['transfer', 37.51, 127.01], ['transfer', 37.512, 127.012], ['destination', 37.514, 127.014]]);
+    assert.deepEqual(map.routeLines.map(l => l.id), [2, 4, 7]);
+    assert.deepEqual(map.bounds, { minLng: 126.99, minLat: 37.49, maxLng: 127.014, maxLat: 37.514 });
+});
