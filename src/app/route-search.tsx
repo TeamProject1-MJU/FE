@@ -391,6 +391,7 @@ export default function RouteSearchScreen() {
                             showDates={!params.roomId}
                             expanded={expandedIds.has(route.routeId)}
                             badgeLabels={routeBadges(route, sortedRoutes)}
+                            highlightDeparture={search.timeBasis === 'arrival' || search.timeBasis === 'appointment'}
                             onPress={() => setExpandedIds(current => {
                                 const next = new Set(current);
                                 if (next.has(route.routeId)) next.delete(route.routeId);
