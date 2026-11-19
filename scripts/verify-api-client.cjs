@@ -9602,7 +9602,7 @@ test('152 결과·안내는 검색한 조건과 자정 다음 날의 서버 날�
     const guideNotice = findElement(guideView, element => element.type === guide.load('src/components/route/RouteTimeNotice.tsx').default);
     assert.equal(guideNotice.props.selection.at, ARRIVE152);
     const timeline = findElement(guideView, element => element.type === guide.Timeline); assert.equal(Object.hasOwn(timeline.props, 'showDates'), false);
-    assert.equal(timeline.props.renderNextTrains, undefined, '시각 지정 경로에 현재의 실시간 도착정보를 섞지 않아요');
+    assert.equal(timeline.props.nextTrains, false, '시각 지정 경로에 현재의 실시간 도착정보를 섞지 않아요');
     assert.ok(findText(guide.renderComponent(timeline), `${relative(selected.route.summary.arrivalAt)} 도착 예정`));
     assert.equal(r.load('src/utils/route-time.ts').formatArrivalSlack(0), '지정한 도착 시각에 도착해요.'); r.unmount(); guide.unmount();
 });
@@ -10118,12 +10118,11 @@ async function liveTrains172(selected, mock = false) {
     return { shown: !!next, calls: calls.length, arrivalsFetches: fetched.filter(url => url.includes('/arrivals')).length, polling, notice };
 }
 
-test('283 환승역을 한 줄로 표시해도 각 승차 구간의 하차역으로 조회해요', async () => {
+test('283 환승 경로에서도 첫 승차 구간의 다음 열차만 하차역 조건으로 조회해요', async () => {
     const data = routeData();
     data.routeSource = 'INTERNAL';
     const route = data.routes[0];
     const [walk, first] = route.steps;
-    first.trainAlightStationId = 99002;
     const second = {
         ...first,
         line: { id: 5, name: '5호선', color: '#996cac' },
@@ -10133,27 +10132,32 @@ test('283 환승역을 한 줄로 표시해도 각 승차 구간의 하차역으
         stations: [],
     };
     route.steps.push(walk, second);
-    const parsed = createRuntime(serverEnv).load('src/services/route.ts').__parseRouteSearch(data).routes[0];
-    const guide = route147Guide({ route: parsed, timeBasis: 'now' });
-    guide.external['expo-router'].useFocusEffect = callback => guide.external.react.useEffect(callback, [callback]);
-    const requested = [];
-    guide.context.fetch = async url => { requested.push(url); return ok(arrivalsData()); };
-    const timeline = findElement(guide.render(), element => element.type === guide.Timeline);
-    const NextTrains = guide.load('src/components/route/NextTrains.tsx').default;
-    const rows = findAll125(guide.renderComponent(timeline), element => element.type === NextTrains);
-    assert.equal(rows.length, 2);
-    for (const row of rows) {
-        guide.renderComponent(row);
+    const parse = createRuntime(serverEnv).load('src/services/route.ts').__parseRouteSearch;
+    for (const trainAlightStationId of [99005, null]) {
+        first.trainAlightStationId = trainAlightStationId;
+        const parsed = parse(data).routes[0];
+        const guide = route147Guide({
+            route: parsed, routeSource: 'INTERNAL', timeBasis: 'now',
+            origin: { id: 88001, name: '서버 출발', lines: [2], isSupported: true },
+            destination: { id: 99004, name: '목적지', lines: [5], isSupported: true },
+        });
+        guide.external['expo-router'].useFocusEffect = callback => guide.external.react.useEffect(callback, [callback]);
+        const requested = [];
+        guide.context.fetch = async url => { requested.push(url); return ok(arrivalsData()); };
+        const timeline = findElement(guide.render(), element => element.type === guide.Timeline);
+        const NextTrains = guide.load('src/components/route/NextTrains.tsx').default;
+        const rows = findAll125(guide.renderComponent(timeline), element => element.type === NextTrains);
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].props.step, parsed.steps[1]);
+        guide.renderComponent(rows[0]);
         await settle();
+        assert.equal(requested.length, 1);
+        const { pathname, searchParams } = new URL(requested[0]);
+        assert.equal(pathname, '/api/v1/stations/88001/arrivals');
+        assert.equal(searchParams.get('alightStationId'), '99002');
+        assert.equal(searchParams.get('trainAlightStationId'), trainAlightStationId === null ? null : String(trainAlightStationId));
+        guide.unmount();
     }
-    assert.deepEqual(requested.map(url => {
-        const { pathname, searchParams } = new URL(url);
-        return [pathname, searchParams.get('alightStationId'), searchParams.get('trainAlightStationId')];
-    }), [
-        ['/api/v1/stations/88001/arrivals', '99002', '99002'],
-        ['/api/v1/stations/99002/arrivals', '99004', '99003'],
-    ]);
-    guide.unmount();
 });
 
 /** 서버 모드 약속방 경로 검색. cache: 방 캐시에 미리 넣을지, detail: 캐시에 없을 때 7.4 방 상세 응답이에요. */
