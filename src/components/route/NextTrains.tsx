@@ -22,7 +22,7 @@ function trainLabel(text: string, countdown: boolean) {
 const ARRIVALS_POLL_MS = 20000;
 
 /**
- * 첫 승차 구간만 독립적으로 갱신하여 경로와 전체 목록의 재렌더링을 줄입니다.
+ * 승차 구간마다 도착 정보를 독립적으로 갱신합니다.
  * available:false·열차 없음·호출 실패면 줄을 숨기고, 인증 오류는 A-1 공통 처리에 맡겨 이전 값을 그대로 둬요.
  * 남은 시간은 응답을 받은 순간의 앱 시각(baseMs)부터 지난 초만 빼요(#173, format.ts arrivalsCountdownBase).
  * 기준 시각은 새 응답을 받았을 때만 응답과 함께 바꿔요. 인증 오류로 이전 값을 유지할 때는 이전 기준 시각도 그대로 둬서
@@ -34,6 +34,8 @@ export default function NextTrains({ step, mock }: { step: RouteStep; mock?: Arr
     const [now, setNow] = useState(Date.now());
     const stationId = step.stops[0]?.id;
     const nextStationId = step.stops[1]?.id;
+    const alightStationId = step.stops[step.stops.length - 1]?.id;
+    const trainAlightStationId = step.trainAlightStationId ?? undefined;
     const lineId = step.line?.id;
     const directionCode = step.directionCode ?? undefined;
 
@@ -51,7 +53,9 @@ export default function NextTrains({ step, mock }: { step: RouteStep; mock?: Arr
             if (pending) return;
             pending = true;
             try {
-                const response = await fetchArrivals({ stationId, lineId, nextStationId, directionCode, limit: 2 }, mock);
+                const response = await fetchArrivals({
+                    stationId, lineId, nextStationId, alightStationId, trainAlightStationId, directionCode, limit: 2,
+                }, mock);
                 if (active) {
                     const baseMs = arrivalsCountdownBase();
                     setFetched({ data: response, baseMs });
@@ -73,7 +77,7 @@ export default function NextTrains({ step, mock }: { step: RouteStep; mock?: Arr
             clearInterval(polling);
             clearInterval(ticking);
         };
-    }, [stationId, lineId, nextStationId, directionCode, mock]));
+    }, [stationId, lineId, nextStationId, alightStationId, trainAlightStationId, directionCode, mock]));
 
     const data = fetched?.data;
     // receivedAt 은 계산에 쓰지 않아 검사하지 않아요. available:true 응답의 receivedAt 형식은 파서가 이미 확인해요.

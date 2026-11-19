@@ -1,6 +1,7 @@
 /**
  * 실시간 도착정보 서비스 (#95, API 명세 6.3 GET /stations/{stationId}/arrivals)
  *
+ * - alightStationId·trainAlightStationId 로 하차역까지 가는 열차를 조회해요.
  * - 서버 모드: GET /stations/{stationId}/arrivals 를 부르고 응답을 unknown 으로 받아 검사해요. mock 인자는 무시해요.
  * - mock 모드: 아래 fetchMockArrivals 로 서버 응답을 흉내 내요. 'none'·'fail' 인자도 그대로 써요.
  * - available:false 는 오류가 아닌 정상 응답이에요. trains 는 빈 배열로 돌려주고, 화면은 "다음 열차" 줄만 숨겨요.
@@ -45,6 +46,8 @@ const invalid = (message: string) => new ApiError('VALIDATION_ERROR', message, n
 function validateQuery(query: ArrivalsQuery) {
     if (!isId(query.stationId) || !isId(query.lineId)) throw invalid('역 또는 노선 정보를 확인해 주세요.');
     if (query.nextStationId !== undefined && !isId(query.nextStationId)) throw invalid('다음 역 정보를 확인해 주세요.');
+    if (query.alightStationId != null && !isId(query.alightStationId)) throw invalid('하차역 정보를 확인해 주세요.');
+    if (query.trainAlightStationId != null && !isId(query.trainAlightStationId)) throw invalid('열차 하차역 정보를 확인해 주세요.');
     if (query.directionCode !== undefined && !isOneOf(DIRECTIONS, query.directionCode)) throw invalid('방향 값을 확인해 주세요.');
 }
 
@@ -129,18 +132,20 @@ export type ArrivalsMock = 'none' | 'fail';
 
 /**
  * 명세 6.3 GET /stations/{stationId}/arrivals
- * lineId 는 항상 보내고, nextStationId·directionCode·limit 은 값이 있을 때만 보내요(limit 은 1~5).
+ * lineId 는 항상 보내고, nextStationId·alightStationId·trainAlightStationId·directionCode·limit 은 값이 있을 때만 보내요(limit 은 1~5).
  * 오류는 서버 code 를 그대로 전달해요. 401 계열은 공통 클라이언트(A-1)가 처리한 뒤 던져요.
  */
 export async function fetchArrivals(query: ArrivalsQuery, mock?: ArrivalsMock): Promise<ArrivalsResponse> {
     if (isMockMode()) return fetchMockArrivals(query, mock);
 
     validateQuery(query);
-    const { stationId, lineId, nextStationId, directionCode, limit } = query;
+    const { stationId, lineId, nextStationId, alightStationId, trainAlightStationId, directionCode, limit } = query;
     return parseArrivals(await get<unknown>(`/stations/${stationId}/arrivals`, {
         query: {
             lineId,
             ...(nextStationId !== undefined ? { nextStationId } : {}),
+            ...(alightStationId != null ? { alightStationId } : {}),
+            ...(trainAlightStationId != null ? { trainAlightStationId } : {}),
             ...(directionCode !== undefined ? { directionCode } : {}),
             ...(limit !== undefined ? { limit: clampLimit(limit) } : {}),
         },

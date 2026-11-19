@@ -2871,6 +2871,11 @@ test('도착정보 서버 요청: 경로·lineId 항상·선택 값은 있을 �
     const base = 'https://example.test/api/v1/stations/222/arrivals';
     for (const [query, expected] of [
         [arrivalsQuery, `${base}?lineId=2&nextStationId=223&directionCode=INNER&limit=2`],
+        [{ ...arrivalsQuery, alightStationId: 224, trainAlightStationId: 225 }, `${base}?lineId=2&nextStationId=223&alightStationId=224&trainAlightStationId=225&directionCode=INNER&limit=2`],
+        ...[null, undefined].map(trainAlightStationId => [
+            { ...arrivalsQuery, alightStationId: 224, trainAlightStationId },
+            `${base}?lineId=2&nextStationId=223&alightStationId=224&directionCode=INNER&limit=2`,
+        ]),
         [{ stationId: 222, lineId: 2 }, `${base}?lineId=2`],
         [{ stationId: 222, lineId: 2, nextStationId: undefined, directionCode: undefined, limit: undefined }, `${base}?lineId=2`],
         [{ stationId: 222, lineId: 2, directionCode: 'UP' }, `${base}?lineId=2&directionCode=UP`],
@@ -2884,7 +2889,7 @@ test('도착정보 서버 요청: 경로·lineId 항상·선택 값은 있을 �
         assert.equal(calls.at(-1).url, expected);
         assert.equal(calls.at(-1).options.method, 'GET');
     }
-    assert.equal(calls.length, 9);
+    assert.equal(calls.length, 12);
     assert.equal(r.timers.size, 0);
 });
 
@@ -2898,6 +2903,8 @@ test('도착정보 잘못된 ID·방향은 /stations/NaN 같은 요청 없이 VA
         { stationId: 0, lineId: 2 }, { stationId: 1.5, lineId: 2 }, { stationId: 222, lineId: NaN },
         { stationId: 222, lineId: null }, { stationId: 222, lineId: 2, nextStationId: NaN },
         { stationId: 222, lineId: 2, directionCode: 'NORTH' },
+        ...['alightStationId', 'trainAlightStationId'].flatMap(field =>
+            [0, -1, 1.5, NaN, '', '224'].map(value => ({ ...arrivalsQuery, [field]: value }))),
     ]) {
         await assert.rejects(fetchArrivals(query), { code: 'VALIDATION_ERROR', status: 400 });
     }
@@ -3090,6 +3097,7 @@ function nextTrainsRuntime(env = serverEnv, baseMs = ARRIVALS_BASE_MS) {
     r.context.fetch = async (url, options) => { calls.push(url); return responder(url, options); };
     const step = {
         type: 'SUBWAY', line: { id: 2, name: '2호선', color: '#00a84d' }, directionCode: 'INNER', direction: null,
+        trainAlightStationId: 225,
         stops: [{ id: 222, name: '강남', order: 0 }, { id: 223, name: '역삼', order: 1 }, { id: 224, name: '선릉', order: 2 }],
     };
     const element = (props = {}) => ({ type: r.screen.default, props: { step, ...props } });
@@ -3119,7 +3127,7 @@ test('NextTrains: 첫 승차 구간 조건으로 부르고 카운트다운 중 1
     r.respond(async () => ok(arrivalsData({ receivedAt: r.receivedNow(), trains: [arrivalTrain({ secondsUntil: 61 }), arrivalTrain({ secondsUntil: 300 })] })));
     assert.equal(r.text(), '다음 열차 확인 중');
     await flush();
-    assert.deepEqual(r.calls, ['https://example.test/api/v1/stations/222/arrivals?lineId=2&nextStationId=223&directionCode=INNER&limit=2']);
+    assert.deepEqual(r.calls, ['https://example.test/api/v1/stations/222/arrivals?lineId=2&nextStationId=223&alightStationId=224&trainAlightStationId=225&directionCode=INNER&limit=2']);
     assert.equal(r.text(), '다음 열차 성수행 1분 1초, 성수행 5분 0초');
     r.advance(1000); assert.equal(r.text(), '다음 열차 성수행 1분 0초, 성수행 4분 59초');
     r.advance(1000); assert.equal(r.text(), '다음 열차 성수행 곧 도착, 성수행 4분 58초');
@@ -3143,7 +3151,7 @@ test('NextTrains: 첫 승차 구간 조건으로 부르고 카운트다운 중 1
 });
 
 test('NextTrains: available:false(receivedAt null)·receivedAt 없음·빈 열차·UNKNOWN_ERROR·서버 오류·네트워크 실패면 줄만 숨겨요', async () => {
-    for (const outcome of ['unavailable', 'noReceivedAt', 'empty', 'malformed', 'server', 'network']) {
+    for (const outcome of ['unavailable', 'noReceivedAt', 'empty', 'malformed', 'validation', 'server', 'network']) {
         const r = nextTrainsRuntime();
         r.respond(async () => ok(arrivalsData({ receivedAt: r.receivedNow() })));
         r.text(); await flush();
@@ -3154,11 +3162,13 @@ test('NextTrains: available:false(receivedAt null)·receivedAt 없음·빈 열�
             if (outcome === 'noReceivedAt') return ok(arrivalsData({ receivedAt: null }));
             if (outcome === 'empty') return ok(arrivalsData({ receivedAt: r.receivedNow(), trains: [] }));
             if (outcome === 'malformed') return ok(arrivalsData({ trains: [{ secondsUntil: '1' }] }));
+            if (outcome === 'validation') return jsonResponse({ success: false, error: { code: 'VALIDATION_ERROR' } }, 400);
             if (outcome === 'server') return jsonResponse({ success: false, error: { code: 'INTERNAL_ERROR' } }, 500);
             throw new TypeError('연결 실패');
         });
         r.advance(20000); await flush();
         assert.equal(r.text(), null, outcome);
+        assert.equal(r.calls.length, 2, outcome);
         r.unmount();
     }
 });
@@ -9592,7 +9602,7 @@ test('152 결과·안내는 검색한 조건과 자정 다음 날의 서버 날�
     const guideNotice = findElement(guideView, element => element.type === guide.load('src/components/route/RouteTimeNotice.tsx').default);
     assert.equal(guideNotice.props.selection.at, ARRIVE152);
     const timeline = findElement(guideView, element => element.type === guide.Timeline); assert.equal(Object.hasOwn(timeline.props, 'showDates'), false);
-    assert.equal(timeline.props.nextTrains, false, '시각 지정 경로에 현재의 실시간 도착정보를 섞지 않아요');
+    assert.equal(timeline.props.renderNextTrains, undefined, '시각 지정 경로에 현재의 실시간 도착정보를 섞지 않아요');
     assert.ok(findText(guide.renderComponent(timeline), `${relative(selected.route.summary.arrivalAt)} 도착 예정`));
     assert.equal(r.load('src/utils/route-time.ts').formatArrivalSlack(0), '지정한 도착 시각에 도착해요.'); r.unmount(); guide.unmount();
 });
@@ -10096,8 +10106,8 @@ async function liveTrains172(selected, mock = false) {
     const view = g.render();
     const timeline = findElement(view, element => element.type === g.Timeline);
     assert.ok(timeline, '경로 목록은 그대로 보여요');
-    g.renderComponent(timeline);
-    const next = timeline.props.nextTrains;
+    const NextTrains = g.load('src/components/route/NextTrains.tsx').default;
+    const next = findElement(g.renderComponent(timeline), element => element.type === NextTrains);
     if (next && typeof next === 'object') { g.renderComponent(next); await settle(); }
     g.advance(60000); await settle();
     if (next && typeof next === 'object') { g.renderComponent(next); await settle(); }
@@ -10107,6 +10117,44 @@ async function liveTrains172(selected, mock = false) {
     g.unmount();
     return { shown: !!next, calls: calls.length, arrivalsFetches: fetched.filter(url => url.includes('/arrivals')).length, polling, notice };
 }
+
+test('283 환승역을 한 줄로 표시해도 각 승차 구간의 하차역으로 조회해요', async () => {
+    const data = routeData();
+    data.routeSource = 'INTERNAL';
+    const route = data.routes[0];
+    const [walk, first] = route.steps;
+    first.trainAlightStationId = 99002;
+    const second = {
+        ...first,
+        line: { id: 5, name: '5호선', color: '#996cac' },
+        directionCode: 'DOWN',
+        stops: [first.stops.at(-1), { id: 99003, name: '중간역', order: 1 }, { id: 99004, name: '목적지', order: 2 }],
+        trainAlightStationId: 99003,
+        stations: [],
+    };
+    route.steps.push(walk, second);
+    const parsed = createRuntime(serverEnv).load('src/services/route.ts').__parseRouteSearch(data).routes[0];
+    const guide = route147Guide({ route: parsed, timeBasis: 'now' });
+    guide.external['expo-router'].useFocusEffect = callback => guide.external.react.useEffect(callback, [callback]);
+    const requested = [];
+    guide.context.fetch = async url => { requested.push(url); return ok(arrivalsData()); };
+    const timeline = findElement(guide.render(), element => element.type === guide.Timeline);
+    const NextTrains = guide.load('src/components/route/NextTrains.tsx').default;
+    const rows = findAll125(guide.renderComponent(timeline), element => element.type === NextTrains);
+    assert.equal(rows.length, 2);
+    for (const row of rows) {
+        guide.renderComponent(row);
+        await settle();
+    }
+    assert.deepEqual(requested.map(url => {
+        const { pathname, searchParams } = new URL(url);
+        return [pathname, searchParams.get('alightStationId'), searchParams.get('trainAlightStationId')];
+    }), [
+        ['/api/v1/stations/88001/arrivals', '99002', '99002'],
+        ['/api/v1/stations/99002/arrivals', '99004', '99003'],
+    ]);
+    guide.unmount();
+});
 
 /** 서버 모드 약속방 경로 검색. cache: 방 캐시에 미리 넣을지, detail: 캐시에 없을 때 7.4 방 상세 응답이에요. */
 async function roomSearch172({ appointmentAt = APPOINTMENT172, passed = false, cache = true, detail = 'ok' } = {}) {
