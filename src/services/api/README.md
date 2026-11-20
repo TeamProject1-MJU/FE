@@ -167,7 +167,8 @@ if (data.available) {
 ```
 
 - `lineId`는 항상 보내고 `nextStationId`·`directionCode`·`limit`은 값이 있을 때만 보내요. `limit`은 1~5로 맞춰요(BE 기본 3·최대 10). 역·노선·다음 역 ID가 양의 정수가 아니거나 방향 값이 다르면 서버를 부르지 않고 `VALIDATION_ERROR`(400)를 던져요(`/stations/NaN/arrivals` 방지).
-- `NextTrains`는 첫 승차 구간의 `stops[0].id`(역), `line.id`(노선), `stops[1].id`(`nextStationId`), `directionCode`, `limit: 2`로 불러요.
+- `NextTrains`는 첫 승차 구간의 `stops[0].id`(역), `line.id`(노선), `stops[1].id`(`nextStationId`), `alightStationId`(승차 구간의 마지막 정류장 ID), `trainAlightStationId`(경로 응답의 해당 `step` 값), `directionCode`, `limit: 2`로 불러요.
+- `alightStationId`와 `trainAlightStationId`는 각각 값이 없으면 해당 쿼리 파라미터를 생략해요.
 - 응답은 BE `ArrivalResponse` 기준이에요. 서버는 `stationId`·`lineId`·`nextStationName`을 보내지 않아서 필수로 검사하지 않아요(숫자로 올 때만 담아요). `available`은 boolean이어야 해요.
 - `available: false`는 오류가 아닌 정상 응답이에요. BE는 이때도 `reason`(`UNSUPPORTED_STATION`·`NO_DATA`·`UPSTREAM_ERROR`·`DISABLED`)·`receivedAt`(null 가능)·`trains`(`[]`)를 항상 보내요. 앱은 `reason`만 확인하고 `trains`는 빈 배열로 돌려줘요. 화면은 "다음 열차" 줄만 숨겨요.
 - `available: true`이면 `reason`은 null이라 검사하지 않아요. `receivedAt`(`+09:00` 오프셋이 붙은 ISO 문자열, 시각으로 읽혀야 해요)과 `trains` 배열(빈 배열 허용)을 검사해요. 열차마다 아래를 검사하고, 맞지 않으면 `UNKNOWN_ERROR`예요.
