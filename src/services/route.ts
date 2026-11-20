@@ -130,7 +130,13 @@ function parseStep(value: unknown): RouteStep {
         throw new ApiError('UNKNOWN_ERROR');
     }
     validateWait(value, false);
-    return { ...value, stations: (value.stations ?? []).map(parseStationCongestion) } as RouteStep;
+    const { trainAlightStationId, ...step } = value;
+    return {
+        ...step,
+        ...(trainAlightStationId === null || (value.type === 'SUBWAY' && isNumber(trainAlightStationId)
+            && Number.isSafeInteger(trainAlightStationId) && trainAlightStationId > 0) ? { trainAlightStationId } : {}),
+        stations: (value.stations ?? []).map(parseStationCongestion),
+    } as RouteStep;
 }
 
 /** station.ts와 같이 unknown 응답을 검사한 뒤 화면 타입으로 넘겨요. 도착 시각 등 서버 값은 계산하지 않아요. */

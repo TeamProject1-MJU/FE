@@ -4,6 +4,8 @@ export type ArrivalsQuery = {
     stationId: number;
     lineId: number;
     nextStationId?: number;
+    alightStationId?: number;
+    trainAlightStationId?: number;
     directionCode?: DirectionCode;
     limit?: number;
 };

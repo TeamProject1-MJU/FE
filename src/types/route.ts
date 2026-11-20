@@ -72,6 +72,7 @@ export type RouteStep = {
     direction: string | null;
     directionCode: 'UP' | 'DOWN' | 'INNER' | 'OUTER' | 'LOOP' | null;
     stops: RouteStop[];
+    trainAlightStationId?: number | null;
     path: [number, number][] | null;
     stations?: RouteStationCongestion[];
 };
