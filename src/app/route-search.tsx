@@ -187,6 +187,8 @@ export default function RouteSearchScreen() {
             ]);
             if (id !== requestId.current) return;
             const timeBasis = roomId ? roomRouteTimeBasis(appointmentAt, data.appointmentPassed) : personalRouteTimeBasis(usedTime);
+            // 새 검색 결과는 모두 접힌 상태로 시작해요.
+            setExpandedIds(new Set());
             setSearch({ status: 'success', data, searchTime: usedTime, timeBasis });
         } catch (error) {
             if (id !== requestId.current) return;
@@ -207,15 +209,11 @@ export default function RouteSearchScreen() {
         return () => { requestId.current++; };
     }, [departure, destination, runSearch]);
 
-    const sortedRoutes = useMemo(
-        () => (search.status === 'success' ? sortRoutes(search.data.routes) : []),
-        [search],
-    );
-
-    // 새 검색 결과는 모두 접힌 상태로 시작해요.
-    useEffect(() => {
-        setExpandedIds(new Set());
-    }, [sortedRoutes]);
+    const displayRoutes = useMemo(() => {
+        if (search.status !== 'success') return [];
+        const { timeBasis, data: { routes } } = search;
+        return timeBasis === 'now' || timeBasis === 'departure' ? routes : sortRoutes(routes);
+    }, [search]);
 
     const goBack = () => {
         if (router.canGoBack()) {
@@ -324,7 +322,7 @@ export default function RouteSearchScreen() {
                         }} />
                 )}
                 {search.status === 'success' && search.searchTime && (
-                    <RouteTimeNotice selection={search.searchTime} routes={sameStation ? [] : search.data.routes} mock={isMockMode()} resultCount={!sameStation && sortedRoutes.length > 0 ? sortedRoutes.length : undefined} />
+                    <RouteTimeNotice selection={search.searchTime} routes={sameStation ? [] : search.data.routes} mock={isMockMode()} resultCount={!sameStation && displayRoutes.length > 0 ? displayRoutes.length : undefined} />
                 )}
 
                 {search.status === 'success' && search.data.appointmentPassed && !!search.data.notice && (
@@ -334,8 +332,8 @@ export default function RouteSearchScreen() {
                     </View>
                 )}
 
-                {search.status === 'success' && !search.searchTime && !sameStation && sortedRoutes.length > 0 && (
-                    <Text style={styles.resultCount}>경로 {sortedRoutes.length}개</Text>
+                {search.status === 'success' && !search.searchTime && !sameStation && displayRoutes.length > 0 && (
+                    <Text style={styles.resultCount}>경로 {displayRoutes.length}개</Text>
                 )}
 
 
@@ -374,7 +372,7 @@ export default function RouteSearchScreen() {
                     />
                 )}
 
-                {search.status === 'success' && !sameStation && sortedRoutes.length === 0 && (
+                {search.status === 'success' && !sameStation && displayRoutes.length === 0 && (
                     <Message
                         icon={<Ionicons name="git-commit-outline" size={30} color={LV_MAIN} />}
                         iconBackground={LV_SOFT}
@@ -384,13 +382,13 @@ export default function RouteSearchScreen() {
                 )}
 
                 {search.status === 'success' && !sameStation &&
-                    sortedRoutes.map(route => (
+                    displayRoutes.map(route => (
                         <RouteCard
                             key={route.routeId}
                             route={route}
                             showDates={!params.roomId}
                             expanded={expandedIds.has(route.routeId)}
-                            badgeLabels={routeBadges(route, sortedRoutes)}
+                            badgeLabels={routeBadges(route, search.data.routes)}
                             highlightDeparture={search.timeBasis === 'arrival' || search.timeBasis === 'appointment'}
                             onPress={() => setExpandedIds(current => {
                                 const next = new Set(current);

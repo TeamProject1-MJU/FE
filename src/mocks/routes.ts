@@ -191,13 +191,13 @@ const reverse = (names: string[]) => [...names].reverse();
 
 /** 건대입구 → 사당 */
 const GEONDAE_TO_SADANG: Route[] = [
+    route('r2', 'FEWER_TRANSFERS', 29, 1750, [
+        subway(2, '잠실 방면', LINE2_GEONDAE_TO_SADANG, 29, 17400, ['RELAXED', 'NORMAL']),
+    ]),
     route('r1', 'FASTEST', 23, 1650, [
         subway(7, '석남 방면', LINE7_GEONDAE_TO_ISU, 18, 11700, ['NORMAL', 'NORMAL', 'NORMAL', 'RELAXED']),
         walk('이수역 4호선 승강장으로 환승', 3, 210),
         subway(4, '오이도 방면', ['이수', '사당'], 2, 1000, ['CROWDED']),
-    ]),
-    route('r2', 'FEWER_TRANSFERS', 29, 1750, [
-        subway(2, '잠실 방면', LINE2_GEONDAE_TO_SADANG, 29, 17400, ['RELAXED', 'NORMAL']),
     ]),
     // 실제 분류(routeType)는 서버 응답 확인 후 맞춥니다.
     route('r3', null, 27, 1650, [

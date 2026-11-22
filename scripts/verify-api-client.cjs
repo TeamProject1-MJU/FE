@@ -10235,7 +10235,7 @@ test('283 환승 경로에서도 첫 승차 구간의 다음 열차만 하차역
 });
 
 /** 서버 모드 약속방 경로 검색. cache: 방 캐시에 미리 넣을지, detail: 캐시에 없을 때 7.4 방 상세 응답이에요. */
-async function roomSearch172({ appointmentAt = APPOINTMENT172, passed = false, cache = true, detail = 'ok' } = {}) {
+async function roomSearch172({ appointmentAt = APPOINTMENT172, passed = false, cache = true, detail = 'ok', routeResponse = routeData } = {}) {
     const room = { ...roomQueryDetail(), appointmentAt };
     const r = routeScreenRuntime({ departure: '강남', destination: '사당', roomId: room.id });
     r.load('src/stores/auth-store.ts').signIn({ userId: ROOM_QUERY_ME, nickname: '서버 나' });
@@ -10246,7 +10246,7 @@ async function roomSearch172({ appointmentAt = APPOINTMENT172, passed = false, c
         r.calls172.push(url);
         if (url.endsWith('/routes/search')) {
             const body = JSON.parse(options.body); assert.equal(body.roomId, room.id); assert.equal('departAt' in body || 'arriveAt' in body, false);
-            const data = routeData(); data.appointmentPassed = passed; data.notice = passed ? PASSED_NOTICE172 : null; return ok(data);
+            const data = routeResponse(); data.appointmentPassed = passed; data.notice = passed ? PASSED_NOTICE172 : null; return ok(data);
         }
         if (url.endsWith(`/rooms/${room.id}`)) {
             if (detail === 'network') throw new TypeError('Network request failed');
@@ -10256,14 +10256,15 @@ async function roomSearch172({ appointmentAt = APPOINTMENT172, passed = false, c
         return ok(stationSearchData([url.includes(encodeURIComponent('강남')) ? serverRouteStation(88001, '강남') : serverRouteStation(99002, '사당')]));
     };
     for (let i = 0; i < 6; i++) { r.render(); await settle(); }
-    const card = findElement(r.render(), element => element.type === r.load('src/components/route/RouteCard.tsx').default);
+    const cards = findElements(r.render(), element => element.type === r.load('src/components/route/RouteCard.tsx').default);
+    const [card] = cards;
     assert.ok(card, '약속방 경로 결과가 보여요');
     const before = plain(card.props.route);
     card.props.onStart();
     const selected = r.load('src/stores/route-store.ts').getSelectedRoute();
     assert.deepEqual(plain(selected.route), before, '서버가 계산한 경로·시각을 그대로 넘겨요');
     r.unmount();
-    return { r, selected, roomRequests: r.calls172.filter(url => url.endsWith(`/rooms/${room.id}`)).length };
+    return { r, selected, cards, roomRequests: r.calls172.filter(url => url.endsWith(`/rooms/${room.id}`)).length };
 }
 
 test('172 시간 기준 정의: 개인은 검색 조건, 약속방은 약속 시각·appointmentPassed 로 정하고 now 일 때만 실시간을 보여요', () => {
@@ -11087,6 +11088,68 @@ function findElements(node, predicate) {
     if (Array.isArray(node)) return node.flatMap(item => findElements(item, predicate));
     return [...(predicate(node) ? [node] : []), ...findElements(node.props?.children, predicate)];
 }
+
+function routeData286() {
+    const data = data152();
+    const [route] = data.routes;
+    data.routes = [
+        { ...route, routeId: 'r1', summary: { ...route.summary, totalTimeSec: 3900, totalWithWaitSec: 4002, transferCount: 0, walkingMinutes: 1 } },
+        { ...route, routeId: 'r2', summary: { ...route.summary, totalTimeSec: 3990, transferCount: 2, walkingMinutes: 3 } },
+    ];
+    return data;
+}
+
+test('286 지금 출발과 출발 시각 지정은 응답 순서대로, 도착 시각 지정은 기존 정렬로 표시해요', async () => {
+    const r = await screen152(() => ok(routeData286()));
+    const Card = r.load('src/components/route/RouteCard.tsx').default;
+    const cards = () => findElements(r.render(), node => node.type === Card).map(node => node.props);
+    for (const [selection, expected] of [
+        [null, ['r1', 'r2']],
+        [{ mode: 'departure', at: DEPART152 }, ['r1', 'r2']],
+        [{ mode: 'arrival', at: ARRIVE152 }, ['r2', 'r1']],
+    ]) {
+        if (selection) {
+            r.selector152().props.onChange(selection);
+            await pump152(r);
+        }
+        const results = cards();
+        assert.deepEqual(results.map(card => card.route.routeId), expected);
+        assert.ok(results.every(card => !card.expanded));
+        const badges = Object.fromEntries(results.map(card => [card.route.routeId, plain(card.badgeLabels)]));
+        assert.deepEqual(badges, { r1: ['최소환승', '최소도보'], r2: ['최소시간'] });
+        results[0].onPress();
+        assert.equal(cards()[0].expanded, true);
+    }
+    r.unmount();
+});
+
+test('286 약속 기준과 시간 기준 미확인 결과는 기존 정렬을 쓰고 지금 출발 결과는 응답 순서를 써요', async () => {
+    for (const [options, expected] of [
+        [{}, ['r2', 'r1']],
+        [{ cache: false, detail: 'fail' }, ['r2', 'r1']],
+        [{ appointmentAt: null }, ['r1', 'r2']],
+        [{ passed: true }, ['r1', 'r2']],
+    ]) {
+        const { cards } = await roomSearch172({ ...options, routeResponse: routeData286 });
+        assert.deepEqual(cards.map(card => card.props.route.routeId), expected);
+    }
+});
+
+test('286 건대입구에서 사당으로 출발 시각을 지정한 mock은 더 오래 걸리는 직행을 먼저 표시해요', async () => {
+    const r = clock152(routeScreenRuntime({ departure: '건대입구', destination: '사당' }, true));
+    await pump152(r);
+    const Selector = r.load('src/components/route/RouteTimeSelector.tsx').default;
+    findElement(r.render(), node => node.type === Selector).props.onChange({ mode: 'departure', at: DEPART152 });
+    await pump152(r);
+    r.advance(800);
+    await settle();
+    const Card = r.load('src/components/route/RouteCard.tsx').default;
+    const cards = findElements(r.render(), node => node.type === Card);
+    assert.deepEqual(cards.map(card => card.props.route.routeId), ['r2', 'r1', 'r3']);
+    assert.equal(cards[0].props.route.summary.transferCount, 0);
+    assert.deepEqual(plain(cards[2].props.badgeLabels), ['최소시간']);
+    r.unmount();
+});
 
 test('244 시각 휠 자리 올림: 분·시를 넘기면 시·오전/오후·날짜가 이어서 바뀌고 날짜 목록 끝에서 멈춰요', () => {
     const { shiftWheelValue: shift, dayLabel, toTwelveHour, fromTwelveHour, timeLabel, dateRange } = createRuntime().load('src/components/time-wheel/labels.ts');
