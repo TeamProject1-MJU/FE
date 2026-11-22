@@ -7970,6 +7970,80 @@ function card146(route, expanded) {
     return texts146(r.load('src/components/route/RouteCard.tsx').default({ route, expanded, onPress() {}, onStart() {} }));
 }
 
+for (const [from, to, directions, toward] of [
+    ['연신내', '신내', ['순환', '하행'], '본선'],
+    ['신내', '연신내', ['상행', '순환'], '순환선'],
+]) {
+    test(`285 ${from} → ${to} 응암 연속 승차, 첫 구간 방향 확인과 노선 칩`, () => {
+        let openSteps = {};
+        const r = createRuntime(serverEnv, { ...require('react'), useState: () => [openSteps, update => { openSteps = update(openSteps); }] });
+        const { findMockRoutes } = r.load('src/mocks/routes.ts');
+        const route = findMockRoutes(from, to).data.routes[0];
+        const [first, second] = route.steps;
+        const Timeline = r.load('src/components/route/RouteTimeline.tsx').default;
+        const Card = r.load('src/components/route/RouteCard.tsx').default;
+        const { directionStepIssue } = r.load('src/utils/direction-route.ts');
+        const selected = [];
+        const render = () => Timeline({ route, onSignCheck: step => selected.push(step),
+            nextTrains: '첫 승차 다음 열차', getSignCheckIssue: directionStepIssue });
+        const view = render();
+        const texts = texts146(view);
+        assert.equal(texts.filter(text => text === '승차').length, 1);
+        assert.ok(!texts.includes('하차'));
+        assert.ok(!texts.includes('응암'));
+        assert.ok(texts.includes(`${from}에서 6호선`));
+        assert.ok(texts.includes('같은 열차로 계속 가요'));
+        assert.ok(texts.includes(`${to} 도착`));
+        assert.ok(texts.includes(`${first.stops.length + second.stops.length - 2}정거장 · ${(first.durationSec + second.durationSec) / 60}분`));
+        const rows = [`${from} → 응암 · ${directions[0]}`, `응암에서 ${toward}으로 방향만 바뀌어요 (내리지 않아요)`, `응암 → ${to} · ${directions[1]}`];
+        assert.deepEqual(texts.filter(text => rows.includes(text)), rows);
+        for (const step of route.steps) assert.ok(texts.includes(`${step.stops.length - 1}정거장 · ${step.durationSec / 60}분`));
+        const signButtons = findAll125(view, element => element.type === 'Pressable' && element.props.accessibilityHint);
+        const signLabel = '표지판으로 방향 확인';
+        assert.deepEqual(signButtons.map(textOf), [signLabel]);
+        assert.deepEqual(texts.filter(text => rows.includes(text) || text === signLabel), [rows[0], signLabel, rows[1], rows[2]]);
+        signButtons[0].props.onPress();
+        assert.equal(selected.length, 1);
+        assert.equal(selected[0], first);
+        assert.equal(textOf(view).split('첫 승차 다음 열차').length - 1, 1);
+        assert.ok(texts.includes('혼잡'));
+        findElement(view, element => element.type === 'Pressable' && element.props.accessibilityState?.expanded === false).props.onPress();
+        const middle = [...first.stops.slice(1), ...second.stops.slice(1, -1)].map(stop => stop.name);
+        assert.deepEqual(texts146(render()).filter(text => middle.includes(text)), middle);
+        const card = texts146(Card({ route, expanded: false, onPress() {}, onStart() {} }));
+        assert.equal(card.filter(text => text === '6호선').length, 1);
+        assert.ok(card.some(text => text.includes('환승 0회')));
+    });
+}
+
+test('285 실제 열차 교체, 응암 외 경계, 2·5호선, 도보가 있는 경로는 기존 승차 표시 유지', () => {
+    const r = createRuntime();
+    const { findMockRoutes } = r.load('src/mocks/routes.ts');
+    const route = findMockRoutes('연신내', '신내').data.routes[0];
+    const [loop, main] = route.steps;
+    const { shouldMergeContinuousRide } = r.load('src/components/route/format.ts');
+    for (const [first, second] of [
+        [{ ...loop, directionCode: 'UP' }, main],
+        [loop, { ...main, directionCode: 'LOOP' }],
+        ...[2, 5].map(id => route.steps.map(step => ({ ...step, line: { ...step.line, id, name: `${id}호선` } }))),
+        [{ ...loop, stops: [...loop.stops.slice(0, -1), { ...loop.stops.at(-1), name: '구산' }] },
+            { ...main, stops: [{ ...main.stops[0], name: '구산' }, ...main.stops.slice(1)] }],
+        [loop, { ...main, stops: [{ ...main.stops[0], id: -1 }, ...main.stops.slice(1)] }],
+    ]) {
+        const separate = { ...route, steps: [first, second] };
+        const texts = timeline146(separate);
+        assert.equal(texts.filter(text => text === '승차').length, 2);
+        assert.equal(texts.filter(text => text === '하차').length, 1);
+        assert.ok(!texts.includes('같은 열차로 계속 가요'));
+        assert.equal(card146(separate, false).filter(text => text === first.line.name).length, 2);
+    }
+    const walk = route146().steps[2];
+    const walkingRoute = { ...route, steps: [loop, walk, main] };
+    assert.ok(!timeline146(walkingRoute).includes('같은 열차로 계속 가요'));
+    assert.equal(card146(walkingRoute, false).filter(text => text === '6호선').length, 2);
+    assert.ok(shouldMergeContinuousRide(loop, { ...main, stops: [{ ...main.stops[0], id: undefined }, ...main.stops.slice(1)] }));
+});
+
 test('146 환승 판별과 분 계산: 두 SUBWAY 사이 WALKING 만 환승, 최소 1분, 안내 끝 "환승"은 "이동"으로', () => {
     const format = createRuntime().load('src/components/route/format.ts');
     const steps = route146().steps;

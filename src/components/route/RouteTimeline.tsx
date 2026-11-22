@@ -1,7 +1,7 @@
 import ArrivalFlag from '@/components/arrival-flag';
 import TrainBlock from '@/components/train-block';
 import { formatRouteRelativeDateTime } from '@/utils/route-time';
-import { formatDirection, formatWait, formatWalkBeforeRide, formatWalkingStep, isTransferStep } from '@/components/route/format';
+import { formatDirection, formatWait, formatWalkBeforeRide, formatWalkingStep, isTransferStep, shouldMergeContinuousRide } from '@/components/route/format';
 import { type ReactNode, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/app-text';
@@ -30,9 +30,9 @@ const WALK_LINE = '#DCD7E3';
 const toMinutes = (sec: number) => Math.max(1, Math.floor(sec / 60));
 
 /** 구간 안 정차역 혼잡도 중 가장 높은 값 */
-function stepCongestion(step: RouteStep): CongestionData | null {
+function stepCongestion(stations: NonNullable<RouteStep['stations']>): CongestionData | null {
     let best: CongestionData | null = null;
-    for (const station of step.stations ?? []) {
+    for (const station of stations) {
         const level = station.congestion.level;
         if (!station.congestion.supported || !level) continue;
         if (!best?.level || LEVEL_ORDER.indexOf(level) > LEVEL_ORDER.indexOf(best.level)) {
@@ -43,8 +43,7 @@ function stepCongestion(step: RouteStep): CongestionData | null {
 }
 
 /** 정차역 하나의 혼잡도 라벨 (색만으로 구분하지 않도록 글자도 함께, 명세 6.2) */
-function stopLabel(step: RouteStep, stopIndex: number) {
-    const congestion = step.stations?.[stopIndex]?.congestion;
+function stopLabel(congestion: CongestionData | undefined) {
     return congestion?.supported && congestion.level ? congestion.levelLabel ?? '' : '미제공';
 }
 
@@ -207,18 +206,48 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, getSignC
                     );
                 }
 
+                if (shouldMergeContinuousRide(steps[index - 1], step)) return null;
+
+                let endIndex = index;
+                while (shouldMergeContinuousRide(steps[endIndex], steps[endIndex + 1])) endIndex++;
+                const segments = steps.slice(index, endIndex + 1);
+                const continuous = segments.length > 1;
+                const signIssue = getSignCheckIssue?.(step);
+                const signCheck = signIssue ? (
+                    <Text style={[styles.issueText, styles.actionIssue]}>{signIssue}</Text>
+                ) : (
+                    <Pressable
+                        style={({ pressed }) => [styles.signButton, pressed && styles.pressed]}
+                        onPress={() => onSignCheck(step)}
+                        hitSlop={8}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${step.stops[0]?.name ?? ''} ${step.line?.name ?? ''} 표지판으로 방향 확인`}
+                        accessibilityHint="승차 구간의 표지판 사진으로 방향이 맞는지 확인해요"
+                    >
+                        <Ionicons name="scan-outline" size={13} color={LV_MAIN} />
+                        <Text style={styles.signText}>표지판으로 방향 확인</Text>
+                    </Pressable>
+                );
+                const finalSegment = steps[endIndex];
                 const color = step.line?.color ?? UNSUPPORTED;
                 const first = step.stops[0];
-                const last = step.stops.at(-1);
-                const middle = step.stops.slice(1, -1);
+                const last = finalSegment.stops.at(-1);
+                const middle = segments.flatMap((segment, segmentIndex) =>
+                    segment.stops.slice(1, segment === finalSegment ? -1 : undefined).map((stop, offset) => ({
+                        stop,
+                        key: `${segmentIndex}-${offset}`,
+                        congestion: segment.stations?.[offset + 1]?.congestion
+                            ?? (offset + 1 === segment.stops.length - 1 ? segments[segmentIndex + 1]?.stations?.[0]?.congestion : undefined),
+                    })));
+                const stopCount = segments.reduce((sum, segment) => sum + Math.max(segment.stops.length - 1, 0), 0);
+                const minutes = segments.reduce((sum, segment) => sum + toMinutes(segment.durationSec), 0);
                 const open = !!openSteps[index];
-                const isLastSubway = index === lastSubwayIndex;
+                const isLastSubway = endIndex === lastSubwayIndex;
                 const transfer = steps.slice(0, index).some(previous => previous.type === 'SUBWAY');
                 const wait = formatWait(step, transfer);
                 // 바로 앞이 합쳐진 환승역이면 승차역 줄은 그 환승역 줄이 대신해요(대기도 거기서 보여요).
                 const showBoard = !(index > 0 && mergedTransfer(index - 1));
-                const nextIsTransfer = isTransferStep(steps, index + 1);
-                const signIssue = getSignCheckIssue?.(step);
+                const nextIsTransfer = isTransferStep(steps, endIndex + 1);
 
                 return (
                     <View key={`ride-${index}`}>
@@ -248,13 +277,42 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, getSignC
                                     <View style={styles.headingBody}>
                                         <View style={styles.titleRow}>
                                             {lineCircle(step.line)}
-                                            <Text style={styles.rideText}>{first?.name}에서 {step.line?.name ?? ''}</Text>
+                                            <Text
+                                                style={continuous ? [styles.rideText, styles.continuousTitle] : styles.rideText}
+                                                numberOfLines={continuous ? 2 : undefined}
+                                            >
+                                                {first?.name}에서 {step.line?.name ?? ''}
+                                            </Text>
                                         </View>
-                                        <Text style={styles.rideSubtitle}>{Math.max(step.stops.length - 1, 0)}정거장 · {toMinutes(step.durationSec)}분 · {formatDirection(step)}</Text>
+                                        {continuous && <Text style={styles.rideSubtitle}>같은 열차로 계속 가요</Text>}
+                                        <Text style={styles.rideSubtitle}>{stopCount}정거장 · {minutes}분{continuous ? '' : ` · ${formatDirection(step)}`}</Text>
                                     </View>
                                 </View>
 
-                                <View style={styles.rideCongestion}>{congestionMark(stepCongestion(step), { compact: true, slot: step.stations?.[0], size: 13 })}</View>
+                                {continuous && (
+                                    <View style={[styles.continuousSegments, styles.continuousDetails]}>
+                                        {segments.map((segment, segmentIndex) => {
+                                            const from = segment.stops[0]?.name;
+                                            const toward = segment.directionCode === 'LOOP' ? '순환선' : '본선';
+                                            return (
+                                                <View key={segmentIndex} style={styles.continuousSegments}>
+                                                    {segmentIndex > 0 && (
+                                                        <Text style={styles.directionChange}>
+                                                            {from}에서 {toward}으로 방향만 바뀌어요 (내리지 않아요)
+                                                        </Text>
+                                                    )}
+                                                    <View style={[styles.titleRow, styles.continuousRow, styles.segmentRow]}>
+                                                        <Text style={styles.guideTitle}>{from} → {segment.stops.at(-1)?.name} · {formatDirection(segment)}</Text>
+                                                        <Text style={styles.rideSubtitle}>{Math.max(segment.stops.length - 1, 0)}정거장 · {toMinutes(segment.durationSec)}분</Text>
+                                                    </View>
+                                                    {segmentIndex === 0 && signCheck}
+                                                </View>
+                                            );
+                                        })}
+                                    </View>
+                                )}
+
+                                <View style={styles.rideCongestion}>{congestionMark(stepCongestion(segments.flatMap(segment => segment.stations ?? [])), { compact: true, slot: step.stations?.[0], size: 13 })}</View>
 
                                 <View style={styles.actionRow}>
                                     {middle.length > 0 && (
@@ -270,31 +328,17 @@ export default function RouteTimeline({ route, onSignCheck, nextTrains, getSignC
                                             <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={13} color={LV_SUB} />
                                         </Pressable>
                                     )}
-                                    {signIssue ? (
-                                        <Text style={[styles.issueText, styles.actionIssue]}>{signIssue}</Text>
-                                    ) : (
-                                        <Pressable
-                                            style={({ pressed }) => [styles.signButton, pressed && styles.pressed]}
-                                            onPress={() => onSignCheck(step)}
-                                            hitSlop={8}
-                                            accessibilityRole="button"
-                                            accessibilityLabel={`${first?.name ?? ''} ${step.line?.name ?? ''} 표지판으로 방향 확인`}
-                                            accessibilityHint="승차 구간의 표지판 사진으로 방향이 맞는지 확인해요"
-                                        >
-                                            <Ionicons name="scan-outline" size={13} color={LV_MAIN} />
-                                            <Text style={styles.signText}>표지판으로 방향 확인</Text>
-                                        </Pressable>
-                                    )}
+                                    {!continuous && signCheck}
                                 </View>
 
                                 {open &&
-                                    middle.map((stop, stopIndex) => (
-                                        <View key={`${index}-${stop.id}-${stop.order}`} style={styles.stopRow}>
+                                    middle.map(({ stop, key, congestion }) => (
+                                        <View key={key} style={styles.stopRow}>
                                             <Text style={styles.stopName} numberOfLines={1}>
                                                 {stop.name}
                                             </Text>
-                                            <Text style={styles.stopLevelText}>{stopLabel(step, stopIndex + 1)}</Text>
-                                            <CongestionBlocks level={blockLevel(step.stations?.[stopIndex + 1]?.congestion)} size={13} />
+                                            <Text style={styles.stopLevelText}>{stopLabel(congestion)}</Text>
+                                            <CongestionBlocks level={blockLevel(congestion)} size={13} />
                                         </View>
                                     ))}
 
@@ -342,6 +386,12 @@ const styles = StyleSheet.create({
     hereLabel: { fontSize: 11.5, color: LV_MAIN, fontWeight: '600' },
     hereTitle: { fontSize: 15, color: LV_TEXT, fontWeight: '700' },
     titleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    continuousRow: { flexWrap: 'wrap' },
+    continuousTitle: { flexShrink: 1 },
+    continuousSegments: { gap: 8 },
+    continuousDetails: { marginTop: 8 },
+    segmentRow: { justifyContent: 'space-between' },
+    directionChange: { fontSize: 12, color: '#86541C', backgroundColor: '#FCF1E2', borderRadius: 8, padding: 8 },
     rideSubtitle: { fontSize: 12.5, color: LV_SECONDARY },
     arrivalName: { flexShrink: 1, fontSize: 17, fontWeight: '800', color: LV_TEXT },
     chip: { fontSize: 11, fontWeight: '700', color: LV_MAIN, backgroundColor: LV_RIDE_BG, borderRadius: 5, paddingVertical: 2, paddingHorizontal: 6 },

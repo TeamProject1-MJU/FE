@@ -1,7 +1,7 @@
 import ArrivalFlag from '@/components/arrival-flag';
 import RouteNotices from '@/components/route/RouteNotices';
 import { formatArrivalSlack, formatRouteDateTime, formatRouteRelativeDateTime } from '@/utils/route-time';
-import { formatClock, formatDirection, formatDurationMinutes, formatTotalTime, formatWait, formatWalkBeforeRide, routeDurationSec, stepMinutes } from '@/components/route/format';
+import { formatClock, formatDirection, formatDurationMinutes, formatTotalTime, formatWait, formatWalkBeforeRide, routeDurationSec, shouldMergeContinuousRide, stepMinutes } from '@/components/route/format';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/app-text';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -181,6 +181,8 @@ type Props = {
 export default function RouteCard({ route, expanded, badgeLabels = [], highlightDeparture = false, onPress, onStart, showDates = false }: Props) {
     const { summary } = route;
     const subwaySteps = route.steps.filter(step => step.type === 'SUBWAY');
+    const lineSteps = route.steps.filter((step, index, steps) =>
+        step.type === 'SUBWAY' && !shouldMergeContinuousRide(steps[index - 1], step));
     const firstSlot = subwaySteps[0]?.stations?.[0];
     const arrival = formatRouteRelativeDateTime(summary.arrivalAt);
     const departure = summary.departureAt ? formatRouteRelativeDateTime(summary.departureAt) : '';
@@ -214,7 +216,7 @@ export default function RouteCard({ route, expanded, badgeLabels = [], highlight
             {showDates && summary.slackSeconds != null && <Text style={styles.slack}>{formatArrivalSlack(summary.slackSeconds)}</Text>}
             <RouteNotices summary={summary} />
             <View style={styles.lineFlow}>
-                {subwaySteps.map((step, index) => <View key={index} style={styles.lineMark}>
+                {lineSteps.map((step, index) => <View key={index} style={styles.lineMark}>
                     {index > 0 && <Ionicons name="arrow-forward" size={14} color={LV_SECONDARY} />}
                     {lineMark(step.line)}
                 </View>)}

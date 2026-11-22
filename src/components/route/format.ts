@@ -40,6 +40,18 @@ export function formatDirection(step: RouteStep) {
     return [step.directionCode ? DIRECTION_LABELS[step.directionCode] : '', step.direction].filter(Boolean).join(' ');
 }
 
+/** 인접한 원본 단계에서 6호선 응암 순환과 본선이 이어지는지 확인해요. */
+export function shouldMergeContinuousRide(previous?: RouteStep, next?: RouteStep) {
+    if (previous?.type !== 'SUBWAY' || next?.type !== 'SUBWAY') return false;
+    if (previous.line?.id !== 6 || next.line?.id !== previous.line.id) return false;
+    if ((previous.directionCode === 'LOOP') === (next.directionCode === 'LOOP')) return false;
+
+    const alight = previous.stops.at(-1);
+    const board = next.stops[0];
+    if (!alight || !board || (alight.name !== '응암' && board.name !== '응암')) return false;
+    return alight.id != null && board.id != null ? alight.id === board.id : alight.name === board.name;
+}
+
 /** 30초 이상이며 이 값(초) 미만이면 "곧 도착"으로 표시해요. */
 export const ARRIVING_SOON_SEC = 60;
 /** 남은 시간이 이 값(초) 미만이면 "곧 출발"로 표시해요. */

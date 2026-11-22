@@ -7,6 +7,7 @@
  * 시나리오
  *  - 건대입구 ↔ 사당 : 카카오 경로 3개 (KAKAO)
  *  - 홍대입구 → 잠실 : 내부 대체 경로 1개 (INTERNAL, 예상 요금)
+ *  - 연신내 ↔ 신내   : 응암 순환과 본선이 이어지는 경로 (INTERNAL, 환승 0회)
  *  - 신림 ↔ 노원     : 결과 없음 (ROUTE_NOT_FOUND)
  *  - 서울역 포함     : 검색 실패 (EXTERNAL_API_ERROR) → 다시 시도 확인용
  *  - 그 밖의 조합    : 결과 없음
@@ -60,6 +61,8 @@ export const MOCK_STATIONS: StationSummary[] = [
     { id: 107, name: '서울역', lines: [1, 4], isSupported: true },
     { id: 108, name: '이수', lines: [4, 7], isSupported: true },
     { id: 109, name: '판교', lines: [], isSupported: false },
+    { id: 126, name: '연신내', lines: [3, 6], isSupported: true },
+    { id: 127, name: '신내', lines: [6], isSupported: true },
 ];
 
 let stationSeq = 1000;
@@ -233,6 +236,29 @@ const HONGDAE_TO_JAMSIL_INTERNAL: Route[] = [
     ], 'ESTIMATED'),
 ];
 
+const LINE6_EUNGAM_TO_SINNAE = [
+    '응암', '새절', '증산', '디지털미디어시티', '월드컵경기장', '마포구청', '망원', '합정', '상수',
+    '광흥창', '대흥', '공덕', '효창공원앞', '삼각지', '녹사평', '이태원', '한강진', '버티고개',
+    '약수', '청구', '신당', '동묘앞', '창신', '보문', '안암', '고려대', '월곡', '상월곡',
+    '돌곶이', '석계', '태릉입구', '화랑대', '봉화산', '신내',
+];
+
+function line6ContinuousRoute(reverseDirection: boolean): Route {
+    const loop = reverseDirection
+        ? subway(6, '순환', ['응암', '역촌', '불광', '독바위', '연신내'], 8, 4700, ['RELAXED'])
+        : subway(6, '순환', ['연신내', '구산', '응암'], 3, 2500, ['RELAXED']);
+    const main = subway(6, reverseDirection ? '상행' : '하행',
+        reverseDirection ? reverse(LINE6_EUNGAM_TO_SINNAE) : LINE6_EUNGAM_TO_SINNAE,
+        62, 30000, ['NORMAL', 'CROWDED']);
+    loop.directionCode = 'LOOP';
+    main.directionCode = reverseDirection ? 'UP' : 'DOWN';
+    const result = route(reverseDirection ? 'r285-reverse' : 'r285-forward', 'FEWER_TRANSFERS',
+        (loop.durationSec + main.durationSec) / 60, 1750,
+        reverseDirection ? [main, loop] : [loop, main], 'ESTIMATED');
+    result.summary.transferCount = 0;
+    return result;
+}
+
 export type MockRouteResult =
     | { kind: 'success'; data: RouteSearchResponse }
     | { kind: 'notFound' }
@@ -246,6 +272,9 @@ export function findMockRoutes(from: string, to: string): MockRouteResult {
     if (pair === '건대입구>사당') return { kind: 'success', data: { appointmentPassed: false, notice: null, routeSource: 'KAKAO', routes: GEONDAE_TO_SADANG } };
     if (pair === '사당>건대입구') return { kind: 'success', data: { appointmentPassed: false, notice: null, routeSource: 'KAKAO', routes: SADANG_TO_GEONDAE } };
     if (pair === '홍대입구>잠실') return { kind: 'success', data: { appointmentPassed: false, notice: null, routeSource: 'INTERNAL', routes: HONGDAE_TO_JAMSIL_INTERNAL } };
+    if (pair === '연신내>신내' || pair === '신내>연신내') {
+        return { kind: 'success', data: { appointmentPassed: false, notice: null, routeSource: 'INTERNAL', routes: [line6ContinuousRoute(pair === '신내>연신내')] } };
+    }
 
     return { kind: 'notFound' };
 }

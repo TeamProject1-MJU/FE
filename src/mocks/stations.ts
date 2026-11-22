@@ -73,6 +73,8 @@ export const MOCK_STATIONS: Station[] = [
     { id: 123, name: '합정', latitude: 37.5498, longitude: 126.9139, isSupported: true, lines: [line(2, '238'), line(6, '622')] },
     { id: 124, name: '고속터미널', latitude: 37.5049, longitude: 127.0049, isSupported: true, lines: [line(3, '339'), line(7, '734')] },
     { id: 125, name: '천호', latitude: 37.5387, longitude: 127.1238, isSupported: true, lines: [line(5, '547'), line(8, '811')] },
+    { id: 126, name: '연신내', latitude: 37.6190, longitude: 126.9210, isSupported: true, lines: [line(3, '321'), line(6, '614')] },
+    { id: 127, name: '신내', latitude: 37.6129, longitude: 127.1033, isSupported: true, lines: [line(6, '648')] },
 
     // 미제공 (서울교통공사 데이터 범위 밖)
     { id: 901, name: '서울숲', latitude: 37.5436, longitude: 127.0444, isSupported: false, lines: [line(101, 'K211')] },
